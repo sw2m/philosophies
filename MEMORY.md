@@ -243,7 +243,7 @@ When a goal spec contains N goals, that becomes **N tech specs** — one per goa
 
 **Investigation, mining, and observation tasks** (e.g. surveying a reference implementation, empirically probing an external API, deriving an edge-case catalog from real data) are **goal-setting work**, not tech-spec work. They sub-issue under the goal spec they refine — not under a tech spec, and not standalone. They exist to sharpen the goal spec against reality before tech specs are written.
 
-**Per-tech-spec issue body**: write the tech spec *into the issue body*, not as comments. The body is the spec; comments are conversation. If the body grows past the issue-tracker's body cap, the tech spec is too large — it's almost certainly bundling more than one problem and should be split.
+**Per-tech-spec issue body**: write the tech spec *into the issue body*, not as comments. Agents reading an issue overwhelmingly consume the body and skip the comment thread — the comment section is not a reliable working surface for spec material that downstream agents will need to read. The body is the durable, agent-consumable spec; comments are conversation *about* it. If the body grows past the issue-tracker's body cap, the tech spec is too large — it's almost certainly bundling more than one problem and should be split.
 
 **Quick check.** Before writing a tech spec, ask: *can I name a single technical problem this spec solves?* If the answer takes more than one sentence, it's probably more than one tech spec.
 
