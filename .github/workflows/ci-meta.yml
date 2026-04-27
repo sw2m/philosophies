@@ -125,13 +125,13 @@ jobs:
           { printf '%s\n\n' "$PROMPT"; cat eval-input.txt; } > combined-input.txt
 
           set +e
-          gemini --yolo -m gemini-3-pro-preview < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
+          gemini --yolo --skip-trust -m gemini-3-pro-preview < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
           rc=$?
           if [ $rc -ne 0 ]; then
             echo "Gemini 3 exited with code $rc; falling back to 2.5"
             echo "--- gemini 3 stderr ---"
             cat gemini-stderr.log
-            gemini --yolo -m gemini-2.5-pro < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
+            gemini --yolo --skip-trust -m gemini-2.5-pro < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
             rc=$?
             if [ $rc -ne 0 ]; then
               echo "Gemini 2.5 exited with code $rc"

@@ -86,7 +86,7 @@ jobs:
 
           run_gemini() {
             local model="$1"
-            gemini --yolo --model "$model" \
+            gemini --yolo --skip-trust --model "$model" \
               --prompt "$(cat /tmp/vsdd/prompt.txt)" \
               > /tmp/vsdd/review.md 2> /tmp/vsdd/err.log
           }
