@@ -1,0 +1,53 @@
+name: VSDD Testing CI
+
+# Gating workflow — branch protection on main requires this to pass.
+# Markdown lint, link check, and a structural sanity check on MEMORY.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  markdownlint:
+    name: Markdown lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run markdownlint-cli2
+        uses: DavidAnson/markdownlint-cli2-action@v16
+        with:
+          globs: "**/*.md"
+
+  linkcheck:
+    name: External link check (lychee)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress
+            --max-concurrency 4
+            --exclude json-schema.org
+            --exclude spec.openapis.org
+            MEMORY.md
+          fail: true
+
+  structural-sanity:
+    name: MEMORY.md structural sanity
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assert all 9 numbered sections are present
+        run: bash .github/scripts/check-memory-structure.sh

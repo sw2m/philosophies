@@ -1,0 +1,112 @@
+name: VSDD Issue Review (Phase 1c)
+
+# Advisory only — never gates anything.
+# Reads new/edited issues, runs an adversarial Gemini pass looking for VSDD
+# Phase 1c concerns (ambiguous wording, missing edge cases, implicit
+# assumptions, contradictions), and posts the result back as a comment.
+on:
+  issues:
+    types: [opened, edited]
+  workflow_call:
+    secrets:
+      GEMINI_API_KEY:
+        required: true
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  vsdd-issue-review:
+    name: Gemini VSDD Phase 1c review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo (for MEMORY.md context)
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Gemini CLI
+        run: npm install -g @google/gemini-cli
+
+      - name: Run Gemini review with model fallback
+        id: gemini
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -u
+          mkdir -p /tmp/vsdd
+          cat > /tmp/vsdd/prompt.txt <<'PROMPT_EOF'
+          You are Sarcasmotron, the adversarial reviewer described in MEMORY.md
+          (Verified Spec-Driven Development). You are running Phase 1c (Spec
+          Review Gate) on a freshly-filed or freshly-edited GitHub issue.
+
+          Read MEMORY.md in this repo for context on VSDD, then review the
+          issue body below. Look ONLY for these classes of problems:
+
+            - Ambiguous wording that could be interpreted multiple ways
+            - Missing edge cases (null, empty, max size, negative, unicode,
+              concurrent, etc.)
+            - Implicit assumptions that are not stated
+            - Contradictions between different parts of the issue
+            - Properties claimed as "testable only" that should be provable
+            - Purity-boundary violations (logic claimed pure that depends on
+              external state)
+            - Verification-tool mismatches
+
+          Output rules:
+            - Be terse. Bullet points only. No preamble, no "overall this
+              looks good".
+            - Each bullet must be a concrete flaw with a specific quote or
+              location and a proposed fix or clarifying question.
+            - If you genuinely cannot find any of the above classes of
+              problem, output exactly: "No Phase 1c concerns identified."
+            - This review is advisory. Do not pretend it gates anything.
+
+          --- ISSUE TITLE ---
+          PROMPT_EOF
+          printf '%s\n' "$ISSUE_TITLE" >> /tmp/vsdd/prompt.txt
+          printf '\n--- ISSUE BODY ---\n' >> /tmp/vsdd/prompt.txt
+          printf '%s\n' "$ISSUE_BODY" >> /tmp/vsdd/prompt.txt
+
+          run_gemini() {
+            local model="$1"
+            gemini --yolo --model "$model" \
+              --prompt "$(cat /tmp/vsdd/prompt.txt)" \
+              > /tmp/vsdd/review.md 2> /tmp/vsdd/err.log
+          }
+
+          if run_gemini "gemini-3-pro-preview"; then
+            echo "model=gemini-3-pro-preview" >> "$GITHUB_OUTPUT"
+          elif run_gemini "gemini-2.5-pro"; then
+            echo "model=gemini-2.5-pro" >> "$GITHUB_OUTPUT"
+          else
+            echo "model=none" >> "$GITHUB_OUTPUT"
+            echo "Gemini CLI failed on both gemini-3-pro-preview and gemini-2.5-pro." > /tmp/vsdd/review.md
+            echo "stderr tail:" >> /tmp/vsdd/review.md
+            tail -n 40 /tmp/vsdd/err.log >> /tmp/vsdd/review.md || true
+          fi
+
+      - name: Post review as issue comment
+        uses: actions/github-script@v7
+        env:
+          MODEL: ${{ steps.gemini.outputs.model }}
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/vsdd/review.md', 'utf8');
+            const model = process.env.MODEL || 'unknown';
+            const header = `**VSDD Phase 1c — Adversarial Spec Review** _(advisory, model: \`${model}\`)_\n\n`;
+            const footer = `\n\n---\n_This is an automated advisory review per MEMORY.md §II Phase 1c. It does not gate anything._`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: header + body + footer,
+            });

@@ -295,6 +295,27 @@ Multi-word symbols are an indicator of poorly architected code, because they can
 
 ---
 
+## CI/CD
+
+This repo's `.github/workflows/` enforces VSDD on itself. Three workflows, mirroring the pipeline:
+
+- **`issues.yml`** — fires on `issues: [opened, edited]`. Runs Gemini as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body and posts the critique as a comment. **Advisory only — never gates.**
+- **`pulls.yml`** — fires on `pull_request: [opened, synchronize, reopened]`. Runs *two* adversarial reviewers in parallel — Gemini and Claude — against the diff with `MEMORY.md` as the standard (Phase 3, Adversarial Refinement). Two cognitive sources per §V. Each posts a PR comment. **Advisory only — never gates.**
+- **`test.yml`** — fires on `push` to `main` and on `pull_request`. Markdown lint, external link check (lychee), and a structural sanity check that all nine Roman-numeral sections of `MEMORY.md` are present. **This is the gating workflow** required by the branch-protection rule on `main`.
+
+Each workflow also exposes a `workflow_call:` trigger so other `sw2m` repos can reuse them:
+
+```yaml
+jobs:
+  vsdd-pulls:
+    uses: sw2m/philosophies/.github/workflows/pulls.yml@main
+    secrets: inherit
+```
+
+Required repo secrets: `GEMINI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`.
+
+---
+
 ## Sources
 
 - Sections I–VI: [VSDD canonical gist](https://gist.github.com/dollspace-gay/d8d3bc3ecf4188df049d7a4726bb2a00) by [@dollspace-gay](https://github.com/dollspace-gay), used verbatim.
