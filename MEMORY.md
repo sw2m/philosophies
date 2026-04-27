@@ -173,7 +173,7 @@ VSDD inherits VDD's **hallucination-based termination**, extended across all thr
 
 One of VSDD's defining properties is **full traceability**. Every artifact links back:
 
-```
+```text
 Spec Requirement → Verification Property → Chainlink Bead → Test Case → Implementation → Adversarial Review → Formal Proof
 ```
 
@@ -189,15 +189,15 @@ At any point, you can ask: *"Why does this line of code exist?"* and trace it al
 
 3. **Red Before Green:** No implementation code is written until a failing test demands it. AI models are explicitly constrained to follow TDD discipline — no "let me just write the whole thing and add tests after."
 
-3. **Anti-Slop Bias:** The first "correct" version is assumed to contain hidden debt. Trust is earned through adversarial survival, not initial appearance.
+4. **Anti-Slop Bias:** The first "correct" version is assumed to contain hidden debt. Trust is earned through adversarial survival, not initial appearance.
 
-4. **Forced Negativity:** Adversarial pressure bypasses the politeness filters of standard LLM interactions. The Adversary doesn't care about your feelings — it cares about your invariants.
+5. **Forced Negativity:** Adversarial pressure bypasses the politeness filters of standard LLM interactions. The Adversary doesn't care about your feelings — it cares about your invariants.
 
-5. **Linear Accountability:** Chainlink beads ensure every spec item, test, and line of code has a corresponding tracked unit of work. Nothing slips through the cracks.
+6. **Linear Accountability:** Chainlink beads ensure every spec item, test, and line of code has a corresponding tracked unit of work. Nothing slips through the cracks.
 
-6. **Entropy Resistance:** Context resets on every adversarial pass prevent the natural degradation of long-running AI conversations.
+7. **Entropy Resistance:** Context resets on every adversarial pass prevent the natural degradation of long-running AI conversations.
 
-7. **Four-Dimensional Convergence:** The system isn't done until specs, tests, implementation, *and* formal proofs have all independently survived adversarial review.
+8. **Four-Dimensional Convergence:** The system isn't done until specs, tests, implementation, *and* formal proofs have all independently survived adversarial review.
 
 ---
 
@@ -260,8 +260,6 @@ When a goal spec contains N goals, that becomes **N tech specs** — one per goa
 
 Both Red Gate runs (new = fail, regression = pass) are **required before writing any implementation code**. Both Green Gate runs (new = pass, regression = pass) are **required to exit Phase 2**. If regression tests fail at any point, the implementation has introduced a regression and must be fixed before proceeding. This forces every spec to consider its neighbors, not just itself.
 
-
-
 ---
 
 ### **IX. Architectural Review — Multi-Word Symbol Analysis**
@@ -289,9 +287,6 @@ Multi-word symbols are an indicator of poorly architected code, because they can
 **How to apply:** During adversarial review (Phase 3) and refactoring (Phase 2c), scan for multi-word symbols. For each one, determine: (a) should this be a method on an object? (b) does the name need qualification, or is the scope unambiguous? (c) if qualification is genuinely needed, is the scope doing too much? Also scan for error structure inconsistencies across the module boundary.
 
 ---
-
-
-
 
 ---
 
