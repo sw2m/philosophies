@@ -30,7 +30,7 @@ jobs:
     if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
@@ -101,7 +101,7 @@ jobs:
             cat pr.diff
           } >> gemini-stdin.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: pr-context
           path: |
@@ -114,8 +114,8 @@ jobs:
     needs: [prep]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
         with:
           name: pr-context
           path: ./
@@ -128,7 +128,7 @@ jobs:
           output-file: review.md
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -173,8 +173,8 @@ jobs:
     needs: [prep]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
         with:
           name: pr-context
           path: ./
@@ -256,7 +256,7 @@ jobs:
             a hallucination. Only cite what's in the embedded content.
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
