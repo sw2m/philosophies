@@ -50,9 +50,38 @@ jobs:
   # `.github/actions/gemini` and `.github/actions/claude` so it is impossible
   # to invoke an agent without going through it.
 
+  repo-shape:
+    name: Detect repo shape (code vs docs)
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    outputs:
+      has-tests: ${{ steps.shape.outputs.has-tests }}
+      repo-kind: ${{ steps.shape.outputs.repo-kind }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: shape
+        uses: ./.github/actions/repo-shape
+      - name: Print VSDD §VIII applicability to job summary
+        shell: bash
+        env:
+          HAS_TESTS: ${{ steps.shape.outputs.has-tests }}
+          REPO_KIND: ${{ steps.shape.outputs.repo-kind }}
+        run: |
+          if [ "$HAS_TESTS" = "true" ]; then
+            status="ENFORCED"
+          else
+            status="N/A (no test suite detected)"
+          fi
+          line="VSDD 2a/2b/§VIII: $status"
+          echo "$line"
+          echo "- repo-kind: \`$REPO_KIND\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- has-tests: \`$HAS_TESTS\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- $line" >> "$GITHUB_STEP_SUMMARY"
+
   prep:
     name: Prepare evaluation input
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    needs: [repo-shape]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -101,7 +130,7 @@ jobs:
 
   gemini-eval:
     name: Gemini VSDD CI evaluation
-    needs: [prep]
+    needs: [prep, repo-shape]
     runs-on: ubuntu-latest
     outputs:
       verdict: ${{ steps.parse.outputs.verdict }}
@@ -125,6 +154,21 @@ jobs:
             Read each CI workflow file inside <workflow path="..."> tags.
             Read each composite action file inside <action path="..."> tags.
 
+            Repo-shape context (detected by `.github/actions/repo-shape`, which
+            looks for package.json / deno.json / Cargo.toml / go.mod /
+            pyproject.toml / tsconfig.json / a `tests/` or `test/` directory):
+
+            <repo-kind>${{ needs.repo-shape.outputs.repo-kind }}</repo-kind>
+            <has-tests>${{ needs.repo-shape.outputs.has-tests }}</has-tests>
+
+            Use this context to decide §VIII applicability EXPLICITLY:
+            - if <repo-kind>code</repo-kind>, Phase 2a/2b and the 4-Result
+              Rule (§VIII) are applicable; classify them ENFORCED / PARTIAL /
+              MISSING normally.
+            - if <repo-kind>docs</repo-kind>, Phase 2a/2b and §VIII are NOT
+              applicable; mark them `N/A` and state the reason ("no test
+              suite detected by repo-shape"). Do NOT mark them MISSING.
+
             Evaluate whether the workflows correctly enforce VSDD requirements:
             - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
             - Phase 2a (Red Gate): a mechanism that confirms tests fail before implementation lands.
@@ -134,9 +178,9 @@ jobs:
             - §IX: multi-word symbol audit (camelCase/snake_case scan on code PRs).
             - Spec discipline (§VII): tech specs are discrete; goal specs are bulk.
 
-            Classify each requirement: ENFORCED, PARTIAL, or MISSING.
-
-            A repo with no test suite (e.g. sw2m/philosophies — a docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A in that case, not MISSING.
+            Classify each requirement: ENFORCED, PARTIAL, MISSING, or N/A
+            (the last only for items the repo-shape context above marks
+            inapplicable).
 
             # OUTPUT FORMAT (strict)
 
@@ -219,7 +263,7 @@ jobs:
 
   claude-eval:
     name: Claude VSDD CI evaluation
-    needs: [prep]
+    needs: [prep, repo-shape]
     runs-on: ubuntu-latest
     outputs:
       verdict: ${{ steps.parse.outputs.verdict }}
@@ -275,6 +319,22 @@ jobs:
             <action path="..."> tags. Do NOT look for files on disk; only
             cite content that is present in the embedded text.
 
+            Repo-shape context (detected by `.github/actions/repo-shape`,
+            which looks for package.json / deno.json / Cargo.toml / go.mod
+            / pyproject.toml / tsconfig.json / a `tests/` or `test/`
+            directory):
+
+            <repo-kind>${{ needs.repo-shape.outputs.repo-kind }}</repo-kind>
+            <has-tests>${{ needs.repo-shape.outputs.has-tests }}</has-tests>
+
+            Use this context to decide §VIII applicability EXPLICITLY:
+            - if <repo-kind>code</repo-kind>, Phase 2a/2b and the 4-Result
+              Rule (§VIII) are applicable; classify them ENFORCED / PARTIAL
+              / MISSING normally.
+            - if <repo-kind>docs</repo-kind>, Phase 2a/2b and §VIII are NOT
+              applicable; mark them `N/A` and state the reason ("no test
+              suite detected by repo-shape"). Do NOT mark them MISSING.
+
             Evaluate whether the workflows correctly enforce VSDD requirements:
             - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
             - Phase 2a (Red Gate): tests fail before implementation; CI confirms.
@@ -283,8 +343,6 @@ jobs:
             - Phase 3: adversarial review of code changes.
             - §IX: multi-word symbol audit.
             - Spec discipline (§VII): tech specs are discrete.
-
-            A repo with no test suite (docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A, not MISSING.
 
             # OUTPUT FORMAT (strict)
 
