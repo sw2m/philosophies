@@ -1,0 +1,77 @@
+name: "Classify commit changes"
+description: |
+  Determines whether a commit's file changes are entirely within test paths
+  or include non-test (implementation) changes. Required by §VIII (4-Result
+  Rule) to distinguish "tests-only commits" from "implementation commits"
+  for Red/Green gate enforcement.
+
+  Returns tests-only=true if ALL changed files match test-path patterns,
+  false otherwise. Test-path patterns are configurable per-repo via the
+  `patterns` input or TEST_PATH_PATTERNS env var.
+
+inputs:
+  commit:
+    description: "Commit SHA to classify. Mutually exclusive with `range`."
+    required: false
+  range:
+    description: "Git range (e.g., base...head) for PR classification. Mutually exclusive with `commit`."
+    required: false
+  patterns:
+    description: |
+      Newline-separated glob patterns for test paths. Defaults to common
+      conventions (test/*, tests/*, __tests__/*, *_test.go, *.test.ts, etc.).
+      Can also be set via TEST_PATH_PATTERNS env var.
+    required: false
+
+outputs:
+  tests-only:
+    description: "true if all changed files match test-path patterns, false otherwise."
+    value: ${{ steps.classify.outputs.tests-only }}
+  changed-files:
+    description: "Total number of files changed."
+    value: ${{ steps.classify.outputs.changed-files }}
+  test-files:
+    description: "Number of files matching test-path patterns."
+    value: ${{ steps.classify.outputs.test-files }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Classify changes
+      id: classify
+      shell: bash
+      env:
+        INPUT_COMMIT: ${{ inputs.commit }}
+        INPUT_RANGE: ${{ inputs.range }}
+        INPUT_PATTERNS: ${{ inputs.patterns }}
+      run: |
+        set -euo pipefail
+        script="${GITHUB_ACTION_PATH}/../../scripts/classify-changes.sh"
+        if [ ! -x "$script" ]; then
+          chmod +x "$script"
+        fi
+
+        args=()
+        if [ -n "${INPUT_RANGE:-}" ]; then
+          args+=(--pr "$INPUT_RANGE")
+        elif [ -n "${INPUT_COMMIT:-}" ]; then
+          args+=("$INPUT_COMMIT")
+        else
+          echo "::error::Either 'commit' or 'range' input is required."
+          exit 1
+        fi
+
+        if [ -n "${INPUT_PATTERNS:-}" ]; then
+          args+=(--patterns "$INPUT_PATTERNS")
+        fi
+
+        output=$("$script" "${args[@]}")
+
+        # Parse output and set GitHub outputs
+        while IFS='=' read -r key value; do
+          echo "$key=$value" >> "$GITHUB_OUTPUT"
+        done <<< "$output"
+
+        # Log for visibility
+        echo "Classification result:"
+        echo "$output"
