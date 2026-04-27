@@ -131,16 +131,17 @@ runs:
           echo "Branch $BRANCH already existed; resuming."
         else
           git checkout -b "$BRANCH" "origin/$BASE_BRANCH"
-          # Make a no-op commit so the branch can be pushed and a PR opened.
+          # Empty scaffold commit so the branch can be pushed and a PR
+          # opened. The commit MESSAGE is the durable "this branch
+          # came from the promote pipeline" discriminant — any
+          # downstream check that needs to detect promote-pipeline
+          # branches greps `git log --grep='^chore(promote): scaffold'`.
           # The actual implementation lands in subsequent phases.
-          mkdir -p .vsdd
-          {
-            echo "Promotion run for issue #$ISSUE_NUMBER"
-            echo "Owner: @$OWNER_LOGIN"
-            echo "Started: $(date -u +%FT%TZ)"
-          } > .vsdd/promotion-$ISSUE_NUMBER.log
-          git add .vsdd/promotion-$ISSUE_NUMBER.log
-          git commit -m "chore(promote): scaffold for #$ISSUE_NUMBER"
+          git commit --allow-empty -m "chore(promote): scaffold for #$ISSUE_NUMBER
+
+          Promotion run for issue #$ISSUE_NUMBER
+          Owner: @$OWNER_LOGIN
+          Started: $(date -u +%FT%TZ)"
           git push -u origin "$BRANCH"
         fi
         echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
