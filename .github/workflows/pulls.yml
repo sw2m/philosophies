@@ -80,6 +80,8 @@ env:
     - Error-structure inconsistency (§IX): mixed error types, mixed throw/return/null, partial error-code coverage, try/catch vs assertThrows mismatches.
     - Inconsistent error handling
     - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+    - Security Surface (§II Phase 3): input validation gaps, injection vectors (SQL/command/path), unsafe deserialization, missing auth/authz checks
+    - Spec gaps revealed by implementation (§II Phase 3): behavior in the diff that the spec doesn't cover
 
     # OUTPUT FORMAT (strict)
 
