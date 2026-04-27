@@ -472,13 +472,27 @@ jobs:
             const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
             const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event,
-              body: header + body + footer,
-            });
+            // Self-review guard: see ci-meta.yml's consensus step for the
+            // explanation. Bot-authored PRs (promote-tech-to-pr artifacts)
+            // can't be reviewed by the same bot identity, so downgrade to
+            // a comment.
+            const prAuthor = context.payload.pull_request?.user?.login;
+            if (prAuthor === 'github-actions[bot]') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: header + `_(${event} would be rejected: PR is bot-authored, posting as comment)_\n\n` + body + footer,
+              });
+            } else {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event,
+                body: header + body + footer,
+              });
+            }
 
   claude-review:
     name: Claude adversarial review
@@ -524,10 +538,21 @@ jobs:
             const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
             const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event,
-              body: header + body + footer,
-            });
+            // Self-review guard — same as the gemini-review step.
+            const prAuthor = context.payload.pull_request?.user?.login;
+            if (prAuthor === 'github-actions[bot]') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: header + `_(${event} would be rejected: PR is bot-authored, posting as comment)_\n\n` + body + footer,
+              });
+            } else {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event,
+                body: header + body + footer,
+              });
+            }

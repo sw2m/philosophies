@@ -836,10 +836,33 @@ jobs:
               lines.push(``);
             }
             lines.push(`---`, `_Automated meta-review per MEMORY.md §I (Adversary). Two cognitive sources required to reach consensus._`);
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event,
-              body: lines.join('\n'),
-            });
+            // GitHub rejects `pulls.createReview` when the review actor
+            // matches the PR author with HTTP 422 "Review Can not approve
+            // your own pull request". `promote-tech-to-pr`'s artifact PRs
+            // are bot-authored by `github-actions[bot]`; the consensus
+            // step also runs as `github-actions[bot]`, so the API call
+            // would always fail on those PRs and fail the required
+            // status check (#66). When the actor matches the author,
+            // downgrade to a regular PR comment — same content, no
+            // verdict, no API rejection. Branch protection still gates
+            // on the Consensus job's overall conclusion (which now
+            // succeeds), and the comment surfaces the same rationale.
+            const prAuthor = context.payload.pull_request?.user?.login;
+            const isSelfReview = prAuthor && prAuthor === 'github-actions[bot]';
+            if (isSelfReview) {
+              const header = `**VSDD CI Meta-Review** _(${event} would be rejected: PR is bot-authored, posting as comment)_\n\n`;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: header + lines.join('\n'),
+              });
+            } else {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event,
+                body: lines.join('\n'),
+              });
+            }
