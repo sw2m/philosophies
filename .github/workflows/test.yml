@@ -61,6 +61,58 @@ jobs:
       - name: Assert all 9 numbered sections are present
         run: bash .github/scripts/check-memory-structure.sh
 
+  green-gate:
+    name: Green Gate (§VIII tests on PR HEAD)
+    # §VIII Green Gate enforcement on human-authored PRs (#42). Docs
+    # repos (no detected test runner) succeed with a "§VIII N/A" notice
+    # so branch protection gets a definitive PASS rather than SKIPPED.
+    # Red Gate (tests-failing-before-impl) is NOT enforced here — that
+    # would require reverting only the implementation hunks, brittle on
+    # human commit histories. Humans are trusted to have followed
+    # Red→Green discipline locally; the agent-driven path
+    # (promote-tech-to-pr) is the only fully-automated 4-Result chain.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - id: shape
+        uses: ./.github/actions/repo-shape
+      - name: Run tests if a runner is present
+        env:
+          HAS_TESTS: ${{ steps.shape.outputs.has-tests }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$HAS_TESTS" != "true" ]; then
+            echo "::notice::§VIII N/A (no test runner detected by repo-shape). Green Gate trivially satisfied."
+            echo "- Green Gate: **N/A** (no test runner detected)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # First match wins. Same detection promote-tech-to-pr uses.
+          if [ -f Makefile ] && grep -qE '^test:' Makefile; then
+            CMD="make test"
+          elif [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then
+            if [ -f bun.lockb ] || [ -f bun.lock ]; then CMD="bun test"; else CMD="npm test"; fi
+          elif [ -f deno.json ] || [ -f deno.jsonc ]; then
+            CMD="deno test -A"
+          elif [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -f setup.py ]; then
+            CMD="pytest"
+          elif [ -f Cargo.toml ]; then
+            CMD="cargo test"
+          elif [ -f go.mod ]; then
+            CMD="go test ./..."
+          else
+            echo "::error::repo-shape says has-tests=true but no recognized runner. Add a Makefile \`test:\` target, package.json \`test\` script, deno task, pytest config, Cargo.toml, or go.mod."
+            exit 1
+          fi
+          echo "Running Green Gate: $CMD"
+          echo "- Green Gate command: \`$CMD\`" >> "$GITHUB_STEP_SUMMARY"
+          eval "$CMD"
+          echo "- Green Gate: **PASS**" >> "$GITHUB_STEP_SUMMARY"
+
   issue-linkage:
     name: PR body links a spec issue
     # Gating per #30: every PR must reference a tracked issue with a
