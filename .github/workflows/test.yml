@@ -60,3 +60,37 @@ jobs:
 
       - name: Assert all 9 numbered sections are present
         run: bash .github/scripts/check-memory-structure.sh
+
+  issue-linkage:
+    name: PR body links a spec issue
+    # Gating per #30: every PR must reference a tracked issue with a
+    # GitHub closing keyword (Closes / Fixes / Resolves + #N), so the
+    # spec that survived Phase 1c is the contract the PR satisfies.
+    # Pull-request only — push / workflow_call have no PR body to check.
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert PR body has Closes/Fixes/Resolves #N
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${PR_BODY:-}" ]; then
+            echo "::error::PR body is empty. Add a closing keyword + issue number, e.g. \`Closes #42\`."
+            exit 1
+          fi
+          # Match GitHub's auto-close keywords (case-insensitive). Tense
+          # variants (closed/closes/fixed/fixes/resolved/resolves) and
+          # `#N` are required adjacent — `Resolves: #42` is fine, bare
+          # `#42` is not (per #30, the PR must declare which spec it
+          # closes, not just mention one in passing).
+          if grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[: ]+#[0-9]+' <<<"$PR_BODY" >/dev/null; then
+            echo "✓ PR body links a spec issue."
+            grep -oiE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)[: ]+#[0-9]+' <<<"$PR_BODY" | head -5
+            exit 0
+          fi
+          echo "::error::PR body does not link a spec issue with a closing keyword."
+          echo "::error::Add e.g. \`Closes #42\` so the spec that survived Phase 1c"
+          echo "::error::is recorded as the contract this PR satisfies (§II Phase 3)."
+          exit 1
