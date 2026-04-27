@@ -42,11 +42,15 @@ jobs:
         run: |
           git fetch origin "$BASE_SHA" --depth=1 || true
           git diff "$BASE_SHA"..."$HEAD_SHA" > pr.diff
-          wc -c pr.diff
-          if [ "$(wc -c < pr.diff)" -gt 200000 ]; then
-            head -c 200000 pr.diff > pr.diff.trunc
+          wc -l pr.diff
+          # Truncate by LINES, not bytes — byte truncation can slice mid-line,
+          # mid-hunk, or mid-multibyte-character, producing malformed diffs
+          # that confuse model parsers.
+          if [ "$(wc -l < pr.diff)" -gt 5000 ]; then
+            head -n 5000 pr.diff > pr.diff.trunc
             mv pr.diff.trunc pr.diff
-            echo "[diff truncated to 200KB]" >> pr.diff
+            echo "" >> pr.diff
+            echo "[diff truncated to 5000 lines]" >> pr.diff
           fi
 
       - name: Build prompts (gemini + claude)
@@ -112,6 +116,10 @@ jobs:
   gemini-review:
     name: Gemini adversarial review
     needs: [prep]
+    # Skip cleanly when GEMINI_API_KEY isn't available (e.g. fork PR without
+    # secret access). Without this guard the composite action would fail
+    # noisily, violating the 'advisory only — never gates' contract.
+    if: ${{ secrets.GEMINI_API_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -132,27 +140,9 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
+            const { extractVerdict } = require(path.resolve('.github/scripts/extract-verdict.js'));
             const raw = fs.readFileSync('review.md', 'utf8');
-            // Forgiving verdict extractor (same as ci-meta consensus parser):
-            //   1. Strict frontmatter at the top: ---\nverdict: ...\n---
-            //   2. An embedded frontmatter block elsewhere
-            //   3. A bare 'verdict: pass|fail' line anywhere
-            // Falls through to 'unparseable' which fails the workflow.
-            function extractVerdict(text) {
-              const m1 = text.match(/^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
-              if (m1) {
-                const fm = m1[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
-                if (fm) return { verdict: fm[1].toLowerCase(), body: m1[2].trim() };
-              }
-              const m2 = text.match(/\n---\s*\n(verdict\s*:\s*(?:pass|fail)[\s\S]*?)\n---\s*\n/);
-              if (m2) {
-                const fm = m2[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
-                if (fm) return { verdict: fm[1].toLowerCase(), body: text };
-              }
-              const m3 = text.match(/^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b/im);
-              if (m3) return { verdict: m3[1].toLowerCase(), body: text };
-              return { verdict: null, body: text };
-            }
             const { verdict, body } = extractVerdict(raw);
             if (verdict !== 'pass' && verdict !== 'fail') {
               core.setFailed('Gemini output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
@@ -171,6 +161,9 @@ jobs:
   claude-review:
     name: Claude adversarial review
     needs: [prep]
+    # Same guard as gemini-review — skip cleanly when ANTHROPIC_API_KEY isn't
+    # available rather than fail noisily.
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -260,23 +253,9 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
+            const { extractVerdict } = require(path.resolve('.github/scripts/extract-verdict.js'));
             const raw = fs.readFileSync('review.md', 'utf8');
-            // Same forgiving verdict extractor as the Gemini job above.
-            function extractVerdict(text) {
-              const m1 = text.match(/^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
-              if (m1) {
-                const fm = m1[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
-                if (fm) return { verdict: fm[1].toLowerCase(), body: m1[2].trim() };
-              }
-              const m2 = text.match(/\n---\s*\n(verdict\s*:\s*(?:pass|fail)[\s\S]*?)\n---\s*\n/);
-              if (m2) {
-                const fm = m2[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
-                if (fm) return { verdict: fm[1].toLowerCase(), body: text };
-              }
-              const m3 = text.match(/^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b/im);
-              if (m3) return { verdict: m3[1].toLowerCase(), body: text };
-              return { verdict: null, body: text };
-            }
             const { verdict, body } = extractVerdict(raw);
             if (verdict !== 'pass' && verdict !== 'fail') {
               core.setFailed('Claude output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');

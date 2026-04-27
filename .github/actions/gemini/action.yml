@@ -128,3 +128,14 @@ runs:
         echo "stdout (first 500 chars):"
         head -c 500 "$OUTPUT"
         echo ""
+
+    - name: Verify output produced
+      shell: bash
+      env:
+        OUTPUT: ${{ inputs.output-file }}
+      run: |
+        if [ ! -s "$OUTPUT" ]; then
+          echo "::error::$OUTPUT is empty or missing — gemini exited 0 but produced no content."
+          exit 1
+        fi
+        echo "✓ $OUTPUT exists ($(wc -c < "$OUTPUT") bytes)"
