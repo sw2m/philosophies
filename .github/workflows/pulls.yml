@@ -31,12 +31,13 @@ permissions:
 # framing (gemini's stdin intro, claude's anti-hallucination guard) stays
 # inline at the call site.
 env:
-  # Shared Phase 3 prompt fragments. Both reviewers (Gemini, Claude) get the
-  # same role, rules, format spec, the strict-output preamble, and the
-  # anti-hallucination guard. Keep this the single source of truth — adding
-  # a new review rule means adding it here once.
-
-  PHASE_3_CRITICAL_FORMAT_PREAMBLE: |-
+  # Single source of truth for the Phase 3 reviewer prompt. Both reviewers
+  # (Gemini, Claude) receive this identical text — the only mechanical
+  # difference is HOW the input substrate (MEMORY.md + diff) is attached:
+  # Gemini reads it via stdin; Claude's composite action prepends this
+  # prompt to the same stdin-file. Adding a new review rule means editing
+  # this one block.
+  PHASE_3_PROMPT: |-
     # CRITICAL OUTPUT FORMAT (read this FIRST)
 
     Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
@@ -55,15 +56,14 @@ env:
     If you do not produce frontmatter as your first output, the workflow
     will fail and your review will be discarded. Non-negotiable.
 
-  PHASE_3_ROLE: |-
+    # TASK
+
     You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified Spec-Driven Development / VSDD).
 
-  PHASE_3_ANTI_HALLUCINATION: |-
     The canonical VSDD doc and the PR diff under review are EMBEDDED below in the same message — do not look for files on disk; if you cite something, cite from the embedded content.
 
     Critical: if you find yourself citing a file or symbol that isn't actually present in the embedded diff, STOP — that is a hallucination. Only cite what's in the embedded content.
 
-  PHASE_3_REVIEW_RULES: |-
     Apply these review rules. Look ONLY for:
 
     - Code that diverges from the spec it's supposed to satisfy
@@ -73,7 +73,6 @@ env:
     - Inconsistent error handling
     - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
 
-  PHASE_3_OUTPUT_FORMAT: |-
     # OUTPUT FORMAT (strict)
 
     Begin your response with YAML frontmatter, exactly this shape:
@@ -142,17 +141,7 @@ jobs:
           # content gets embedded — Gemini reads stdin (this file), Claude
           # gets the same file as its `stdin-file` input.
           cat > gemini-stdin.txt <<'PROMPT_EOF'
-          ${{ env.PHASE_3_CRITICAL_FORMAT_PREAMBLE }}
-
-          # TASK
-
-          ${{ env.PHASE_3_ROLE }}
-
-          ${{ env.PHASE_3_ANTI_HALLUCINATION }}
-
-          ${{ env.PHASE_3_REVIEW_RULES }}
-
-          ${{ env.PHASE_3_OUTPUT_FORMAT }}
+          ${{ env.PHASE_3_PROMPT }}
 
           --- MEMORY.md ---
           PROMPT_EOF
@@ -239,17 +228,7 @@ jobs:
           # directly in the prompt rather than asking Claude to "read" them.
           stdin-file: gemini-stdin.txt
           prompt: |
-            ${{ env.PHASE_3_CRITICAL_FORMAT_PREAMBLE }}
-
-            # TASK
-
-            ${{ env.PHASE_3_ROLE }}
-
-            ${{ env.PHASE_3_ANTI_HALLUCINATION }}
-
-            ${{ env.PHASE_3_REVIEW_RULES }}
-
-            ${{ env.PHASE_3_OUTPUT_FORMAT }}
+            ${{ env.PHASE_3_PROMPT }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v9
