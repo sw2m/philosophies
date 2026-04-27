@@ -1,0 +1,66 @@
+name: Sync labels
+
+# Idempotent label sync. Reads `.github/labels.yml` (a list of
+# {name, color, description}) and ensures each label exists with the
+# specified color/description. Safe to re-run.
+#
+# Triggered on:
+#   - push to main when `.github/labels.yml` changes
+#   - manual `workflow_dispatch` (for repo bootstrap)
+#
+# Labels managed here:
+#   - spec:goal     — issue is a goal-spec; eligible for goal→tech promotion
+#   - spec:tech     — issue is a tech-spec; eligible for tech→PR promotion
+#   - needs-human   — promote-tech-to-pr bailed; human must take over
+#   - ci-meta       — issue was opened by ci-meta consensus (provenance)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/labels.yml"
+      - ".github/workflows/labels.yml"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Sync labels via gh CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f .github/labels.yml ]; then
+            echo "::error::.github/labels.yml not found"
+            exit 1
+          fi
+          # Parse the YAML and create/update each label. `gh label create`
+          # with `--force` updates if the label already exists, which is
+          # the idempotent contract we want.
+          python3 - <<'PY'
+          import subprocess, sys, yaml
+          with open('.github/labels.yml') as f:
+              labels = yaml.safe_load(f)
+          if not isinstance(labels, list):
+              print('::error::.github/labels.yml must be a list of {name,color,description}', file=sys.stderr)
+              sys.exit(1)
+          for entry in labels:
+              name = entry['name']
+              color = entry.get('color', 'cccccc').lstrip('#')
+              desc = entry.get('description', '')
+              cmd = ['gh', 'label', 'create', name, '--color', color, '--description', desc, '--force']
+              r = subprocess.run(cmd, capture_output=True, text=True)
+              status = 'ok' if r.returncode == 0 else f'FAIL ({r.returncode})'
+              print(f'  [{status}] {name}')
+              if r.returncode != 0:
+                  print(f'    stdout: {r.stdout}')
+                  print(f'    stderr: {r.stderr}')
+          PY

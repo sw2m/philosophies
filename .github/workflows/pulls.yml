@@ -10,7 +10,10 @@ on:
     # `ready_for_review` is added so jobs run when a draft is promoted to
     # ready. Drafts themselves are skipped at job level via the
     # `if: github.event.pull_request.draft != true` guard below.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `assigned` re-fires the workflow when an org member self-assigns to
+    # an externally-authored PR (the assignment IS the ownership signal —
+    # see the `ownership` job below).
+    types: [opened, synchronize, reopened, ready_for_review, assigned]
   workflow_call:
     secrets:
       GEMINI_API_KEY:
@@ -105,9 +108,62 @@ env:
     line.
 
 jobs:
+  # Ownership gate. A PR is "owned" when its author is an sw2m org member
+  # OR any of its current assignees is. Unowned PRs (e.g. fork PRs from
+  # external contributors with no org-member assignee) are dormant — CI
+  # skips so an external contributor cannot consume agent budget. To wake
+  # an external PR up, an org member assigns themselves; `pull_request:
+  # [assigned]` re-fires this workflow and the gate now lets it through.
+  ownership:
+    name: Verify org-member ownership
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    outputs:
+      owned: ${{ steps.check.outputs.owned }}
+      owner: ${{ steps.check.outputs.owner }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORG: sw2m
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          ASSIGNEES_JSON: ${{ toJson(github.event.pull_request.assignees) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # NOTE: the default GITHUB_TOKEN can only see PUBLIC org
+          # memberships. Members whose membership is private are invisible
+          # to this check.
+          check_member() {
+            local login="$1"
+            [ -n "$login" ] && gh api "orgs/$ORG/members/$login" >/dev/null 2>&1
+          }
+          OWNER=""
+          if check_member "$AUTHOR"; then
+            OWNER="$AUTHOR"
+            echo "Owner: $AUTHOR (PR author, org member)"
+          else
+            for login in $(jq -r '.[].login' <<< "$ASSIGNEES_JSON"); do
+              if check_member "$login"; then
+                OWNER="$login"
+                echo "Owner: $login (assignee, org member)"
+                break
+              fi
+            done
+          fi
+          if [ -n "$OWNER" ]; then
+            echo "owned=true"  >> "$GITHUB_OUTPUT"
+            echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+          else
+            echo "owned=false" >> "$GITHUB_OUTPUT"
+            echo "owner="      >> "$GITHUB_OUTPUT"
+            echo "::notice::PR not owned: author '$AUTHOR' is not an sw2m org member and no assignee is. Phase 3 review skipped. To enable, an org member must self-assign."
+          fi
+
   prep:
     name: Compute PR diff
-    if: github.event.pull_request.draft != true
+    needs: [ownership]
+    if: ${{ github.event.pull_request.draft != true && needs.ownership.outputs.owned == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -161,11 +217,11 @@ jobs:
 
   gemini-review:
     name: Gemini adversarial review
-    needs: [prep]
+    needs: [ownership, prep]
     # Skip cleanly when GEMINI_API_KEY isn't available (e.g. fork PR without
     # secret access). Without this guard the composite action would fail
     # noisily, violating the 'advisory only — never gates' contract.
-    if: ${{ secrets.GEMINI_API_KEY != '' }}
+    if: ${{ secrets.GEMINI_API_KEY != '' && needs.ownership.outputs.owned == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -180,6 +236,11 @@ jobs:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: gemini-stdin.txt
           output-file: review.md
+          # The owner login was identified by the ownership gate. Pass it
+          # as actor-override so the action's inner gate validates against
+          # the *PR owner*, not the workflow trigger sender (which on a
+          # fork-PR `synchronize` event can be the external pusher).
+          actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v9
@@ -206,10 +267,10 @@ jobs:
 
   claude-review:
     name: Claude adversarial review
-    needs: [prep]
+    needs: [ownership, prep]
     # Same guard as gemini-review — skip cleanly when ANTHROPIC_API_KEY isn't
     # available rather than fail noisily.
-    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' && needs.ownership.outputs.owned == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -229,6 +290,7 @@ jobs:
           stdin-file: gemini-stdin.txt
           prompt: |
             ${{ env.PHASE_3_PROMPT }}
+          actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v9

@@ -7,7 +7,9 @@ name: VSDD Issue Review (Phase 1c)
 
 on:
   issues:
-    types: [opened, edited]
+    # `assigned` so externally-authored or bot-authored issues become
+    # eligible for Phase 1c review when an org member self-assigns.
+    types: [opened, edited, assigned]
   workflow_call:
     secrets:
       GEMINI_API_KEY:
@@ -18,8 +20,52 @@ permissions:
   contents: read
 
 jobs:
+  ownership:
+    name: Verify org-member ownership
+    runs-on: ubuntu-latest
+    outputs:
+      owned: ${{ steps.check.outputs.owned }}
+      owner: ${{ steps.check.outputs.owner }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORG: sw2m
+          AUTHOR: ${{ github.event.issue.user.login }}
+          ASSIGNEES_JSON: ${{ toJson(github.event.issue.assignees) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_member() {
+            local login="$1"
+            [ -n "$login" ] && gh api "orgs/$ORG/members/$login" >/dev/null 2>&1
+          }
+          OWNER=""
+          if check_member "$AUTHOR"; then
+            OWNER="$AUTHOR"
+            echo "Owner: $AUTHOR (issue author, org member)"
+          else
+            for login in $(jq -r '.[].login' <<< "$ASSIGNEES_JSON"); do
+              if check_member "$login"; then
+                OWNER="$login"
+                echo "Owner: $login (assignee, org member)"
+                break
+              fi
+            done
+          fi
+          if [ -n "$OWNER" ]; then
+            echo "owned=true"  >> "$GITHUB_OUTPUT"
+            echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+          else
+            echo "owned=false" >> "$GITHUB_OUTPUT"
+            echo "owner="      >> "$GITHUB_OUTPUT"
+            echo "::notice::Issue not owned: author '$AUTHOR' is not an sw2m org member and no assignee is. Phase 1c review skipped. To enable, an org member must self-assign."
+          fi
+
   vsdd-issue-review:
     name: Gemini VSDD Phase 1c review
+    needs: [ownership]
+    if: ${{ needs.ownership.outputs.owned == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -76,6 +122,10 @@ jobs:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: /tmp/vsdd/stdin.txt
           output-file: /tmp/vsdd/review.md
+          # Validate against the issue's owner (author or org-member assignee)
+          # rather than the trigger sender — an `edited` event from any user
+          # would otherwise gate on the editor, not the owner.
+          actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review as issue comment
         uses: actions/github-script@v9

@@ -1,0 +1,223 @@
+name: "Promote goal-spec to tech-specs"
+description: |
+  Reads a `spec:goal` issue, asks Claude to decompose it into N
+  tech-spec sub-issues (one technical problem per tech spec, per
+  MEMORY.md §VII), and opens each as a `spec:tech` issue with a
+  back-link to the parent goal. Posts a summary comment on the goal.
+
+  The agent's job is decomposition, not solution — each tech-spec body
+  describes ONE concrete technical problem and what "done" looks like,
+  but does not propose code, APIs, or implementation. Phase 3 of the
+  tech→PR pipeline is where implementation happens.
+
+inputs:
+  issue-number:
+    description: "Number of the goal-spec issue to decompose."
+    required: true
+  owner-login:
+    description: "GitHub login of the org-member assignee taking ownership."
+    required: true
+  anthropic-api-key:
+    description: "ANTHROPIC_API_KEY value."
+    required: true
+  github-token:
+    description: "Token used to read the goal issue and create tech-spec issues."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Read goal issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+      run: |
+        set -euo pipefail
+        gh issue view "$ISSUE_NUMBER" --json title,body,labels,number,url > goal.json
+        jq -r '.title' goal.json > goal-title.txt
+        jq -r '.body'  goal.json > goal-body.txt
+        echo "goal title: $(cat goal-title.txt)"
+        echo "goal body bytes: $(wc -c < goal-body.txt)"
+
+    - name: Build agent prompt
+      shell: bash
+      run: |
+        set -euo pipefail
+        cat > stdin.txt <<'PROMPT_EOF'
+        # CRITICAL OUTPUT FORMAT (read this FIRST)
+
+        Your response MUST start with YAML frontmatter on the very first
+        line — no preamble, no leading whitespace. The frontmatter has
+        exactly one key, `tech_specs`, whose value is a list. Each entry
+        has `title` and `body`. After the closing `---` you may write a
+        free-form summary; the parser ignores it.
+
+        Concrete example of an acceptable response:
+
+        ```
+        ---
+        tech_specs:
+          - title: "[tech] Add ownership-gate job to pulls.yml"
+            body: |
+              **Problem.** pulls.yml currently runs Phase 3 review on every
+              non-draft PR regardless of who opened it. External-contributor
+              PRs consume agent budget without ownership.
+
+              **Done when.** A new `ownership` job runs first; downstream
+              jobs `needs: [ownership]` and skip when no org-member author
+              or assignee is present.
+
+              **Section reference.** §I (Adversary), §II Phase 3.
+          - title: "[tech] ..."
+            body: |
+              ...
+        ---
+
+        (free-form summary may follow, ignored by the parser)
+        ```
+
+        # TASK
+
+        You are decomposing a goal-spec issue into tech-spec sub-issues
+        per MEMORY.md §VII (Spec Discipline).
+
+        Rules:
+        - One technical problem per tech-spec. No bundling. If the goal
+          has N distinct technical problems, output N tech-specs.
+        - Tech-spec bodies describe **what** is broken/missing and **what
+          "done" looks like** — not the implementation. Do NOT propose
+          code, APIs, function names, or design. Phase 3 of the tech→PR
+          pipeline does the implementation.
+        - Each tech-spec title must be self-explanatory (≤60 chars).
+        - If the goal-spec is already a single technical problem, output
+          one tech-spec.
+        - If the goal-spec is too vague to decompose, output zero
+          tech-specs and explain in the free-form summary; the human
+          will refine the goal first.
+
+        Inputs are EMBEDDED below — do not look for files on disk.
+        Cite only what is in the embedded text.
+
+        --- MEMORY.md ---
+        PROMPT_EOF
+        cat MEMORY.md >> stdin.txt
+        {
+          printf '\n--- GOAL ISSUE TITLE ---\n'
+          cat goal-title.txt
+          printf '\n--- GOAL ISSUE BODY ---\n'
+          cat goal-body.txt
+        } >> stdin.txt
+        echo "stdin.txt bytes: $(wc -c < stdin.txt)"
+
+    - name: Run Claude (org-member gate inside)
+      uses: ./.github/actions/claude
+      with:
+        api-key: ${{ inputs.anthropic-api-key }}
+        actor-override: ${{ inputs.owner-login }}
+        stdin-file: stdin.txt
+        output-file: tech-specs.md
+
+    - name: Parse tech-specs and open sub-issues
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        OWNER_LOGIN: ${{ inputs.owner-login }}
+      run: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import json, os, re, subprocess, sys, yaml
+
+        issue_number = os.environ['ISSUE_NUMBER']
+        owner = os.environ['OWNER_LOGIN']
+
+        with open('tech-specs.md') as f:
+            raw = f.read()
+
+        # Strict frontmatter at the very top.
+        m = re.match(r'^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$', raw)
+        fm = None
+        summary = raw.strip()
+        if m:
+            try:
+                fm = yaml.safe_load(m.group(1))
+                summary = m.group(2).strip()
+            except yaml.YAMLError as e:
+                print(f'WARN: invalid YAML frontmatter: {e}', file=sys.stderr)
+
+        # Fallback: scan for an embedded ---tech_specs:---block.
+        if not isinstance(fm, dict) or 'tech_specs' not in fm:
+            m2 = re.search(r'\n---\s*\n(tech_specs\s*:[\s\S]*?)\n---\s*\n', raw)
+            if m2:
+                try:
+                    fm = yaml.safe_load(m2.group(1))
+                except yaml.YAMLError:
+                    fm = None
+
+        if not isinstance(fm, dict) or not isinstance(fm.get('tech_specs'), list):
+            print('::error::Could not extract `tech_specs` list from agent output.', file=sys.stderr)
+            print('--- raw ---', file=sys.stderr); print(raw, file=sys.stderr)
+            sys.exit(1)
+
+        opened = []
+        for spec in fm['tech_specs']:
+            if not isinstance(spec, dict) or 'title' not in spec or 'body' not in spec:
+                print(f'  skip malformed: {spec!r}'); continue
+            title = str(spec['title']).strip()
+            body = str(spec['body']).strip()
+            footer = (
+                f'\n\n---\n'
+                f'_Tech-spec sub-issue of #{issue_number} (goal). Opened by '
+                f'`promote-goal-to-tech` after @{owner} self-assigned the goal._\n'
+                f'_Assign yourself to this issue to start the 5-phase tech→PR pipeline._\n'
+            )
+            r = subprocess.run(
+                ['gh', 'issue', 'create',
+                 '--title', title,
+                 '--body', body + footer,
+                 '--label', 'spec:tech'],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                # Label may be missing on a downstream repo. Retry without.
+                r = subprocess.run(
+                    ['gh', 'issue', 'create', '--title', title, '--body', body + footer],
+                    capture_output=True, text=True, check=True,
+                )
+            url = r.stdout.strip().splitlines()[-1]
+            print(f'  opened: {url}')
+            opened.append((title, url))
+
+        # Comment on the parent goal with the list of children.
+        if opened:
+            lines = [
+                f'**Goal decomposed into {len(opened)} tech-spec sub-issue(s).**',
+                f'_Triggered by @{owner} self-assigning this goal._',
+                '',
+            ]
+            for title, url in opened:
+                lines.append(f'- {url} — {title}')
+            lines += [
+                '',
+                'Each sub-issue carries `spec:tech`. Assign yourself to a '
+                'tech-spec to start the 5-phase implementation pipeline '
+                '(scaffold → tests → Red gate → implement → Green gate).',
+            ]
+        else:
+            lines = [
+                f'**No tech-specs produced.**',
+                f'_Triggered by @{owner} but the agent could not decompose this goal._',
+                '',
+                f'Free-form rationale from the agent:',
+                '',
+                f'> {summary[:1500]}',
+                '',
+                'Refine the goal-spec body and re-assign to retry, or '
+                'open tech-specs by hand and apply `spec:tech`.',
+            ]
+        subprocess.run(
+            ['gh', 'issue', 'comment', issue_number, '--body', '\n'.join(lines)],
+            check=True,
+        )
+        PY

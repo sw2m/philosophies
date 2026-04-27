@@ -11,6 +11,15 @@ inputs:
     description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
     required: false
     default: "sw2m"
+  actor-override:
+    description: |
+      If set, validate this login against the org instead of the workflow
+      trigger sender. Used by callers that have already identified an
+      org-member owner via richer context (PR author + assignees, issue
+      assignees, etc.). Empty string (default) preserves the original
+      sender-based check.
+    required: false
+    default: ""
   prompt:
     description: "Optional inline prompt prepended to stdin-file before piping to claude."
     required: false
@@ -34,6 +43,21 @@ inputs:
     description: "Where claude's stdout is written. Caller reads from this path after the action runs."
     required: false
     default: "claude-output.txt"
+  allowed-tools:
+    description: |
+      Tools claude is permitted to invoke. Default `""` disables every
+      tool (pure inference). Pass e.g. `"Bash Edit Write Read"` to allow
+      filesystem and shell access for agentic phases (used by the
+      promote-tech-to-pr pipeline). Space-separated list.
+    required: false
+    default: ""
+  permission-mode:
+    description: |
+      Permission mode passed to claude. `default` (claude's default) for
+      inference; `bypassPermissions` for non-interactive autonomous runs
+      where `allowed-tools` is non-empty. Leave empty to omit the flag.
+    required: false
+    default: ""
 
 outputs:
   output-file:
@@ -47,11 +71,16 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        ACTOR: ${{ github.event.sender.login || github.actor }}
+        SENDER: ${{ github.event.sender.login || github.actor }}
+        OVERRIDE: ${{ inputs.actor-override }}
         ORG: ${{ inputs.org }}
       run: |
         # Hard gate: agents must not be invocable by non-org-members.
         # NOTE: the default GITHUB_TOKEN can only see PUBLIC org memberships.
+        ACTOR="${OVERRIDE:-$SENDER}"
+        if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "$SENDER" ]; then
+          echo "actor-override active: validating '$OVERRIDE' (caller-provided owner) instead of trigger sender '$SENDER'."
+        fi
         if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
           echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
           echo ""
@@ -60,7 +89,8 @@ runs:
           echo "next to your row."
           echo ""
           echo "If you are not a member: agent invocations (Claude) are"
-          echo "restricted to org members."
+          echo "restricted to org members. Self-assign on an issue or PR"
+          echo "to take ownership."
           exit 1
         fi
         echo "✓ $ACTOR is a $ORG org member (public)."
@@ -73,7 +103,7 @@ runs:
       shell: bash
       run: npm install -g @anthropic-ai/claude-code@latest
 
-    - name: Invoke claude (--print, no tools, with fallback)
+    - name: Invoke claude (--print, with fallback model on error)
       shell: bash
       env:
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
@@ -82,6 +112,8 @@ runs:
         MODEL: ${{ inputs.model }}
         FALLBACK: ${{ inputs.fallback-model }}
         OUTPUT: ${{ inputs.output-file }}
+        TOOLS: ${{ inputs.allowed-tools }}
+        PMODE: ${{ inputs.permission-mode }}
       run: |
         set -euo pipefail
         : > combined-input.txt
@@ -101,19 +133,30 @@ runs:
         fi
         echo "input bytes: $(wc -c < combined-input.txt)"
 
-        # `--print` = non-interactive single-turn; pipe stdin as the prompt.
-        # `--allowed-tools ""` disables every tool. Pure inference; we want
-        # claude to produce text, not run tools. `--permission-mode plan`
-        # was rejected earlier — plan mode produces a "what I would do"
-        # summary instead of doing it.
+        # Build the flag list. `--allowed-tools ""` (the default) is the
+        # original inference-only contract. When TOOLS is non-empty,
+        # callers (e.g. promote-tech-to-pr) get filesystem + shell access
+        # for agentic phases. `--permission-mode plan` was rejected
+        # earlier — plan mode produces a "what I would do" summary
+        # instead of doing it; promote-tech-to-pr needs `bypassPermissions`
+        # so non-interactive runs don't stall on tool prompts.
+        FLAGS=(--print --model "$MODEL" --allowed-tools "$TOOLS")
+        if [ -n "$PMODE" ]; then
+          FLAGS+=(--permission-mode "$PMODE")
+        fi
+        FALLBACK_FLAGS=(--print --model "$FALLBACK" --allowed-tools "$TOOLS")
+        if [ -n "$PMODE" ]; then
+          FALLBACK_FLAGS+=(--permission-mode "$PMODE")
+        fi
+
         set +e
-        claude --print --model "$MODEL" --allowed-tools "" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
+        claude "${FLAGS[@]}" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
         rc=$?
         if [ $rc -ne 0 ]; then
           echo "::warning::Primary model '$MODEL' exited $rc; falling back to '$FALLBACK'."
           echo "--- primary stderr ---"
           cat claude-stderr.log
-          claude --print --model "$FALLBACK" --allowed-tools "" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
+          claude "${FALLBACK_FLAGS[@]}" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
           rc=$?
           if [ $rc -ne 0 ]; then
             echo "::error::Fallback model '$FALLBACK' also exited $rc."

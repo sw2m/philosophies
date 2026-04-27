@@ -10,6 +10,16 @@ inputs:
     description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
     required: false
     default: "sw2m"
+  actor-override:
+    description: |
+      If set, validate this login against the org instead of the workflow
+      trigger sender. Used by callers that have already identified an
+      org-member owner via richer context (PR author + assignees) — for
+      example when a fork-PR `synchronize` event's sender is the external
+      pusher but the PR is owned by an org-member assignee. Empty string
+      (default) preserves the original sender-based check.
+    required: false
+    default: ""
   prompt:
     description: "Optional inline prompt prepended to stdin-file before piping to gemini."
     required: false
@@ -46,7 +56,8 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        ACTOR: ${{ github.event.sender.login || github.actor }}
+        SENDER: ${{ github.event.sender.login || github.actor }}
+        OVERRIDE: ${{ inputs.actor-override }}
         ORG: ${{ inputs.org }}
       run: |
         # Hard gate: agents must not be invocable by non-org-members.
@@ -54,6 +65,10 @@ runs:
         # Members whose membership is private are invisible to this check
         # and will trigger a hard fail. Make membership public on the org
         # page (Settings → People → "Make public") to be recognized.
+        ACTOR="${OVERRIDE:-$SENDER}"
+        if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "$SENDER" ]; then
+          echo "actor-override active: validating '$OVERRIDE' (caller-provided owner) instead of trigger sender '$SENDER'."
+        fi
         if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
           echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
           echo ""
@@ -64,7 +79,7 @@ runs:
           echo ""
           echo "If you are not a member: agent invocations (Gemini) are"
           echo "restricted to org members. An org member must open the PR"
-          echo "on your behalf."
+          echo "on your behalf or self-assign to take ownership."
           exit 1
         fi
         echo "✓ $ACTOR is a $ORG org member (public)."
