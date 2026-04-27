@@ -7,7 +7,7 @@
 //   2. An embedded frontmatter block anywhere in the doc
 //   3. A bare "verdict: pass|fail" line anywhere
 //
-// Used by both pulls.yml's gemini-review and claude-review post-steps.
+// Used by both pr-review.yml's gemini-review and claude-review post-steps.
 // `require` it from a github-script step:
 //
 //   const { extractVerdict } = require('./.github/scripts/extract-verdict.js');

@@ -58,9 +58,9 @@ runs:
         ```
         ---
         tech_specs:
-          - title: "[tech] Add ownership-gate job to pulls.yml"
+          - title: "[tech] Add ownership-gate job to pr-review.yml"
             body: |
-              **Problem.** pulls.yml currently runs Phase 3 review on every
+              **Problem.** pr-review.yml currently runs Phase 3 review on every
               non-draft PR regardless of who opened it. External-contributor
               PRs consume agent budget without ownership.
 

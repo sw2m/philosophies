@@ -630,7 +630,7 @@ runs:
         fi
         echo ""                                                    >> "$BODY"
         echo "Draft PR: #$PR_NUMBER. Promoting from draft to ready" >> "$BODY"
-        echo "is a human decision — Phase 3 adversarial review (pulls.yml)" >> "$BODY"
+        echo "is a human decision — Phase 3 adversarial review (pr-review.yml)" >> "$BODY"
         echo "runs after promotion."                                >> "$BODY"
         gh pr comment "$PR_NUMBER" --body-file "$BODY"
         gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"

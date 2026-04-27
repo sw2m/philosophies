@@ -296,8 +296,8 @@ Multi-word symbols are an indicator of poorly architected code, because they can
 
 This repo's `.github/workflows/` enforces VSDD on itself. Six workflows, mirroring the pipeline:
 
-- **`issues.yml`** — fires on `issues: [opened, edited, assigned]`. Runs **two** adversarial reviewers (Gemini + Claude) in parallel as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body. Two cognitive sources per §V. Each posts a comment. **Advisory only — never gates.** Subject to the **ownership gate** (see below) — issues authored by non-org-members stay dormant until an org member self-assigns.
-- **`pulls.yml`** — fires on `pull_request: [opened, synchronize, reopened, ready_for_review, assigned]`. Runs *two* adversarial reviewers in parallel — Gemini and Claude — against the diff with `MEMORY.md` as the standard (Phase 3, Adversarial Refinement). Two cognitive sources per §V. Each posts a PR comment. Also runs a deterministic `symbol-audit` job (`.github/scripts/symbol-audit.sh`) that greps the PR diff for camelCase/snake_case identifiers and posts the matches under `<details>` as a §IX pre-check, with PascalCase, SCREAMING_SNAKE, recognized serde-leak fields, and third-party paths soft-filtered. **Advisory only — never gates.** Also subject to the ownership gate.
+- **`issue-review.yml`** — fires on `issues: [opened, edited, assigned]`. Runs **two** adversarial reviewers (Gemini + Claude) in parallel as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body. Two cognitive sources per §V. Each posts a comment. **Advisory only — never gates.** Subject to the **ownership gate** (see below) — issues authored by non-org-members stay dormant until an org member self-assigns.
+- **`pr-review.yml`** — fires on `pull_request: [opened, synchronize, reopened, ready_for_review, assigned]`. Runs *two* adversarial reviewers in parallel — Gemini and Claude — against the diff with `MEMORY.md` as the standard (Phase 3, Adversarial Refinement). Two cognitive sources per §V. Each posts a PR comment. Also runs a deterministic `symbol-audit` job (`.github/scripts/symbol-audit.sh`) that greps the PR diff for camelCase/snake_case identifiers and posts the matches under `<details>` as a §IX pre-check, with PascalCase, SCREAMING_SNAKE, recognized serde-leak fields, and third-party paths soft-filtered. **Advisory only — never gates.** Also subject to the ownership gate.
 - **`promote.yml`** — fires on `issues: [assigned]`. The assignment-triggered promotion pipeline (see below).
 - **`labels.yml`** — fires on `workflow_dispatch` and on push to `main` when `.github/labels.yml` changes. Idempotent label sync; manages `spec:goal`, `spec:tech`, `needs-human`, `ci-meta`.
 - **`test.yml`** — fires on `push` to `main` and on `pull_request`. Markdown lint, external link check (lychee), and a structural sanity check that all nine Roman-numeral sections of `MEMORY.md` are present. **Gating** — required by the branch-protection rule on `main`.
@@ -331,7 +331,7 @@ The promotion pipeline lets sw2m repos run autonomously with HIL only at decisio
 
    On exhaustion of either retry budget the pipeline **bails**: applies `needs-human` to the issue, comments with the last test output on the issue and PR, leaves the PR draft. A human takes over.
 
-   On success the PR is left as draft; promoting to ready-for-review is a human decision and triggers `pulls.yml` Phase 3 adversarial review.
+   On success the PR is left as draft; promoting to ready-for-review is a human decision and triggers `pr-review.yml` Phase 3 adversarial review.
 
    **Docs-repo carve-out.** Repos with no detectable test runner (e.g. this one) follow the §VIII N/A path: Phases 2/3/5 are skipped and Phase 4 runs once. The draft PR is the artifact for human review.
 
@@ -342,7 +342,7 @@ Each workflow exposes a `workflow_call:` trigger so other `sw2m` repos can reuse
 ```yaml
 jobs:
   vsdd-pulls:
-    uses: sw2m/philosophies/.github/workflows/pulls.yml@main
+    uses: sw2m/philosophies/.github/workflows/pr-review.yml@main
     secrets: inherit
 ```
 
