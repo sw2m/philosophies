@@ -39,8 +39,37 @@ permissions:
   id-token: write   # required by anthropics/claude-code-action for OIDC handshake
 
 jobs:
+  membership-gate:
+    name: Org-member gate
+    runs-on: ubuntu-latest
+    outputs:
+      is-member: ${{ steps.check.outputs.is-member }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.event.sender.login || github.actor }}
+        run: |
+          # Fork-PR contributor-approval setting at org+repo level already
+          # blocks unapproved external workflow runs. This step is defense in
+          # depth: even if a member-look-alike triggered the run, every agent
+          # job downstream is gated on actual sw2m org membership.
+          set +e
+          gh api "orgs/sw2m/members/$ACTOR" >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" = "0" ]; then
+            echo "is-member=true" >> "$GITHUB_OUTPUT"
+            echo "✓ $ACTOR is a sw2m org member; agent jobs will run."
+          else
+            echo "is-member=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::$ACTOR is not a sw2m org member; agent jobs (Gemini, Claude) will be skipped."
+          fi
+
   gemini-eval:
     name: Gemini VSDD CI evaluation
+    needs: [membership-gate]
+    if: needs.membership-gate.outputs.is-member == 'true'
     runs-on: ubuntu-latest
     outputs:
       verdict: ${{ steps.eval.outputs.verdict }}
@@ -175,6 +204,8 @@ jobs:
 
   claude-eval:
     name: Claude VSDD CI evaluation
+    needs: [membership-gate]
+    if: needs.membership-gate.outputs.is-member == 'true'
     runs-on: ubuntu-latest
     outputs:
       verdict: ${{ steps.eval.outputs.verdict }}
