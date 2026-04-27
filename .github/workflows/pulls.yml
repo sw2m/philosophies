@@ -67,6 +67,14 @@ env:
 
     Critical: if you find yourself citing a file or symbol that isn't actually present in the embedded diff, STOP — that is a hallucination. Only cite what's in the embedded content.
 
+    # DIFF-TRUNCATION CHECK
+
+    If you see `[diff truncated to 5000 lines]` anywhere in the embedded diff, START your review's body (after the frontmatter) with this exact bullet:
+
+    `- **(blocking) DIFF TRUNCATED.** This review only saw the first 5000 lines of the diff. The human reviewer must read the rest of the diff manually before merging.`
+
+    That bullet must appear before any other findings. Set `verdict: fail` because partial coverage is a correctness concern. This rule overrides the usual pass-with-nitpicks logic.
+
     Apply these review rules. Look ONLY for:
 
     - Code that diverges from the spec it's supposed to satisfy
@@ -194,6 +202,10 @@ jobs:
             mv pr.diff.trunc pr.diff
             echo "" >> pr.diff
             echo "[diff truncated to 5000 lines]" >> pr.diff
+            # Empty marker file so downstream consumers can detect truncation
+            # deterministically without grepping the diff body (the marker
+            # string itself could legitimately appear inside a diff hunk).
+            : > pr.diff.truncated
           fi
 
       - name: Build prompts (gemini + claude)
