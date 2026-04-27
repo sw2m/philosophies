@@ -842,15 +842,19 @@ jobs:
             // artifact PRs are bot-authored, and the consensus step
             // runs under that same bot, so the API call would always
             // fail on those PRs and fail the required status check
-            // (#66). Detect actor==author dynamically via the API caller
-            // identity (works for GITHUB_TOKEN, PATs, and custom GitHub
-            // Apps alike — not hardcoded against any specific bot
-            // login) and downgrade to `issues.createComment`. Same
-            // content, no verdict, no API rejection. Branch protection
-            // still gates on the Consensus job's overall conclusion.
+            // (#66). Downgrade to `issues.createComment` in that case —
+            // same content, no verdict, no API rejection.
+            //
+            // Hardcoded against `'github-actions[bot]'` because the
+            // dynamic alternative `github.rest.users.getAuthenticated()`
+            // returns HTTP 403 "Resource not accessible by integration"
+            // when the workflow runs under the default GITHUB_TOKEN.
+            // Spec annotation: this assumes all reviewer-submission
+            // steps run under the default GITHUB_TOKEN. If the workflow
+            // is ever switched to a PAT or a custom GitHub App, this
+            // heuristic must be updated at the same change.
             const prAuthor = context.payload.pull_request?.user?.login;
-            const me = (await github.rest.users.getAuthenticated()).data.login;
-            if (prAuthor && prAuthor === me) {
+            if (prAuthor === 'github-actions[bot]') {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,

@@ -472,14 +472,10 @@ jobs:
             const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
             const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
-            // Self-review guard: see ci-meta.yml's consensus step for
-            // the rationale. Detect actor==author dynamically via
-            // getAuthenticated() rather than hardcoded against any
-            // specific bot login, so this works under GITHUB_TOKEN,
-            // PATs, and custom GitHub Apps alike.
+            // Self-review guard — see ci-meta.yml's consensus step
+            // for the rationale and the spec annotation about hardcoding.
             const prAuthor = context.payload.pull_request?.user?.login;
-            const me = (await github.rest.users.getAuthenticated()).data.login;
-            if (prAuthor && prAuthor === me) {
+            if (prAuthor === 'github-actions[bot]') {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -542,8 +538,7 @@ jobs:
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
             // Self-review guard — same as the gemini-review step.
             const prAuthor = context.payload.pull_request?.user?.login;
-            const me = (await github.rest.users.getAuthenticated()).data.login;
-            if (prAuthor && prAuthor === me) {
+            if (prAuthor === 'github-actions[bot]') {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
