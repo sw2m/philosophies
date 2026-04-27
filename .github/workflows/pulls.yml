@@ -24,6 +24,86 @@ permissions:
   issues: write
   id-token: write
 
+# Single source of truth for the Phase 3 review prompt content. Both the
+# Gemini stdin builder (in `prep`) and the Claude `prompt:` input (in
+# `claude-review`) interpolate these via ${{ env.* }} so the review rules
+# and output-format spec live in exactly one place. Reviewer-specific
+# framing (gemini's stdin intro, claude's anti-hallucination guard) stays
+# inline at the call site.
+env:
+  # Single source of truth for the Phase 3 reviewer prompt. Both reviewers
+  # (Gemini, Claude) receive this identical text — the only mechanical
+  # difference is HOW the input substrate (MEMORY.md + diff) is attached:
+  # Gemini reads it via stdin; Claude's composite action prepends this
+  # prompt to the same stdin-file. Adding a new review rule means editing
+  # this one block.
+  PHASE_3_PROMPT: |-
+    # CRITICAL OUTPUT FORMAT (read this FIRST)
+
+    Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
+
+    Acceptable response example:
+
+    ```
+    ---
+    verdict: fail
+    ---
+
+    - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
+    - path/to/other.ts:10 — Nitpick. Fix: …
+    ```
+
+    If you do not produce frontmatter as your first output, the workflow
+    will fail and your review will be discarded. Non-negotiable.
+
+    # TASK
+
+    You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified Spec-Driven Development / VSDD).
+
+    The canonical VSDD doc and the PR diff under review are EMBEDDED below in the same message — do not look for files on disk; if you cite something, cite from the embedded content.
+
+    Critical: if you find yourself citing a file or symbol that isn't actually present in the embedded diff, STOP — that is a hallucination. Only cite what's in the embedded content.
+
+    Apply these review rules. Look ONLY for:
+
+    - Code that diverges from the spec it's supposed to satisfy
+    - Tautological tests
+    - Hidden coupling, race conditions, missing cleanup
+    - Multi-word symbols that should be `Subject.verb` (§IX)
+    - Inconsistent error handling
+    - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+
+    # OUTPUT FORMAT (strict)
+
+    Begin your response with YAML frontmatter, exactly this shape:
+
+    ---
+    verdict: pass | fail
+    ---
+
+    The verdict answers "should this PR be approved?", **not** "are
+    there zero concerns?". A `pass` with listed nitpicks is correct
+    and expected — concerns can exist without blocking.
+
+    - `verdict: pass` ⇔ concerns are nits/style/nice-to-have. The PR
+      is acceptable as-is; the human can address the nits or dismiss
+      them. Translates to APPROVE.
+    - `verdict: fail` ⇔ at least one concern is genuinely blocking
+      (correctness, security, broken contract, spec violation that
+      invalidates the change). Translates to REQUEST_CHANGES.
+
+    The frontmatter MUST be the first thing in your output (no leading
+    whitespace, no preamble).
+
+    After the closing `---`, list every concern (blocking and
+    nitpicks alike) as terse bullets. Each bullet: a concrete flaw
+    with `file:line` and a proposed fix. Mark blocking concerns
+    explicitly with **(blocking)** at the start of the bullet so the
+    human reading can scan for them.
+
+    If you genuinely have nothing to say, the body may be a single
+    line.
+
 jobs:
   prep:
     name: Compute PR diff
@@ -55,47 +135,13 @@ jobs:
 
       - name: Build prompts (gemini + claude)
         run: |
+          # Both reviewers receive the same prompt structure: the strict-output
+          # preamble first, then role, anti-hallucination guard, review rules,
+          # output format spec. The only per-reviewer difference is HOW the
+          # content gets embedded — Gemini reads stdin (this file), Claude
+          # gets the same file as its `stdin-file` input.
           cat > gemini-stdin.txt <<'PROMPT_EOF'
-          You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified
-          Spec-Driven Development). Review the PR diff below against the
-          standards in MEMORY.md (§I–§IX). Look ONLY for:
-            - Code that diverges from the spec it's supposed to satisfy
-            - Tautological tests
-            - Hidden coupling, race conditions, missing cleanup
-            - Multi-word symbols that should be Subject.verb (§IX)
-            - Inconsistent error handling
-            - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
-
-          # OUTPUT FORMAT (strict)
-
-          Begin your response with YAML frontmatter, exactly this shape:
-
-          ---
-          verdict: pass | fail
-          ---
-
-          The verdict answers "should this PR be approved?", **not** "are
-          there zero concerns?". A `pass` with listed nitpicks is correct
-          and expected — concerns can exist without blocking.
-
-          - `verdict: pass` ⇔ concerns are nits/style/nice-to-have. The PR
-            is acceptable as-is; the human can address the nits or dismiss
-            them. Translates to APPROVE.
-          - `verdict: fail` ⇔ at least one concern is genuinely blocking
-            (correctness, security, broken contract, spec violation that
-            invalidates the change). Translates to REQUEST_CHANGES.
-
-          The frontmatter MUST be the first thing in your output (no leading
-          whitespace, no preamble).
-
-          After the closing `---`, list every concern (blocking and
-          nitpicks alike) as terse bullets. Each bullet: a concrete flaw
-          with `file:line` and a proposed fix. Mark blocking concerns
-          explicitly with **(blocking)** at the start of the bullet so the
-          human reading can scan for them.
-
-          If you genuinely have nothing to say, the body may be a single
-          line.
+          ${{ env.PHASE_3_PROMPT }}
 
           --- MEMORY.md ---
           PROMPT_EOF
@@ -182,71 +228,7 @@ jobs:
           # directly in the prompt rather than asking Claude to "read" them.
           stdin-file: gemini-stdin.txt
           prompt: |
-            # CRITICAL OUTPUT FORMAT (read this FIRST)
-
-            Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
-
-            Acceptable response example:
-
-            ```
-            ---
-            verdict: fail
-            ---
-
-            - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
-            - path/to/other.ts:10 — Nitpick. Fix: …
-            ```
-
-            If you do not produce frontmatter as your first output, the workflow
-            will fail and your review will be discarded. Non-negotiable.
-
-            # TASK
-
-            You are an adversarial Phase 3 reviewer (MEMORY.md §II — VSDD).
-            The canonical VSDD doc and the PR diff under review are
-            EMBEDDED below in the same message — do not look for files; if
-            you cite something, cite from the embedded content. Apply
-            these review rules:
-              - Code that diverges from the spec it's supposed to satisfy
-              - Tautological tests
-              - Hidden coupling, race conditions, missing cleanup
-              - Multi-word symbols that should be `Subject.verb` (§IX)
-              - Inconsistent error handling
-              - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
-
-            # OUTPUT FORMAT (strict)
-
-            Begin your written output with YAML frontmatter, exactly:
-
-            ---
-            verdict: pass | fail
-            ---
-
-            The verdict answers "should this PR be approved?", not "are
-            there zero concerns?". A `pass` with listed nitpicks is
-            correct — concerns can exist without blocking.
-
-            - `verdict: pass` ⇔ concerns are nits/style/nice-to-have.
-              Translates to APPROVE.
-            - `verdict: fail` ⇔ at least one concern is genuinely blocking
-              (correctness, security, broken contract, spec violation).
-              Translates to REQUEST_CHANGES.
-
-            The frontmatter MUST be the first thing in the file (no
-            leading whitespace, no preamble).
-
-            After the closing `---`, list every concern (blocking and
-            nitpicks alike) as terse bullets. Each bullet: a concrete
-            flaw with `file:line` (cite from the embedded diff) and a
-            proposed fix. Mark blocking concerns explicitly with
-            **(blocking)** at the start of the bullet.
-
-            If you genuinely have nothing to say, the body may be a
-            single line.
-
-            Critical: if you find yourself citing a file or symbol that
-            isn't actually present in the embedded diff, STOP — that is
-            a hallucination. Only cite what's in the embedded content.
+            ${{ env.PHASE_3_PROMPT }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v9
