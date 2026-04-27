@@ -45,6 +45,11 @@ jobs:
             - Properties claimed as "testable only" that should be provable
             - Purity-boundary violations
             - Verification-tool mismatches
+            - Spec discipline violations (§VII): if this is a tech-spec
+              issue, does it cover exactly one technical problem? Bundled
+              tech specs (multiple problems in one issue body) violate
+              the discrete-tech-spec rule. Goal specs may carry many
+              goals — that's fine, do not flag.
 
           Output rules:
             - Be terse. Bullet points only. No preamble.
