@@ -64,11 +64,11 @@ runs:
         ISSUE_NUMBER: ${{ inputs.issue-number }}
       run: |
         set -euo pipefail
-        gh issue view "$ISSUE_NUMBER" --json title,body,number,url > tech.json
-        jq -r '.title' tech.json > tech-title.txt
-        jq -r '.body'  tech.json > tech-body.txt
-        jq -r '.url'   tech.json > tech-url.txt
-        echo "tech-spec: $(cat tech-title.txt)"
+        gh issue view "$ISSUE_NUMBER" --json title,body,number,url > ${RUNNER_TEMP}/tech.json
+        jq -r '.title' ${RUNNER_TEMP}/tech.json > ${RUNNER_TEMP}/tech-title.txt
+        jq -r '.body'  ${RUNNER_TEMP}/tech.json > ${RUNNER_TEMP}/tech-body.txt
+        jq -r '.url'   ${RUNNER_TEMP}/tech.json > ${RUNNER_TEMP}/tech-url.txt
+        echo "tech-spec: $(cat ${RUNNER_TEMP}/tech-title.txt)"
 
     - name: Detect test runner
       id: runner
@@ -151,7 +151,7 @@ runs:
           echo "pr-number=$EXISTING_PR" >> "$GITHUB_OUTPUT"
           echo "Reusing existing PR #$EXISTING_PR for branch $BRANCH"
         else
-          TITLE=$(cat tech-title.txt)
+          TITLE=$(cat ${RUNNER_TEMP}/tech-title.txt)
           BODY_FILE=$(mktemp)
           {
             echo "Closes #$ISSUE_NUMBER"
@@ -163,7 +163,7 @@ runs:
             echo ""
             echo "## Embedded tech-spec"
             echo ""
-            cat tech-body.txt
+            cat ${RUNNER_TEMP}/tech-body.txt
           } > "$BODY_FILE"
           PR_URL=$(gh pr create --draft --base "$BASE_BRANCH" --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE")
           PR_NUMBER=$(basename "$PR_URL")
@@ -201,15 +201,15 @@ runs:
           claude --print --model "$primary" \
             --allowed-tools "Bash Edit Write Read Glob Grep" \
             --permission-mode bypassPermissions \
-            < "$input" > "$output" 2>claude-err.log
+            < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
           local rc=$?
           if [ $rc -ne 0 ]; then
             echo "::warning::Phase agent: primary $primary exited $rc; falling back to $fallback"
-            tail -50 claude-err.log
+            tail -50 ${RUNNER_TEMP}/claude-err.log
             claude --print --model "$fallback" \
               --allowed-tools "Bash Edit Write Read Glob Grep" \
               --permission-mode bypassPermissions \
-              < "$input" > "$output" 2>claude-err.log
+              < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
             rc=$?
           fi
           set -e
@@ -281,16 +281,16 @@ runs:
             printf -- '--- MEMORY.md ---\n'
             cat MEMORY.md
             printf '\n--- TECH-SPEC ISSUE TITLE ---\n'
-            cat tech-title.txt
+            cat ${RUNNER_TEMP}/tech-title.txt
             printf '\n--- TECH-SPEC ISSUE BODY ---\n'
-            cat tech-body.txt
+            cat ${RUNNER_TEMP}/tech-body.txt
           } > "$PHASE2_INPUT"
 
           PHASE2_OUTPUT=$(mktemp)
           if ! invoke_claude "$PHASE2_INPUT" "$PHASE2_OUTPUT"; then
             last_failure="Phase 2 agent (attempt $attempt) exited non-zero on both primary and fallback models."
             echo "::warning::$last_failure"
-            tail -50 claude-err.log || true
+            tail -50 ${RUNNER_TEMP}/claude-err.log || true
             continue
           fi
 
@@ -426,15 +426,15 @@ runs:
           claude --print --model "$primary" \
             --allowed-tools "Bash Edit Write Read Glob Grep" \
             --permission-mode bypassPermissions \
-            < "$input" > "$output" 2>claude-err.log
+            < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
           local rc=$?
           if [ $rc -ne 0 ]; then
             echo "::warning::Phase agent: primary $primary exited $rc; falling back to $fallback"
-            tail -50 claude-err.log
+            tail -50 ${RUNNER_TEMP}/claude-err.log
             claude --print --model "$fallback" \
               --allowed-tools "Bash Edit Write Read Glob Grep" \
               --permission-mode bypassPermissions \
-              < "$input" > "$output" 2>claude-err.log
+              < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
             rc=$?
           fi
           set -e
@@ -513,9 +513,9 @@ runs:
             printf -- '--- MEMORY.md ---\n'
             cat MEMORY.md
             printf '\n--- TECH-SPEC ISSUE TITLE ---\n'
-            cat tech-title.txt
+            cat ${RUNNER_TEMP}/tech-title.txt
             printf '\n--- TECH-SPEC ISSUE BODY ---\n'
-            cat tech-body.txt
+            cat ${RUNNER_TEMP}/tech-body.txt
             if [ "$NO_RUNNER" != "true" ]; then
               printf '\n--- TEST RUN COMMANDS ---\n'
               printf 'New tests command (must end up exit 0): %s\n' "$NEW_CMD"
@@ -527,7 +527,7 @@ runs:
           if ! invoke_claude "$PHASE4_INPUT" "$PHASE4_OUTPUT"; then
             last_failure="Phase 4 agent (attempt $attempt) exited non-zero on both primary and fallback models."
             echo "::warning::$last_failure"
-            tail -50 claude-err.log || true
+            tail -50 ${RUNNER_TEMP}/claude-err.log || true
             git checkout -- . && git clean -fd
             continue
           fi
