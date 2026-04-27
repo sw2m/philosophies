@@ -1,10 +1,10 @@
 name: "Claude agent"
 description: |
-  Invokes Anthropic's Messages API with a prompt; writes Claude's response
-  text to `output-file` so the caller reads it directly. Centralizes every
-  Claude invocation in this repo so 'where do agents touch the CI?' is a
-  single grep. Uses curl directly rather than anthropics/claude-code-action
-  to avoid bun runtime issues that have been intermittent in agent mode.
+  Invokes the Claude Code CLI (`@anthropic-ai/claude-code`) with a stdin
+  file (and optional inline prompt prepended), leaves stdout in an output
+  file the caller reads directly. Mirrors the gemini composite action's
+  shape so 'where do agents touch the CI?' is a single grep AND so both
+  agents have the same invocation contract.
 
 inputs:
   org:
@@ -12,32 +12,28 @@ inputs:
     required: false
     default: "sw2m"
   prompt:
-    description: "Prompt for Claude. Multi-line OK. Concatenated with stdin-file content (if provided) before sending."
+    description: "Optional inline prompt prepended to stdin-file before piping to claude."
     required: false
     default: ""
   stdin-file:
-    description: "Path to a file whose content is appended to the prompt before sending. Required because Claude has no filesystem access via the Messages API — any 'read this file' instruction must instead embed the file's content here."
+    description: "Path to a file whose contents are appended to `prompt` and piped as stdin to claude. Preferred over `prompt` for content larger than a few KB."
     required: false
     default: ""
+  model:
+    description: "Claude model id."
+    required: false
+    default: "claude-opus-4-5"
   api-key:
     description: "ANTHROPIC_API_KEY value (caller passes via secret)."
     required: true
-  model:
-    description: "Anthropic model id."
-    required: false
-    default: "claude-opus-4-5"
-  max-tokens:
-    description: "Max tokens for the response."
-    required: false
-    default: "8192"
   output-file:
-    description: "File path Claude's response text is written to. Caller reads from this path."
+    description: "Where claude's stdout is written. Caller reads from this path after the action runs."
     required: false
     default: "claude-output.txt"
 
 outputs:
   output-file:
-    description: "Path to the file Claude wrote (echoes back the input)."
+    description: "Path to the file containing claude stdout (echoes back the input)."
     value: ${{ inputs.output-file }}
 
 runs:
@@ -65,107 +61,59 @@ runs:
         fi
         echo "✓ $ACTOR is a $ORG org member (public)."
 
-    - name: Build full prompt (prompt + stdin-file content)
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Install Claude Code CLI
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code@latest
+
+    - name: Invoke claude (--print, no tools)
       shell: bash
       env:
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
         PROMPT: ${{ inputs.prompt }}
         STDIN_FILE: ${{ inputs.stdin-file }}
+        MODEL: ${{ inputs.model }}
+        OUTPUT: ${{ inputs.output-file }}
       run: |
         set -euo pipefail
-        : > combined-prompt.txt
+        : > combined-input.txt
         if [ -n "$PROMPT" ]; then
-          printf '%s\n\n' "$PROMPT" >> combined-prompt.txt
+          printf '%s\n\n' "$PROMPT" >> combined-input.txt
         fi
         if [ -n "$STDIN_FILE" ]; then
           if [ ! -f "$STDIN_FILE" ]; then
             echo "::error::stdin-file '$STDIN_FILE' does not exist."
             exit 1
           fi
-          cat "$STDIN_FILE" >> combined-prompt.txt
+          cat "$STDIN_FILE" >> combined-input.txt
         fi
-        if [ ! -s combined-prompt.txt ]; then
-          echo "::error::No content to send to Claude (both prompt and stdin-file were empty)."
+        if [ ! -s combined-input.txt ]; then
+          echo "::error::No content to send to claude (both prompt and stdin-file were empty)."
           exit 1
         fi
-        echo "prompt bytes: $(wc -c < combined-prompt.txt)"
+        echo "input bytes: $(wc -c < combined-input.txt)"
 
-    - name: Call Anthropic Messages API
-      shell: bash
-      env:
-        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
-        MODEL: ${{ inputs.model }}
-        MAX_TOKENS: ${{ inputs.max-tokens }}
-        OUTPUT: ${{ inputs.output-file }}
-      run: |
-        set -euo pipefail
-        # Build the JSON request safely with python so the prompt content
-        # (including the embedded file body) round-trips correctly through
-        # JSON encoding even with quotes / newlines / backslashes.
-        python3 - <<'PY' > request.json
-        import json, os
-        prompt = open('combined-prompt.txt').read()
-        body = {
-            "model": os.environ["MODEL"],
-            "max_tokens": int(os.environ["MAX_TOKENS"]),
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-        }
-        print(json.dumps(body))
-        PY
-
-        echo "request bytes: $(wc -c < request.json)"
-
-        # Call the API. Capture the body and the HTTP status separately.
-        http_code=$(curl -sS \
-          -o response.json -w "%{http_code}" \
-          -H "x-api-key: $ANTHROPIC_API_KEY" \
-          -H "anthropic-version: 2023-06-01" \
-          -H "content-type: application/json" \
-          -X POST \
-          --data @request.json \
-          https://api.anthropic.com/v1/messages)
-
-        echo "HTTP $http_code"
-
-        if [ "$http_code" != "200" ]; then
-          echo "::error::Anthropic Messages API returned HTTP $http_code."
-          echo "--- response body ---"
-          cat response.json
-          exit 1
-        fi
-
-        # Extract the text from response.content[0].text. The API returns a
-        # list of content blocks; for a plain prompt we expect exactly one
-        # text block.
-        python3 - <<'PY'
-        import json, sys
-        r = json.load(open('response.json'))
-        blocks = r.get('content', [])
-        if not blocks:
-            print('ERROR: response had no content blocks', file=sys.stderr)
-            json.dump(r, sys.stderr, indent=2)
-            sys.exit(1)
-        # Concatenate text from every text-typed block.
-        text = "".join(b.get('text', '') for b in blocks if b.get('type') == 'text')
-        if not text.strip():
-            print('ERROR: response had no text content', file=sys.stderr)
-            json.dump(r, sys.stderr, indent=2)
-            sys.exit(1)
-        with open(__import__('os').environ['OUTPUT'], 'w') as f:
-            f.write(text)
-        print(f"wrote {len(text)} chars to {__import__('os').environ['OUTPUT']}")
-        print("first 500 chars:")
-        print(text[:500])
-        PY
+        # `--print` = non-interactive single-turn; pipe stdin as the prompt.
+        # We deliberately do NOT enable tools — this is pure inference. The
+        # CLI's default permission gate would prompt for tool use anyway
+        # in a non-TTY context, but being explicit here is cheap insurance.
+        claude --print --model "$MODEL" --permission-mode plan < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
+        echo "stdout (first 500 chars):"
+        head -c 500 "$OUTPUT"
+        echo ""
+        echo "stderr (last 20 lines):"
+        tail -20 claude-stderr.log || true
 
     - name: Verify output produced
       shell: bash
       env:
         OUTPUT: ${{ inputs.output-file }}
       run: |
-        if [ ! -f "$OUTPUT" ]; then
-          echo "::error::$OUTPUT was not produced."
+        if [ ! -s "$OUTPUT" ]; then
+          echo "::error::$OUTPUT is empty or missing."
           exit 1
         fi
         echo "✓ $OUTPUT exists ($(wc -c < "$OUTPUT") bytes)"
