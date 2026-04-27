@@ -461,8 +461,31 @@ runs:
           echo "=== Phase 4 — Implement (attempt $attempt of $ATTEMPTS) ==="
 
           PHASE4_INPUT=$(mktemp)
-          {
-            cat <<'PROMPT_EOF'
+          if [ "$NO_RUNNER" = "true" ]; then
+            # Docs / no-runner repo: skip test-centric framing entirely.
+            # The agent has no Phase 2 tests to satisfy and will only
+            # confuse itself if told to "make the new tests pass" or
+            # "do not modify test files" when neither exists. (#49)
+            PHASE4_HEAD=$(cat <<'PROMPT_EOF'
+        # TASK
+
+        You are running Phase 4 of the VSDD tech-to-PR pipeline on a
+        repository with no test runner detected (§VIII is N/A here).
+        Your job:
+
+        1. Read the embedded tech-spec issue.
+        2. Implement the spec using your tools (Write, Edit, Bash, Read).
+        3. Be minimal — only the changes the spec actually requires.
+           Avoid scope creep, refactors, or speculative abstractions.
+
+        Inputs are EMBEDDED below. Do not look for files on disk you did
+        not check out.
+
+        ---
+        PROMPT_EOF
+            )
+          else
+            PHASE4_HEAD=$(cat <<'PROMPT_EOF'
         # TASK
 
         You are running Phase 4 of the VSDD tech-to-PR pipeline. The tests
@@ -483,6 +506,10 @@ runs:
 
         ---
         PROMPT_EOF
+            )
+          fi
+          {
+            printf '%s\n' "$PHASE4_HEAD"
             printf -- '--- MEMORY.md ---\n'
             cat MEMORY.md
             printf '\n--- TECH-SPEC ISSUE TITLE ---\n'
