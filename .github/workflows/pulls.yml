@@ -24,6 +24,54 @@ permissions:
   issues: write
   id-token: write
 
+# Single source of truth for the Phase 3 review prompt content. Both the
+# Gemini stdin builder (in `prep`) and the Claude `prompt:` input (in
+# `claude-review`) interpolate these via ${{ env.* }} so the review rules
+# and output-format spec live in exactly one place. Reviewer-specific
+# framing (gemini's stdin intro, claude's anti-hallucination guard) stays
+# inline at the call site.
+env:
+  PHASE_3_ROLE: |-
+    You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified Spec-Driven Development / VSDD).
+  PHASE_3_REVIEW_RULES: |-
+    - Code that diverges from the spec it's supposed to satisfy
+    - Tautological tests
+    - Hidden coupling, race conditions, missing cleanup
+    - Multi-word symbols that should be `Subject.verb` (§IX)
+    - Inconsistent error handling
+    - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+  PHASE_3_OUTPUT_FORMAT: |-
+    # OUTPUT FORMAT (strict)
+
+    Begin your response with YAML frontmatter, exactly this shape:
+
+    ---
+    verdict: pass | fail
+    ---
+
+    The verdict answers "should this PR be approved?", **not** "are
+    there zero concerns?". A `pass` with listed nitpicks is correct
+    and expected — concerns can exist without blocking.
+
+    - `verdict: pass` ⇔ concerns are nits/style/nice-to-have. The PR
+      is acceptable as-is; the human can address the nits or dismiss
+      them. Translates to APPROVE.
+    - `verdict: fail` ⇔ at least one concern is genuinely blocking
+      (correctness, security, broken contract, spec violation that
+      invalidates the change). Translates to REQUEST_CHANGES.
+
+    The frontmatter MUST be the first thing in your output (no leading
+    whitespace, no preamble).
+
+    After the closing `---`, list every concern (blocking and
+    nitpicks alike) as terse bullets. Each bullet: a concrete flaw
+    with `file:line` and a proposed fix. Mark blocking concerns
+    explicitly with **(blocking)** at the start of the bullet so the
+    human reading can scan for them.
+
+    If you genuinely have nothing to say, the body may be a single
+    line.
+
 jobs:
   prep:
     name: Compute PR diff
@@ -56,46 +104,12 @@ jobs:
       - name: Build prompts (gemini + claude)
         run: |
           cat > gemini-stdin.txt <<'PROMPT_EOF'
-          You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified
-          Spec-Driven Development). Review the PR diff below against the
-          standards in MEMORY.md (§I–§IX). Look ONLY for:
-            - Code that diverges from the spec it's supposed to satisfy
-            - Tautological tests
-            - Hidden coupling, race conditions, missing cleanup
-            - Multi-word symbols that should be Subject.verb (§IX)
-            - Inconsistent error handling
-            - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+          ${{ env.PHASE_3_ROLE }}
+          Review the PR diff below against the standards in MEMORY.md (§I–§IX). Look ONLY for:
 
-          # OUTPUT FORMAT (strict)
+          ${{ env.PHASE_3_REVIEW_RULES }}
 
-          Begin your response with YAML frontmatter, exactly this shape:
-
-          ---
-          verdict: pass | fail
-          ---
-
-          The verdict answers "should this PR be approved?", **not** "are
-          there zero concerns?". A `pass` with listed nitpicks is correct
-          and expected — concerns can exist without blocking.
-
-          - `verdict: pass` ⇔ concerns are nits/style/nice-to-have. The PR
-            is acceptable as-is; the human can address the nits or dismiss
-            them. Translates to APPROVE.
-          - `verdict: fail` ⇔ at least one concern is genuinely blocking
-            (correctness, security, broken contract, spec violation that
-            invalidates the change). Translates to REQUEST_CHANGES.
-
-          The frontmatter MUST be the first thing in your output (no leading
-          whitespace, no preamble).
-
-          After the closing `---`, list every concern (blocking and
-          nitpicks alike) as terse bullets. Each bullet: a concrete flaw
-          with `file:line` and a proposed fix. Mark blocking concerns
-          explicitly with **(blocking)** at the start of the bullet so the
-          human reading can scan for them.
-
-          If you genuinely have nothing to say, the body may be a single
-          line.
+          ${{ env.PHASE_3_OUTPUT_FORMAT }}
 
           --- MEMORY.md ---
           PROMPT_EOF
@@ -202,47 +216,15 @@ jobs:
 
             # TASK
 
-            You are an adversarial Phase 3 reviewer (MEMORY.md §II — VSDD).
+            ${{ env.PHASE_3_ROLE }}
             The canonical VSDD doc and the PR diff under review are
             EMBEDDED below in the same message — do not look for files; if
             you cite something, cite from the embedded content. Apply
             these review rules:
-              - Code that diverges from the spec it's supposed to satisfy
-              - Tautological tests
-              - Hidden coupling, race conditions, missing cleanup
-              - Multi-word symbols that should be `Subject.verb` (§IX)
-              - Inconsistent error handling
-              - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
 
-            # OUTPUT FORMAT (strict)
+            ${{ env.PHASE_3_REVIEW_RULES }}
 
-            Begin your written output with YAML frontmatter, exactly:
-
-            ---
-            verdict: pass | fail
-            ---
-
-            The verdict answers "should this PR be approved?", not "are
-            there zero concerns?". A `pass` with listed nitpicks is
-            correct — concerns can exist without blocking.
-
-            - `verdict: pass` ⇔ concerns are nits/style/nice-to-have.
-              Translates to APPROVE.
-            - `verdict: fail` ⇔ at least one concern is genuinely blocking
-              (correctness, security, broken contract, spec violation).
-              Translates to REQUEST_CHANGES.
-
-            The frontmatter MUST be the first thing in the file (no
-            leading whitespace, no preamble).
-
-            After the closing `---`, list every concern (blocking and
-            nitpicks alike) as terse bullets. Each bullet: a concrete
-            flaw with `file:line` (cite from the embedded diff) and a
-            proposed fix. Mark blocking concerns explicitly with
-            **(blocking)** at the start of the bullet.
-
-            If you genuinely have nothing to say, the body may be a
-            single line.
+            ${{ env.PHASE_3_OUTPUT_FORMAT }}
 
             Critical: if you find yourself citing a file or symbol that
             isn't actually present in the embedded diff, STOP — that is
