@@ -5,13 +5,16 @@
 # Color palette: green = positive/goal, blue = technical/scoped,
 # yellow = attention-needed, gray = provenance/meta.
 
+# GitHub label descriptions are capped at 100 characters by the API
+# (HTTP 422 otherwise). Keep each `description:` line ≤100 chars.
+
 - name: "spec:goal"
   color: "0e8a16"  # green
-  description: "Goal-spec issue. Carries breadth (many goals), no implementation detail. Assignment to an org member triggers goal→tech promotion."
+  description: "Goal-spec issue. Many goals OK; no implementation detail. Assigning triggers goal→tech promotion."
 
 - name: "spec:tech"
   color: "1d76db"  # blue
-  description: "Tech-spec issue. Covers exactly one technical problem. Assignment to an org member triggers tech→PR promotion (5-phase pipeline)."
+  description: "Tech-spec issue. One technical problem. Assigning triggers tech→PR 5-phase promotion pipeline."
 
 - name: "needs-human"
   color: "fbca04"  # yellow
