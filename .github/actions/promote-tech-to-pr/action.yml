@@ -336,6 +336,16 @@ runs:
               git commit -m "test(promote): Phase 2 — author tests for #$ISSUE_NUMBER"
               git push origin "$BRANCH"
             fi
+            # Write the red-gate-cleared marker as a commit status on the
+            # current HEAD. This is the handoff signal per §VIII: downstream
+            # jobs can verify that non-test commits descend from this SHA.
+            CLEARED_SHA=$(git rev-parse HEAD)
+            gh api "repos/${GITHUB_REPOSITORY}/statuses/${CLEARED_SHA}" \
+              -f state=success \
+              -f context=vsdd/red-gate-cleared \
+              -f description="Red gate passed — tests fail, regressions pass" \
+              >/dev/null
+            echo "Red-gate-cleared marker written for $CLEARED_SHA"
             break
           fi
 
