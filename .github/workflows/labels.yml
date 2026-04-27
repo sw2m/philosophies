@@ -52,6 +52,18 @@ jobs:
           if not isinstance(labels, list):
               print('::error::.github/labels.yml must be a list of {name,color,description}', file=sys.stderr)
               sys.exit(1)
+          # GitHub caps label descriptions at 100 chars (HTTP 422 otherwise).
+          # Fail FAST with a clear error before we make N API calls; the
+          # whole reason this gate exists is that prior runs lost two
+          # labels silently to this exact validation error.
+          oversize = [(e['name'], len(e.get('description', ''))) for e in labels
+                      if len(e.get('description', '')) > 100]
+          if oversize:
+              print('::error::Label description(s) exceed the GitHub 100-char limit:', file=sys.stderr)
+              for name, n in oversize:
+                  print(f'  {name}: {n} chars (max 100)', file=sys.stderr)
+              sys.exit(1)
+          failed = []
           for entry in labels:
               name = entry['name']
               color = entry.get('color', 'cccccc').lstrip('#')
@@ -63,4 +75,8 @@ jobs:
               if r.returncode != 0:
                   print(f'    stdout: {r.stdout}')
                   print(f'    stderr: {r.stderr}')
+                  failed.append(name)
+          if failed:
+              print(f'::error::Label sync failed for: {", ".join(failed)}', file=sys.stderr)
+              sys.exit(1)
           PY
