@@ -1,9 +1,10 @@
 name: "Claude agent"
 description: |
-  Invokes anthropics/claude-code-action with a prompt; instructs Claude to
-  write its result to a file the caller reads directly. Centralizes every
+  Invokes Anthropic's Messages API with a prompt; writes Claude's response
+  text to `output-file` so the caller reads it directly. Centralizes every
   Claude invocation in this repo so 'where do agents touch the CI?' is a
-  single grep.
+  single grep. Uses curl directly rather than anthropics/claude-code-action
+  to avoid bun runtime issues that have been intermittent in agent mode.
 
 inputs:
   org:
@@ -11,13 +12,21 @@ inputs:
     required: false
     default: "sw2m"
   prompt:
-    description: "Prompt for Claude. Multi-line OK. The action automatically appends a 'write to <output-file>' instruction."
+    description: "Prompt for Claude. Multi-line OK."
     required: true
   api-key:
     description: "ANTHROPIC_API_KEY value (caller passes via secret)."
     required: true
+  model:
+    description: "Anthropic model id."
+    required: false
+    default: "claude-opus-4-5"
+  max-tokens:
+    description: "Max tokens for the response."
+    required: false
+    default: "8192"
   output-file:
-    description: "File Claude is asked to write its result to. Caller reads from this path."
+    description: "File path Claude's response text is written to. Caller reads from this path."
     required: false
     default: "claude-output.txt"
 
@@ -38,35 +47,87 @@ runs:
       run: |
         # Hard gate: agents must not be invocable by non-org-members.
         # NOTE: the default GITHUB_TOKEN can only see PUBLIC org memberships.
-        # Members whose membership is private are invisible to this check
-        # and will trigger a hard fail. Make membership public on the org
-        # page (Settings → People → "Make public") to be recognized.
         if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
           echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
           echo ""
           echo "If you ARE a member but private: visit"
           echo "https://github.com/orgs/$ORG/people and click 'Make public'"
-          echo "next to your row. The default workflow GITHUB_TOKEN cannot"
-          echo "see private memberships."
+          echo "next to your row."
           echo ""
           echo "If you are not a member: agent invocations (Claude) are"
-          echo "restricted to org members. An org member must open the PR"
-          echo "on your behalf."
+          echo "restricted to org members."
           exit 1
         fi
         echo "✓ $ACTOR is a $ORG org member (public)."
 
-    - name: Invoke Claude
-      uses: anthropics/claude-code-action@v1
-      with:
-        anthropic_api_key: ${{ inputs.api-key }}
-        # Default mode is `tag` (only runs on @claude mentions). We want
-        # autonomous one-shot execution per the prompt input.
-        mode: agent
-        prompt: |
-          ${{ inputs.prompt }}
+    - name: Call Anthropic Messages API
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+        PROMPT: ${{ inputs.prompt }}
+        MODEL: ${{ inputs.model }}
+        MAX_TOKENS: ${{ inputs.max-tokens }}
+        OUTPUT: ${{ inputs.output-file }}
+      run: |
+        set -euo pipefail
+        # Build the JSON request safely with python so prompt content with
+        # quotes / newlines / backslashes round-trips correctly.
+        python3 - <<'PY' > request.json
+        import json, os
+        body = {
+            "model": os.environ["MODEL"],
+            "max_tokens": int(os.environ["MAX_TOKENS"]),
+            "messages": [
+                {"role": "user", "content": os.environ["PROMPT"]}
+            ],
+        }
+        print(json.dumps(body))
+        PY
 
-          Write your final result to a file named `${{ inputs.output-file }}` in the working directory. Do NOT commit, push, or open PRs — the calling workflow reads the file directly.
+        echo "request bytes: $(wc -c < request.json)"
+
+        # Call the API. Capture the body and the HTTP status separately.
+        http_code=$(curl -sS \
+          -o response.json -w "%{http_code}" \
+          -H "x-api-key: $ANTHROPIC_API_KEY" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "content-type: application/json" \
+          -X POST \
+          --data @request.json \
+          https://api.anthropic.com/v1/messages)
+
+        echo "HTTP $http_code"
+
+        if [ "$http_code" != "200" ]; then
+          echo "::error::Anthropic Messages API returned HTTP $http_code."
+          echo "--- response body ---"
+          cat response.json
+          exit 1
+        fi
+
+        # Extract the text from response.content[0].text. The API returns a
+        # list of content blocks; for a plain prompt we expect exactly one
+        # text block.
+        python3 - <<'PY'
+        import json, sys
+        r = json.load(open('response.json'))
+        blocks = r.get('content', [])
+        if not blocks:
+            print('ERROR: response had no content blocks', file=sys.stderr)
+            json.dump(r, sys.stderr, indent=2)
+            sys.exit(1)
+        # Concatenate text from every text-typed block.
+        text = "".join(b.get('text', '') for b in blocks if b.get('type') == 'text')
+        if not text.strip():
+            print('ERROR: response had no text content', file=sys.stderr)
+            json.dump(r, sys.stderr, indent=2)
+            sys.exit(1)
+        with open(__import__('os').environ['OUTPUT'], 'w') as f:
+            f.write(text)
+        print(f"wrote {len(text)} chars to {__import__('os').environ['OUTPUT']}")
+        print("first 500 chars:")
+        print(text[:500])
+        PY
 
     - name: Verify output produced
       shell: bash
@@ -74,10 +135,7 @@ runs:
         OUTPUT: ${{ inputs.output-file }}
       run: |
         if [ ! -f "$OUTPUT" ]; then
-          echo "::error::Claude did not produce $OUTPUT."
-          ls -la
+          echo "::error::$OUTPUT was not produced."
           exit 1
         fi
-        echo "claude output (first 500 chars):"
-        head -c 500 "$OUTPUT"
-        echo ""
+        echo "✓ $OUTPUT exists ($(wc -c < "$OUTPUT") bytes)"
