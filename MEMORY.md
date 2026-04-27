@@ -235,9 +235,11 @@ For rapid prototyping or throwaway scripts, use the parts that make sense — TD
 
 The reason VSDD splits specs from implementation is so each unit of work can be **discrete and focused on one technical problem**. That discipline only holds if the spec itself respects a second split: **goal specs** vs **tech specs**.
 
-- **Goal spec.** Captures *what must be true when this work is done.* Carries breadth — many goals in one document is fine. The point of a goal spec is to enumerate the surface area, not to design a solution. Examples: a feature checklist drawn from an external standard, a coverage matrix, a list of acceptance conditions. A goal spec with 300 line items is not a smell — it's working as intended.
+- **Goal spec.** Captures *what must be true when this work is done.* Carries **breadth** — many goals in one document is fine; a goal spec with 300 line items is not a smell. The point is to enumerate the surface area, not to design a solution. **Goal specs must NOT include technical content** (implementation details, API shapes, code, algorithms): the *how* belongs in tech specs. If you find yourself writing pseudocode or describing a solution inside a goal spec, stop — that material is a tech spec being written in the wrong place. Examples of valid goal-spec content: feature checklist drawn from an external standard, coverage matrix, acceptance criteria, observed behavior of a reference implementation.
 
-- **Tech spec.** Captures *how exactly one technical problem will be solved.* One problem per tech spec. No grouping, no bundling, no section-level "tech spec" that covers a dozen goals. The point of a tech spec is depth and focus on a single problem.
+- **Tech spec.** Captures *how exactly one technical problem will be solved.* Carries **depth** — one problem per tech spec. No grouping, no bundling, no section-level "tech spec" that covers a dozen goals. The point is focus on a single problem so design choices can be reviewed in isolation.
+
+The two rules are symmetric. Goal specs may have many entries but no technicals; tech specs may have many technicals but only for one problem. Mixing the two — a goal spec with embedded design, or a tech spec covering several problems — defeats the purpose of separating them in the first place.
 
 When a goal spec contains N goals, that becomes **N tech specs** — one per goal — not fewer-by-grouping. The instinct to "save clutter" by combining tech specs defeats the entire reason to separate them from goal specs in the first place.
 
