@@ -836,10 +836,37 @@ jobs:
               lines.push(``);
             }
             lines.push(`---`, `_Automated meta-review per MEMORY.md §I (Adversary). Two cognitive sources required to reach consensus._`);
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event,
-              body: lines.join('\n'),
-            });
+            // GitHub rejects `pulls.createReview` with HTTP 422 "Review
+            // Can not approve your own pull request" when the review
+            // actor matches the PR author. `promote-tech-to-pr`'s
+            // artifact PRs are bot-authored, and the consensus step
+            // runs under that same bot, so the API call would always
+            // fail on those PRs and fail the required status check
+            // (#66). Downgrade to `issues.createComment` in that case —
+            // same content, no verdict, no API rejection.
+            //
+            // Hardcoded against `'github-actions[bot]'` because the
+            // dynamic alternative `github.rest.users.getAuthenticated()`
+            // returns HTTP 403 "Resource not accessible by integration"
+            // when the workflow runs under the default GITHUB_TOKEN.
+            // Spec annotation: this assumes all reviewer-submission
+            // steps run under the default GITHUB_TOKEN. If the workflow
+            // is ever switched to a PAT or a custom GitHub App, this
+            // heuristic must be updated at the same change.
+            const author = context.payload.pull_request?.user?.login;
+            if (author === 'github-actions[bot]') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `_(${event} would be rejected: PR is authored by the same identity as the review actor, posting as comment)_\n\n` + lines.join('\n'),
+              });
+            } else {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event,
+                body: lines.join('\n'),
+              });
+            }
