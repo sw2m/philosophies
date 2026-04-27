@@ -1,0 +1,143 @@
+name: "Claude agent"
+description: |
+  Invokes the Claude Code CLI (`@anthropic-ai/claude-code`) with a stdin
+  file (and optional inline prompt prepended), leaves stdout in an output
+  file the caller reads directly. Mirrors the gemini composite action's
+  shape so 'where do agents touch the CI?' is a single grep AND so both
+  agents have the same invocation contract.
+
+inputs:
+  org:
+    description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
+    required: false
+    default: "sw2m"
+  prompt:
+    description: "Optional inline prompt prepended to stdin-file before piping to claude."
+    required: false
+    default: ""
+  stdin-file:
+    description: "Path to a file whose contents are appended to `prompt` and piped as stdin to claude. Preferred over `prompt` for content larger than a few KB."
+    required: false
+    default: ""
+  model:
+    description: "Primary Claude model id."
+    required: false
+    default: "claude-opus-4-5"
+  fallback-model:
+    description: "Model to retry with if primary errors (capacity, transient API failure, etc.)."
+    required: false
+    default: "claude-sonnet-4-5"
+  api-key:
+    description: "ANTHROPIC_API_KEY value (caller passes via secret)."
+    required: true
+  output-file:
+    description: "Where claude's stdout is written. Caller reads from this path after the action runs."
+    required: false
+    default: "claude-output.txt"
+
+outputs:
+  output-file:
+    description: "Path to the file containing claude stdout (echoes back the input)."
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify org membership
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.event.sender.login || github.actor }}
+        ORG: ${{ inputs.org }}
+      run: |
+        # Hard gate: agents must not be invocable by non-org-members.
+        # NOTE: the default GITHUB_TOKEN can only see PUBLIC org memberships.
+        if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
+          echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
+          echo ""
+          echo "If you ARE a member but private: visit"
+          echo "https://github.com/orgs/$ORG/people and click 'Make public'"
+          echo "next to your row."
+          echo ""
+          echo "If you are not a member: agent invocations (Claude) are"
+          echo "restricted to org members."
+          exit 1
+        fi
+        echo "✓ $ACTOR is a $ORG org member (public)."
+
+    - uses: actions/setup-node@v6
+      with:
+        node-version: "20"
+
+    - name: Install Claude Code CLI
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code@latest
+
+    - name: Invoke claude (--print, no tools, with fallback)
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
+        PROMPT: ${{ inputs.prompt }}
+        STDIN_FILE: ${{ inputs.stdin-file }}
+        MODEL: ${{ inputs.model }}
+        FALLBACK: ${{ inputs.fallback-model }}
+        OUTPUT: ${{ inputs.output-file }}
+      run: |
+        set -euo pipefail
+        : > combined-input.txt
+        if [ -n "$PROMPT" ]; then
+          printf '%s\n\n' "$PROMPT" >> combined-input.txt
+        fi
+        if [ -n "$STDIN_FILE" ]; then
+          if [ ! -f "$STDIN_FILE" ]; then
+            echo "::error::stdin-file '$STDIN_FILE' does not exist."
+            exit 1
+          fi
+          cat "$STDIN_FILE" >> combined-input.txt
+        fi
+        if [ ! -s combined-input.txt ]; then
+          echo "::error::No content to send to claude (both prompt and stdin-file were empty)."
+          exit 1
+        fi
+        echo "input bytes: $(wc -c < combined-input.txt)"
+
+        # `--print` = non-interactive single-turn; pipe stdin as the prompt.
+        # `--allowed-tools ""` disables every tool. Pure inference; we want
+        # claude to produce text, not run tools. `--permission-mode plan`
+        # was rejected earlier — plan mode produces a "what I would do"
+        # summary instead of doing it.
+        set +e
+        claude --print --model "$MODEL" --allowed-tools "" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
+        rc=$?
+        if [ $rc -ne 0 ]; then
+          echo "::warning::Primary model '$MODEL' exited $rc; falling back to '$FALLBACK'."
+          echo "--- primary stderr ---"
+          cat claude-stderr.log
+          claude --print --model "$FALLBACK" --allowed-tools "" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::error::Fallback model '$FALLBACK' also exited $rc."
+            echo "--- fallback stderr ---"
+            cat claude-stderr.log
+            echo "--- fallback stdout ---"
+            cat "$OUTPUT"
+            exit $rc
+          fi
+        fi
+        set -e
+        echo "stdout (first 500 chars):"
+        head -c 500 "$OUTPUT"
+        echo ""
+        echo "stderr (last 20 lines):"
+        tail -20 claude-stderr.log || true
+
+    - name: Verify output produced
+      shell: bash
+      env:
+        OUTPUT: ${{ inputs.output-file }}
+      run: |
+        if [ ! -s "$OUTPUT" ]; then
+          echo "::error::$OUTPUT is empty or missing."
+          exit 1
+        fi
+        echo "✓ $OUTPUT exists ($(wc -c < "$OUTPUT") bytes)"

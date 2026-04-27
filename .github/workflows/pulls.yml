@@ -1,0 +1,272 @@
+name: VSDD Pull Request Review (Phase 3)
+
+# Advisory only — never gates the merge. Two adversarial reviewers run in
+# parallel for cognitive diversity (MEMORY.md §V): Gemini and Claude. Each
+# posts its findings as a PR comment. Org-membership is enforced inside the
+# composite actions.
+
+on:
+  pull_request:
+    # `ready_for_review` is added so jobs run when a draft is promoted to
+    # ready. Drafts themselves are skipped at job level via the
+    # `if: github.event.pull_request.draft != true` guard below.
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call:
+    secrets:
+      GEMINI_API_KEY:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  prep:
+    name: Compute PR diff
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Compute diff against base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch origin "$BASE_SHA" --depth=1 || true
+          git diff "$BASE_SHA"..."$HEAD_SHA" > pr.diff
+          wc -l pr.diff
+          # Truncate by LINES, not bytes — byte truncation can slice mid-line,
+          # mid-hunk, or mid-multibyte-character, producing malformed diffs
+          # that confuse model parsers.
+          if [ "$(wc -l < pr.diff)" -gt 5000 ]; then
+            head -n 5000 pr.diff > pr.diff.trunc
+            mv pr.diff.trunc pr.diff
+            echo "" >> pr.diff
+            echo "[diff truncated to 5000 lines]" >> pr.diff
+          fi
+
+      - name: Build prompts (gemini + claude)
+        run: |
+          cat > gemini-stdin.txt <<'PROMPT_EOF'
+          You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified
+          Spec-Driven Development). Review the PR diff below against the
+          standards in MEMORY.md (§I–§IX). Look ONLY for:
+            - Code that diverges from the spec it's supposed to satisfy
+            - Tautological tests
+            - Hidden coupling, race conditions, missing cleanup
+            - Multi-word symbols that should be Subject.verb (§IX)
+            - Inconsistent error handling
+            - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+
+          # OUTPUT FORMAT (strict)
+
+          Begin your response with YAML frontmatter, exactly this shape:
+
+          ---
+          verdict: pass | fail
+          ---
+
+          The verdict answers "should this PR be approved?", **not** "are
+          there zero concerns?". A `pass` with listed nitpicks is correct
+          and expected — concerns can exist without blocking.
+
+          - `verdict: pass` ⇔ concerns are nits/style/nice-to-have. The PR
+            is acceptable as-is; the human can address the nits or dismiss
+            them. Translates to APPROVE.
+          - `verdict: fail` ⇔ at least one concern is genuinely blocking
+            (correctness, security, broken contract, spec violation that
+            invalidates the change). Translates to REQUEST_CHANGES.
+
+          The frontmatter MUST be the first thing in your output (no leading
+          whitespace, no preamble).
+
+          After the closing `---`, list every concern (blocking and
+          nitpicks alike) as terse bullets. Each bullet: a concrete flaw
+          with `file:line` and a proposed fix. Mark blocking concerns
+          explicitly with **(blocking)** at the start of the bullet so the
+          human reading can scan for them.
+
+          If you genuinely have nothing to say, the body may be a single
+          line.
+
+          --- MEMORY.md ---
+          PROMPT_EOF
+          cat MEMORY.md >> gemini-stdin.txt
+          {
+            printf '\n--- PR DIFF ---\n'
+            cat pr.diff
+          } >> gemini-stdin.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pr-context
+          path: |
+            gemini-stdin.txt
+            pr.diff
+            MEMORY.md
+
+  gemini-review:
+    name: Gemini adversarial review
+    needs: [prep]
+    # Skip cleanly when GEMINI_API_KEY isn't available (e.g. fork PR without
+    # secret access). Without this guard the composite action would fail
+    # noisily, violating the 'advisory only — never gates' contract.
+    if: ${{ secrets.GEMINI_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: pr-context
+          path: ./
+
+      - name: Run Gemini (composite; org-member gate inside)
+        uses: ./.github/actions/gemini
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: gemini-stdin.txt
+          output-file: review.md
+
+      - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { extractVerdict } = require(path.resolve('.github/scripts/extract-verdict.js'));
+            const raw = fs.readFileSync('review.md', 'utf8');
+            const { verdict, body } = extractVerdict(raw);
+            if (verdict !== 'pass' && verdict !== 'fail') {
+              core.setFailed('Gemini output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
+            }
+            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
+            const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
+            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event,
+              body: header + body + footer,
+            });
+
+  claude-review:
+    name: Claude adversarial review
+    needs: [prep]
+    # Same guard as gemini-review — skip cleanly when ANTHROPIC_API_KEY isn't
+    # available rather than fail noisily.
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: pr-context
+          path: ./
+
+      - name: Run Claude (composite; org-member gate inside)
+        uses: ./.github/actions/claude
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          output-file: review.md
+          # Same stdin-file pattern as Gemini — Claude has no filesystem
+          # access via the Messages API, so we embed MEMORY.md + pr.diff
+          # directly in the prompt rather than asking Claude to "read" them.
+          stdin-file: gemini-stdin.txt
+          prompt: |
+            # CRITICAL OUTPUT FORMAT (read this FIRST)
+
+            Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
+
+            Acceptable response example:
+
+            ```
+            ---
+            verdict: fail
+            ---
+
+            - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
+            - path/to/other.ts:10 — Nitpick. Fix: …
+            ```
+
+            If you do not produce frontmatter as your first output, the workflow
+            will fail and your review will be discarded. Non-negotiable.
+
+            # TASK
+
+            You are an adversarial Phase 3 reviewer (MEMORY.md §II — VSDD).
+            The canonical VSDD doc and the PR diff under review are
+            EMBEDDED below in the same message — do not look for files; if
+            you cite something, cite from the embedded content. Apply
+            these review rules:
+              - Code that diverges from the spec it's supposed to satisfy
+              - Tautological tests
+              - Hidden coupling, race conditions, missing cleanup
+              - Multi-word symbols that should be `Subject.verb` (§IX)
+              - Inconsistent error handling
+              - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+
+            # OUTPUT FORMAT (strict)
+
+            Begin your written output with YAML frontmatter, exactly:
+
+            ---
+            verdict: pass | fail
+            ---
+
+            The verdict answers "should this PR be approved?", not "are
+            there zero concerns?". A `pass` with listed nitpicks is
+            correct — concerns can exist without blocking.
+
+            - `verdict: pass` ⇔ concerns are nits/style/nice-to-have.
+              Translates to APPROVE.
+            - `verdict: fail` ⇔ at least one concern is genuinely blocking
+              (correctness, security, broken contract, spec violation).
+              Translates to REQUEST_CHANGES.
+
+            The frontmatter MUST be the first thing in the file (no
+            leading whitespace, no preamble).
+
+            After the closing `---`, list every concern (blocking and
+            nitpicks alike) as terse bullets. Each bullet: a concrete
+            flaw with `file:line` (cite from the embedded diff) and a
+            proposed fix. Mark blocking concerns explicitly with
+            **(blocking)** at the start of the bullet.
+
+            If you genuinely have nothing to say, the body may be a
+            single line.
+
+            Critical: if you find yourself citing a file or symbol that
+            isn't actually present in the embedded diff, STOP — that is
+            a hallucination. Only cite what's in the embedded content.
+
+      - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { extractVerdict } = require(path.resolve('.github/scripts/extract-verdict.js'));
+            const raw = fs.readFileSync('review.md', 'utf8');
+            const { verdict, body } = extractVerdict(raw);
+            if (verdict !== 'pass' && verdict !== 'fail') {
+              core.setFailed('Claude output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
+            }
+            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
+            const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
+            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event,
+              body: header + body + footer,
+            });

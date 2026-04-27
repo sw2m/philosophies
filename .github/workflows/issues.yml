@@ -1,0 +1,93 @@
+name: VSDD Issue Review (Phase 1c)
+
+# Advisory adversarial review of new/edited issues by Gemini, per MEMORY.md
+# §II Phase 1c (Spec Review Gate). Posts a comment on the issue with findings.
+# Org membership is enforced inside the gemini composite action — non-members
+# trigger a hard fail of the agent step.
+
+on:
+  issues:
+    types: [opened, edited]
+  workflow_call:
+    secrets:
+      GEMINI_API_KEY:
+        required: true
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  vsdd-issue-review:
+    name: Gemini VSDD Phase 1c review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build prompt
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          mkdir -p /tmp/vsdd
+          cat > /tmp/vsdd/stdin.txt <<'PROMPT_EOF'
+          You are Sarcasmotron, the adversarial reviewer described in MEMORY.md
+          (Verified Spec-Driven Development). You are running Phase 1c (Spec
+          Review Gate) on a freshly-filed or freshly-edited GitHub issue.
+
+          Read MEMORY.md (provided below) for VSDD context, then review the
+          issue body below. Look ONLY for:
+            - Ambiguous wording that could be interpreted multiple ways
+            - Missing edge cases (null, empty, max size, negative, unicode,
+              concurrent, etc.)
+            - Implicit assumptions that are not stated
+            - Contradictions between different parts of the issue
+            - Properties claimed as "testable only" that should be provable
+            - Purity-boundary violations
+            - Verification-tool mismatches
+            - Spec discipline violations (§VII), both sides of the rule:
+              * Tech-spec issue: does it cover exactly ONE discrete
+                technical problem? Bundled tech specs (multiple
+                technical problems in one issue body) violate §VII.
+              * Goal-spec issue: does it stay focused on goals (WHAT
+                must be true) without leaking technical / implementation
+                content (HOW)? Goal specs may have many goals (that's
+                fine, do not flag breadth), but they must not include
+                solution design — that belongs in tech specs.
+
+          Output rules:
+            - Be terse. Bullet points only. No preamble.
+            - Each bullet: a concrete flaw with a specific quote/location and
+              a proposed fix or clarifying question.
+            - If genuinely no concerns: output exactly "No Phase 1c concerns identified."
+            - This review is advisory. Do not pretend it gates anything.
+
+          --- MEMORY.md ---
+          PROMPT_EOF
+          cat MEMORY.md >> /tmp/vsdd/stdin.txt
+          {
+            printf '\n--- ISSUE TITLE ---\n%s\n' "$ISSUE_TITLE"
+            printf '\n--- ISSUE BODY ---\n%s\n' "$ISSUE_BODY"
+          } >> /tmp/vsdd/stdin.txt
+
+      - name: Run Gemini (composite action; org-member gate enforced inside)
+        uses: ./.github/actions/gemini
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: /tmp/vsdd/stdin.txt
+          output-file: /tmp/vsdd/review.md
+
+      - name: Post review as issue comment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('/tmp/vsdd/review.md', 'utf8');
+            const header = `**VSDD Phase 1c — Adversarial Spec Review** _(advisory)_\n\n`;
+            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 1c. Does not gate anything._`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: header + body + footer,
+            });
