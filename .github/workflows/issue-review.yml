@@ -29,6 +29,8 @@ jobs:
     outputs:
       owned: ${{ steps.check.outputs.owned }}
       owner: ${{ steps.check.outputs.owner }}
+      has-gemini-key: ${{ steps.keys.outputs.has-gemini-key }}
+      has-anthropic-key: ${{ steps.keys.outputs.has-anthropic-key }}
     steps:
       - id: check
         env:
@@ -64,6 +66,18 @@ jobs:
             echo "owner="      >> "$GITHUB_OUTPUT"
             echo "::notice::Issue not owned: author '$AUTHOR' is not an sw2m org member and no assignee is. Phase 1c review skipped. To enable, an org member must self-assign."
           fi
+      - id: keys
+        # `secrets` is allowed in step env but NOT in job-level `if:`. Surface
+        # presence as a job output so reviewer jobs can gate via `needs.*`.
+        # (See pr-review.yml for the registration-failure history that
+        # forced this restructuring.)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        shell: bash
+        run: |
+          [ -n "${GEMINI_API_KEY:-}" ]    && echo "has-gemini-key=true"    >> "$GITHUB_OUTPUT" || echo "has-gemini-key=false"    >> "$GITHUB_OUTPUT"
+          [ -n "${ANTHROPIC_API_KEY:-}" ] && echo "has-anthropic-key=true" >> "$GITHUB_OUTPUT" || echo "has-anthropic-key=false" >> "$GITHUB_OUTPUT"
 
   prep:
     name: Build Phase 1c prompt
@@ -130,7 +144,7 @@ jobs:
     needs: [ownership, prep]
     # Skip cleanly when GEMINI_API_KEY isn't available rather than fail
     # noisily — the workflow is advisory and must not gate anything.
-    if: ${{ needs.ownership.outputs.owned == 'true' && secrets.GEMINI_API_KEY != '' }}
+    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.has-gemini-key == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -167,7 +181,7 @@ jobs:
     needs: [ownership, prep]
     # Same guard as gemini-review — skip cleanly when ANTHROPIC_API_KEY isn't
     # available rather than fail noisily.
-    if: ${{ needs.ownership.outputs.owned == 'true' && secrets.ANTHROPIC_API_KEY != '' }}
+    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.has-anthropic-key == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
