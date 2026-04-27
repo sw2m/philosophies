@@ -1,9 +1,10 @@
 name: VSDD Issue Review (Phase 1c)
 
-# Advisory adversarial review of new/edited issues by Gemini, per MEMORY.md
-# §II Phase 1c (Spec Review Gate). Posts a comment on the issue with findings.
-# Org membership is enforced inside the gemini composite action — non-members
-# trigger a hard fail of the agent step.
+# Advisory adversarial review of new/edited issues. Two adversarial reviewers
+# run in parallel for cognitive diversity (MEMORY.md §V): Gemini and Claude.
+# Each posts its findings as an issue comment. Org membership is enforced
+# inside the composite actions — non-members trigger a hard fail of the agent
+# step.
 
 on:
   issues:
@@ -13,7 +14,9 @@ on:
   workflow_call:
     secrets:
       GEMINI_API_KEY:
-        required: true
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
 
 permissions:
   issues: write
@@ -62,8 +65,8 @@ jobs:
             echo "::notice::Issue not owned: author '$AUTHOR' is not an sw2m org member and no assignee is. Phase 1c review skipped. To enable, an org member must self-assign."
           fi
 
-  vsdd-issue-review:
-    name: Gemini VSDD Phase 1c review
+  prep:
+    name: Build Phase 1c prompt
     needs: [ownership]
     if: ${{ needs.ownership.outputs.owned == 'true' }}
     runs-on: ubuntu-latest
@@ -75,8 +78,7 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          mkdir -p /tmp/vsdd
-          cat > /tmp/vsdd/stdin.txt <<'PROMPT_EOF'
+          cat > stdin.txt <<'PROMPT_EOF'
           You are Sarcasmotron, the adversarial reviewer described in MEMORY.md
           (Verified Spec-Driven Development). You are running Phase 1c (Spec
           Review Gate) on a freshly-filed or freshly-edited GitHub issue.
@@ -110,21 +112,39 @@ jobs:
 
           --- MEMORY.md ---
           PROMPT_EOF
-          cat MEMORY.md >> /tmp/vsdd/stdin.txt
+          cat MEMORY.md >> stdin.txt
           {
             printf '\n--- ISSUE TITLE ---\n%s\n' "$ISSUE_TITLE"
             printf '\n--- ISSUE BODY ---\n%s\n' "$ISSUE_BODY"
-          } >> /tmp/vsdd/stdin.txt
+          } >> stdin.txt
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: issue-context
+          path: |
+            stdin.txt
+            MEMORY.md
+
+  gemini-review:
+    name: Gemini VSDD Phase 1c review
+    needs: [ownership, prep]
+    # Skip cleanly when GEMINI_API_KEY isn't available rather than fail
+    # noisily — the workflow is advisory and must not gate anything.
+    if: ${{ needs.ownership.outputs.owned == 'true' && secrets.GEMINI_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: issue-context
+          path: ./
 
       - name: Run Gemini (composite action; org-member gate enforced inside)
         uses: ./.github/actions/gemini
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: /tmp/vsdd/stdin.txt
-          output-file: /tmp/vsdd/review.md
-          # Validate against the issue's owner (author or org-member assignee)
-          # rather than the trigger sender — an `edited` event from any user
-          # would otherwise gate on the editor, not the owner.
+          stdin-file: stdin.txt
+          output-file: review.md
           actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review as issue comment
@@ -132,8 +152,45 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('/tmp/vsdd/review.md', 'utf8');
-            const header = `**VSDD Phase 1c — Adversarial Spec Review** _(advisory)_\n\n`;
+            const body = fs.readFileSync('review.md', 'utf8');
+            const header = `**VSDD Phase 1c — Gemini** _(advisory)_\n\n`;
+            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 1c. Does not gate anything._`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: header + body + footer,
+            });
+
+  claude-review:
+    name: Claude VSDD Phase 1c review
+    needs: [ownership, prep]
+    # Same guard as gemini-review — skip cleanly when ANTHROPIC_API_KEY isn't
+    # available rather than fail noisily.
+    if: ${{ needs.ownership.outputs.owned == 'true' && secrets.ANTHROPIC_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: issue-context
+          path: ./
+
+      - name: Run Claude (composite action; org-member gate enforced inside)
+        uses: ./.github/actions/claude
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          stdin-file: stdin.txt
+          output-file: review.md
+          actor-override: ${{ needs.ownership.outputs.owner }}
+
+      - name: Post review as issue comment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('review.md', 'utf8');
+            const header = `**VSDD Phase 1c — Claude** _(advisory)_\n\n`;
             const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 1c. Does not gate anything._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
