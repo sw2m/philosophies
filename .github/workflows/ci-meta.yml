@@ -245,8 +245,31 @@ jobs:
     name: Consensus + open issues for gaps
     needs: [gemini-eval, claude-eval]
     runs-on: ubuntu-latest
-    if: always() && (needs.gemini-eval.result == 'success' || needs.claude-eval.result == 'success')
+    if: always()
     steps:
+      - name: Fail fast if either reviewer errored
+        run: |
+          GEMINI_RESULT="${{ needs.gemini-eval.result }}"
+          CLAUDE_RESULT="${{ needs.claude-eval.result }}"
+          echo "gemini-eval: $GEMINI_RESULT"
+          echo "claude-eval: $CLAUDE_RESULT"
+          fail=0
+          if [ "$GEMINI_RESULT" != "success" ]; then
+            echo "::error::Gemini reviewer did not complete successfully ($GEMINI_RESULT)."
+            fail=1
+          fi
+          if [ "$CLAUDE_RESULT" != "success" ]; then
+            echo "::error::Claude reviewer did not complete successfully ($CLAUDE_RESULT)."
+            fail=1
+          fi
+          if [ "$fail" = "1" ]; then
+            echo ""
+            echo "Both reviewers must complete successfully before consensus can be computed."
+            echo "If a reviewer is failing on quota, billing, or auth, fix the upstream issue —"
+            echo "the meta-CI deliberately does not let a missing reviewer count as 'pass'."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
