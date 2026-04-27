@@ -63,7 +63,7 @@ env:
 
     You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified Spec-Driven Development / VSDD).
 
-    The canonical VSDD doc and the PR diff under review are EMBEDDED below in the same message — do not look for files on disk; if you cite something, cite from the embedded content.
+    The canonical VSDD doc, the PR body and any linked tech-spec issues (in `<pr-context>` and `<linked-issue n="N">` tags), and the PR diff under review are EMBEDDED below in the same message — do not look for files on disk; if you cite something, cite from the embedded content. For spec-fidelity findings (whether the diff matches the spec it's supposed to satisfy), cite from the linked-issue or pr-context content.
 
     Critical: if you find yourself citing a file or symbol that isn't actually present in the embedded diff, STOP — that is a hallucination. Only cite what's in the embedded content.
 
@@ -208,6 +208,71 @@ jobs:
             : > pr.diff.truncated
           fi
 
+      - name: Fetch PR body + linked tech-spec issues
+        # Reviewers can't evaluate "Code that diverges from the spec it's
+        # supposed to satisfy" (§II Phase 3) from a diff alone — they need
+        # the PR body (the change rationale) AND the tech-spec issue body
+        # (the contract). Fetch both and emit pr-context.txt for the prompt
+        # builder. Linked issues are resolved by parsing Closes/Fixes/
+        # Resolves keywords plus bare `#N` references in the PR body.
+        # (Refs: issues #3, #10.)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # PR body + title.
+          gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json title \
+            -q '.title' > pr-title.txt
+          gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json body \
+            -q '.body' > pr-body.txt
+
+          # Parse issue refs from the PR body. We accept the GitHub linking
+          # keywords (Closes/Fixes/Resolves, case-insensitive, with optional
+          # past-tense forms) and also bare `#N` references — the spec
+          # issue is sometimes mentioned without a keyword (e.g. "see #42").
+          # Sort -u to dedupe.
+          grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#[0-9]+|#[0-9]+' pr-body.txt \
+            | grep -oE '#[0-9]+' \
+            | tr -d '#' \
+            | sort -u > linked-issues.txt || true
+
+          : > pr-context.txt
+          {
+            echo '<pr-context>'
+            echo "<pr number=\"$PR_NUMBER\">"
+            echo '<title>'
+            cat pr-title.txt
+            echo '</title>'
+            echo '<body>'
+            cat pr-body.txt
+            echo '</body>'
+            echo '</pr>'
+          } >> pr-context.txt
+
+          if [ -s linked-issues.txt ]; then
+            while IFS= read -r issue_num; do
+              [ -z "$issue_num" ] && continue
+              # Skip self-reference (a PR's own number can match `#N`
+              # inside its own body if a human typed it; treat as noise).
+              [ "$issue_num" = "$PR_NUMBER" ] && continue
+              # `gh issue view` returns non-zero if N is actually a PR or
+              # doesn't exist. That's fine — tolerate misses rather than
+              # fail the workflow on a stray `#N`.
+              if body=$(gh issue view "$issue_num" --repo "$GH_REPO" --json body -q '.body' 2>/dev/null); then
+                {
+                  echo "<linked-issue n=\"$issue_num\">"
+                  printf '%s\n' "$body"
+                  echo '</linked-issue>'
+                } >> pr-context.txt
+              fi
+            done < linked-issues.txt
+          fi
+
+          echo '</pr-context>' >> pr-context.txt
+          wc -l pr-context.txt
+
       - name: Build prompts (gemini + claude)
         run: |
           # Both reviewers receive the same prompt structure: the strict-output
@@ -222,6 +287,8 @@ jobs:
           PROMPT_EOF
           cat MEMORY.md >> gemini-stdin.txt
           {
+            printf '\n--- PR + LINKED ISSUE CONTEXT ---\n'
+            cat pr-context.txt
             printf '\n--- PR DIFF ---\n'
             cat pr.diff
           } >> gemini-stdin.txt
@@ -232,6 +299,7 @@ jobs:
           path: |
             gemini-stdin.txt
             pr.diff
+            pr-context.txt
             MEMORY.md
 
   gemini-review:
@@ -304,8 +372,9 @@ jobs:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           output-file: review.md
           # Same stdin-file pattern as Gemini — Claude has no filesystem
-          # access via the Messages API, so we embed MEMORY.md + pr.diff
-          # directly in the prompt rather than asking Claude to "read" them.
+          # access via the Messages API, so we embed MEMORY.md, the PR /
+          # linked-issue context, and pr.diff directly in the prompt
+          # rather than asking Claude to "read" them.
           stdin-file: gemini-stdin.txt
           prompt: |
             ${{ env.PHASE_3_PROMPT }}
