@@ -207,8 +207,18 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git fetch origin "$BASE_SHA" --depth=1 || true
+          # Need both BASE_SHA and HEAD_SHA reachable from local history
+          # to compute their merge-base. Checkout above uses
+          # `fetch-depth: 0` against `ref: HEAD_SHA`, which gets HEAD's
+          # full lineage but does NOT pull the base branch separately —
+          # if main has commits not in HEAD's lineage, BASE_SHA may not
+          # be present. Fetch the base ref by name (full history) so the
+          # merge-base lookup succeeds. The earlier `git fetch origin
+          # $BASE_SHA --depth=1` was the bug — single-commit shallow
+          # fetches don't pull the merge-base ancestor (#58).
+          git fetch origin "$BASE_REF" --no-tags
           git diff "$BASE_SHA"..."$HEAD_SHA" > pr.diff
           wc -l pr.diff
           # Truncate by LINES, not bytes — byte truncation can slice mid-line,
