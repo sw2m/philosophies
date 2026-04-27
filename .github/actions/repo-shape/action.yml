@@ -1,0 +1,71 @@
+name: "Detect repo shape"
+description: |
+  Inspects the consuming repo at the current checkout and emits whether it
+  has a test suite. Used by ci-meta to make VSDD §VIII (4-Result Rule) and
+  Phase 2a/2b applicability EXPLICIT in the reviewer prompts and the run
+  summary, instead of letting reviewers infer "this is a docs repo" from
+  context alone.
+
+  Heuristic for `has-tests`: true if ANY of the following exist at the repo
+  root:
+    - package.json
+    - deno.json
+    - Cargo.toml
+    - go.mod
+    - pyproject.toml
+    - tsconfig.json
+    - tests/ directory
+    - test/ directory
+
+  Heuristic for `repo-kind`:
+    - `code` if `has-tests` is true
+    - `docs` otherwise
+
+  These outputs are intentionally coarse — the goal is to flip the
+  `2a/2b/§VIII` line in the reviewer prompt between "ENFORCED" and "N/A
+  (no test suite detected)", and to print that same line into
+  $GITHUB_STEP_SUMMARY for human auditors.
+
+outputs:
+  has-tests:
+    description: "true if the repo appears to have a test suite (see heuristics in the description)."
+    value: ${{ steps.detect.outputs.has-tests }}
+  repo-kind:
+    description: "'code' if has-tests is true; 'docs' otherwise."
+    value: ${{ steps.detect.outputs.repo-kind }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Detect repo shape
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+        has_tests="false"
+        reason=""
+        for marker in package.json deno.json Cargo.toml go.mod pyproject.toml tsconfig.json; do
+          if [ -f "$marker" ]; then
+            has_tests="true"
+            reason="found $marker"
+            break
+          fi
+        done
+        if [ "$has_tests" = "false" ]; then
+          for dir in tests test; do
+            if [ -d "$dir" ]; then
+              has_tests="true"
+              reason="found $dir/ directory"
+              break
+            fi
+          done
+        fi
+        if [ "$has_tests" = "true" ]; then
+          repo_kind="code"
+        else
+          repo_kind="docs"
+          reason="no test-suite markers detected"
+        fi
+        echo "has-tests=$has_tests" >> "$GITHUB_OUTPUT"
+        echo "repo-kind=$repo_kind" >> "$GITHUB_OUTPUT"
+        echo "repo shape: has-tests=$has_tests repo-kind=$repo_kind ($reason)"
