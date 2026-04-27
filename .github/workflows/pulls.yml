@@ -72,7 +72,12 @@ env:
     - Code that diverges from the spec it's supposed to satisfy
     - Tautological tests
     - Hidden coupling, race conditions, missing cleanup
-    - Multi-word symbols that should be `Subject.verb` (§IX)
+    - Multi-word symbols (camelCase / snake_case), per §IX:
+      - Functions/methods: should they be `Subject.verb` on a state machine?
+      - Vars at large: is the symbol genuinely ambiguous, or is it verbose-when-unambiguous? `archiveUrl` reduces to `archive` or `url`.
+      - Localized/scoped collisions: if multi-word is forced by collision, the scope is doing too much.
+      - Do NOT flag: PascalCase types/classes/interfaces; serde-leak fields whose name matches an at-rest schema (`c_type` matching a YAML/JSON field); external-library symbols you don't control.
+    - Error-structure inconsistency (§IX): mixed error types, mixed throw/return/null, partial error-code coverage, try/catch vs assertThrows mismatches.
     - Inconsistent error handling
     - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
 
