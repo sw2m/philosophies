@@ -209,10 +209,19 @@ jobs:
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           output-file: claude-eval.md
+          # Same stdin-file pattern as Gemini — Claude has no filesystem
+          # access via the Messages API, so we embed eval-input.txt
+          # (canonical MEMORY.md + every workflow + every composite action)
+          # directly in the prompt rather than asking Claude to "read" files.
+          stdin-file: eval-input.txt
           prompt: |
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
-            Read `memory-canonical.md` (the canonical VSDD doc) and `eval-input.txt` (which bundles MEMORY.md plus every workflow and composite action in this PR — use whichever is more convenient). `.github/workflows/*.yml` and `.github/actions/*/action.yml` are also available for direct inspection.
+            The canonical VSDD doc, every CI workflow file, and every
+            composite action in this PR are EMBEDDED below in the same
+            message inside <vsdd-canonical>, <workflow path="...">, and
+            <action path="..."> tags. Do NOT look for files on disk; only
+            cite content that is present in the embedded text.
 
             Evaluate whether the workflows correctly enforce VSDD requirements:
             - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.

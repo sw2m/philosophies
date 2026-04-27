@@ -167,9 +167,15 @@ jobs:
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           output-file: review.md
+          # Same stdin-file pattern as Gemini — Claude has no filesystem
+          # access via the Messages API, so we embed MEMORY.md + pr.diff
+          # directly in the prompt rather than asking Claude to "read" them.
+          stdin-file: gemini-stdin.txt
           prompt: |
             You are an adversarial Phase 3 reviewer (MEMORY.md §II — VSDD).
-            Read `MEMORY.md` and `pr.diff` in the working directory. Apply
+            The canonical VSDD doc and the PR diff under review are
+            EMBEDDED below in the same message — do not look for files; if
+            you cite something, cite from the embedded content. Apply
             these review rules:
               - Code that diverges from the spec it's supposed to satisfy
               - Tautological tests
@@ -201,12 +207,16 @@ jobs:
 
             After the closing `---`, list every concern (blocking and
             nitpicks alike) as terse bullets. Each bullet: a concrete
-            flaw with `file:line` and a proposed fix. Mark blocking
-            concerns explicitly with **(blocking)** at the start of the
-            bullet so the human can scan for them.
+            flaw with `file:line` (cite from the embedded diff) and a
+            proposed fix. Mark blocking concerns explicitly with
+            **(blocking)** at the start of the bullet.
 
             If you genuinely have nothing to say, the body may be a
             single line.
+
+            Critical: if you find yourself citing a file or symbol that
+            isn't actually present in the embedded diff, STOP — that is
+            a hallucination. Only cite what's in the embedded content.
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v7

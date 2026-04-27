@@ -12,8 +12,13 @@ inputs:
     required: false
     default: "sw2m"
   prompt:
-    description: "Prompt for Claude. Multi-line OK."
-    required: true
+    description: "Prompt for Claude. Multi-line OK. Concatenated with stdin-file content (if provided) before sending."
+    required: false
+    default: ""
+  stdin-file:
+    description: "Path to a file whose content is appended to the prompt before sending. Required because Claude has no filesystem access via the Messages API — any 'read this file' instruction must instead embed the file's content here."
+    required: false
+    default: ""
   api-key:
     description: "ANTHROPIC_API_KEY value (caller passes via secret)."
     required: true
@@ -60,25 +65,50 @@ runs:
         fi
         echo "✓ $ACTOR is a $ORG org member (public)."
 
+    - name: Build full prompt (prompt + stdin-file content)
+      shell: bash
+      env:
+        PROMPT: ${{ inputs.prompt }}
+        STDIN_FILE: ${{ inputs.stdin-file }}
+      run: |
+        set -euo pipefail
+        : > combined-prompt.txt
+        if [ -n "$PROMPT" ]; then
+          printf '%s\n\n' "$PROMPT" >> combined-prompt.txt
+        fi
+        if [ -n "$STDIN_FILE" ]; then
+          if [ ! -f "$STDIN_FILE" ]; then
+            echo "::error::stdin-file '$STDIN_FILE' does not exist."
+            exit 1
+          fi
+          cat "$STDIN_FILE" >> combined-prompt.txt
+        fi
+        if [ ! -s combined-prompt.txt ]; then
+          echo "::error::No content to send to Claude (both prompt and stdin-file were empty)."
+          exit 1
+        fi
+        echo "prompt bytes: $(wc -c < combined-prompt.txt)"
+
     - name: Call Anthropic Messages API
       shell: bash
       env:
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
-        PROMPT: ${{ inputs.prompt }}
         MODEL: ${{ inputs.model }}
         MAX_TOKENS: ${{ inputs.max-tokens }}
         OUTPUT: ${{ inputs.output-file }}
       run: |
         set -euo pipefail
-        # Build the JSON request safely with python so prompt content with
-        # quotes / newlines / backslashes round-trips correctly.
+        # Build the JSON request safely with python so the prompt content
+        # (including the embedded file body) round-trips correctly through
+        # JSON encoding even with quotes / newlines / backslashes.
         python3 - <<'PY' > request.json
         import json, os
+        prompt = open('combined-prompt.txt').read()
         body = {
             "model": os.environ["MODEL"],
             "max_tokens": int(os.environ["MAX_TOKENS"]),
             "messages": [
-                {"role": "user", "content": os.environ["PROMPT"]}
+                {"role": "user", "content": prompt}
             ],
         }
         print(json.dumps(body))
