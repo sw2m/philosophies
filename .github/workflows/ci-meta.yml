@@ -853,8 +853,8 @@ jobs:
             // steps run under the default GITHUB_TOKEN. If the workflow
             // is ever switched to a PAT or a custom GitHub App, this
             // heuristic must be updated at the same change.
-            const prAuthor = context.payload.pull_request?.user?.login;
-            if (prAuthor === 'github-actions[bot]') {
+            const author = context.payload.pull_request?.user?.login;
+            if (author === 'github-actions[bot]') {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,

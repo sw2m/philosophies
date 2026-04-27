@@ -474,8 +474,8 @@ jobs:
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
             // Self-review guard — see ci-meta.yml's consensus step
             // for the rationale and the spec annotation about hardcoding.
-            const prAuthor = context.payload.pull_request?.user?.login;
-            if (prAuthor === 'github-actions[bot]') {
+            const author = context.payload.pull_request?.user?.login;
+            if (author === 'github-actions[bot]') {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -537,8 +537,8 @@ jobs:
             const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
             // Self-review guard — same as the gemini-review step.
-            const prAuthor = context.payload.pull_request?.user?.login;
-            if (prAuthor === 'github-actions[bot]') {
+            const author = context.payload.pull_request?.user?.login;
+            if (author === 'github-actions[bot]') {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
