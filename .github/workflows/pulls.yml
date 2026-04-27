@@ -302,6 +302,41 @@ jobs:
             pr-context.txt
             MEMORY.md
 
+  symbol-audit:
+    name: §IX symbol audit (advisory)
+    needs: [prep]
+    # Pure shell-script grep — no agent invocation, no API key needed,
+    # so no org-membership gate. Same draft-skipping guard as the
+    # adversarial reviews. ALWAYS exits 0 — this is a deterministic
+    # pre-check that complements the AI reviewers; it never gates merge.
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: pr-context
+          path: ./
+
+      - name: Run symbol audit
+        run: |
+          bash .github/scripts/symbol-audit.sh pr.diff symbol-audit.md
+          echo '--- symbol-audit.md ---'
+          cat symbol-audit.md
+
+      - name: Post symbol-audit comment
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('symbol-audit.md', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
   gemini-review:
     name: Gemini adversarial review
     needs: [ownership, prep]
