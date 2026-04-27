@@ -31,15 +31,48 @@ permissions:
 # framing (gemini's stdin intro, claude's anti-hallucination guard) stays
 # inline at the call site.
 env:
+  # Shared Phase 3 prompt fragments. Both reviewers (Gemini, Claude) get the
+  # same role, rules, format spec, the strict-output preamble, and the
+  # anti-hallucination guard. Keep this the single source of truth — adding
+  # a new review rule means adding it here once.
+
+  PHASE_3_CRITICAL_FORMAT_PREAMBLE: |-
+    # CRITICAL OUTPUT FORMAT (read this FIRST)
+
+    Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
+
+    Acceptable response example:
+
+    ```
+    ---
+    verdict: fail
+    ---
+
+    - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
+    - path/to/other.ts:10 — Nitpick. Fix: …
+    ```
+
+    If you do not produce frontmatter as your first output, the workflow
+    will fail and your review will be discarded. Non-negotiable.
+
   PHASE_3_ROLE: |-
     You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified Spec-Driven Development / VSDD).
+
+  PHASE_3_ANTI_HALLUCINATION: |-
+    The canonical VSDD doc and the PR diff under review are EMBEDDED below in the same message — do not look for files on disk; if you cite something, cite from the embedded content.
+
+    Critical: if you find yourself citing a file or symbol that isn't actually present in the embedded diff, STOP — that is a hallucination. Only cite what's in the embedded content.
+
   PHASE_3_REVIEW_RULES: |-
+    Apply these review rules. Look ONLY for:
+
     - Code that diverges from the spec it's supposed to satisfy
     - Tautological tests
     - Hidden coupling, race conditions, missing cleanup
     - Multi-word symbols that should be `Subject.verb` (§IX)
     - Inconsistent error handling
     - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+
   PHASE_3_OUTPUT_FORMAT: |-
     # OUTPUT FORMAT (strict)
 
@@ -103,9 +136,19 @@ jobs:
 
       - name: Build prompts (gemini + claude)
         run: |
+          # Both reviewers receive the same prompt structure: the strict-output
+          # preamble first, then role, anti-hallucination guard, review rules,
+          # output format spec. The only per-reviewer difference is HOW the
+          # content gets embedded — Gemini reads stdin (this file), Claude
+          # gets the same file as its `stdin-file` input.
           cat > gemini-stdin.txt <<'PROMPT_EOF'
+          ${{ env.PHASE_3_CRITICAL_FORMAT_PREAMBLE }}
+
+          # TASK
+
           ${{ env.PHASE_3_ROLE }}
-          Review the PR diff below against the standards in MEMORY.md (§I–§IX). Look ONLY for:
+
+          ${{ env.PHASE_3_ANTI_HALLUCINATION }}
 
           ${{ env.PHASE_3_REVIEW_RULES }}
 
@@ -196,39 +239,17 @@ jobs:
           # directly in the prompt rather than asking Claude to "read" them.
           stdin-file: gemini-stdin.txt
           prompt: |
-            # CRITICAL OUTPUT FORMAT (read this FIRST)
-
-            Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
-
-            Acceptable response example:
-
-            ```
-            ---
-            verdict: fail
-            ---
-
-            - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
-            - path/to/other.ts:10 — Nitpick. Fix: …
-            ```
-
-            If you do not produce frontmatter as your first output, the workflow
-            will fail and your review will be discarded. Non-negotiable.
+            ${{ env.PHASE_3_CRITICAL_FORMAT_PREAMBLE }}
 
             # TASK
 
             ${{ env.PHASE_3_ROLE }}
-            The canonical VSDD doc and the PR diff under review are
-            EMBEDDED below in the same message — do not look for files; if
-            you cite something, cite from the embedded content. Apply
-            these review rules:
+
+            ${{ env.PHASE_3_ANTI_HALLUCINATION }}
 
             ${{ env.PHASE_3_REVIEW_RULES }}
 
             ${{ env.PHASE_3_OUTPUT_FORMAT }}
-
-            Critical: if you find yourself citing a file or symbol that
-            isn't actually present in the embedded diff, STOP — that is
-            a hallucination. Only cite what's in the embedded content.
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v9
