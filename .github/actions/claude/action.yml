@@ -1,0 +1,71 @@
+name: "Claude agent"
+description: |
+  Invokes anthropics/claude-code-action with a prompt; instructs Claude to
+  write its result to a file the caller reads directly. Centralizes every
+  Claude invocation in this repo so 'where do agents touch the CI?' is a
+  single grep.
+
+inputs:
+  org:
+    description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
+    required: false
+    default: "sw2m"
+  prompt:
+    description: "Prompt for Claude. Multi-line OK. The action automatically appends a 'write to <output-file>' instruction."
+    required: true
+  api-key:
+    description: "ANTHROPIC_API_KEY value (caller passes via secret)."
+    required: true
+  output-file:
+    description: "File Claude is asked to write its result to. Caller reads from this path."
+    required: false
+    default: "claude-output.txt"
+
+outputs:
+  output-file:
+    description: "Path to the file Claude wrote (echoes back the input)."
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify org membership
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.event.sender.login || github.actor }}
+        ORG: ${{ inputs.org }}
+      run: |
+        # Hard gate: agents must not be invocable by non-org-members.
+        # This lives inside the composite action so consumers cannot forget it.
+        if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
+          echo "::error::$ACTOR is not a member of the '$ORG' GitHub org."
+          echo "Agent invocations (Claude) are restricted to org members. The"
+          echo "calling workflow either ran without the org/repo fork-PR"
+          echo "contributor-approval setting, or the gate is misconfigured."
+          exit 1
+        fi
+        echo "✓ $ACTOR is a $ORG org member."
+
+    - name: Invoke Claude
+      uses: anthropics/claude-code-action@v1
+      with:
+        anthropic_api_key: ${{ inputs.api-key }}
+        prompt: |
+          ${{ inputs.prompt }}
+
+          Write your final result to a file named `${{ inputs.output-file }}` in the working directory. Do NOT commit, push, or open PRs — the calling workflow reads the file directly.
+
+    - name: Verify output produced
+      shell: bash
+      env:
+        OUTPUT: ${{ inputs.output-file }}
+      run: |
+        if [ ! -f "$OUTPUT" ]; then
+          echo "::error::Claude did not produce $OUTPUT."
+          ls -la
+          exit 1
+        fi
+        echo "claude output (first 500 chars):"
+        head -c 500 "$OUTPUT"
+        echo ""

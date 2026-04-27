@@ -3,16 +3,20 @@ name: VSDD CI Meta-Review
 # Reviews CI workflow files against VSDD methodology with TWO independent
 # adversarial reviewers (Gemini + Claude). Both must reach consensus that the
 # proposed CI correctly enforces VSDD; disagreement opens an issue per gap and
-# fails the check.
+# fails the consensus check.
 #
 # Self-evaluation runs on philosophies' own PRs that touch CI files or
 # MEMORY.md. Other sw2m repos invoke via `workflow_call` to have their own CI
 # evaluated against the canonical VSDD doc.
+#
+# AI invocations are factored out into composite actions under .github/actions/
+# (`gemini`, `claude`). Search for those names to audit every place agents run.
 
 on:
   pull_request:
     paths:
       - ".github/workflows/**"
+      - ".github/actions/**"
       - "MEMORY.md"
   workflow_call:
     inputs:
@@ -36,47 +40,22 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  id-token: write   # required by anthropics/claude-code-action for OIDC handshake
+  id-token: write
 
 jobs:
-  membership-gate:
-    name: Org-member gate
-    runs-on: ubuntu-latest
-    outputs:
-      is-member: ${{ steps.check.outputs.is-member }}
-    steps:
-      - id: check
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ACTOR: ${{ github.event.sender.login || github.actor }}
-        run: |
-          # Fork-PR contributor-approval setting at org+repo level already
-          # blocks unapproved external workflow runs. This step is defense in
-          # depth: even if a member-look-alike triggered the run, every agent
-          # job downstream is gated on actual sw2m org membership.
-          set +e
-          gh api "orgs/sw2m/members/$ACTOR" >/dev/null 2>&1
-          rc=$?
-          set -e
-          if [ "$rc" = "0" ]; then
-            echo "is-member=true" >> "$GITHUB_OUTPUT"
-            echo "✓ $ACTOR is a sw2m org member; agent jobs will run."
-          else
-            echo "is-member=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::$ACTOR is not a sw2m org member; agent jobs (Gemini, Claude) will be skipped."
-          fi
+  # No top-level membership-gate job here — the org-member check lives inside
+  # `.github/actions/gemini` and `.github/actions/claude` so it is impossible
+  # to invoke an agent without going through it.
 
-  gemini-eval:
-    name: Gemini VSDD CI evaluation
-    needs: [membership-gate]
-    if: needs.membership-gate.outputs.is-member == 'true'
+  prep:
+    name: Prepare evaluation input
     runs-on: ubuntu-latest
-    outputs:
-      verdict: ${{ steps.eval.outputs.verdict }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Fetch canonical MEMORY.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f MEMORY.md ] && [ "${{ inputs.memory_md_repo || 'sw2m/philosophies' }}" = "${{ github.repository }}" ]; then
             cp MEMORY.md memory-canonical.md
@@ -86,16 +65,8 @@ jobs:
               --jq '.content' | base64 -d > memory-canonical.md
           fi
           wc -l memory-canonical.md
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - run: npm install -g @google/gemini-cli@latest
-
-      - name: Build evaluation input
+      - name: Build eval-input.txt
         run: |
           {
             echo "<vsdd-canonical>"
@@ -108,93 +79,97 @@ jobs:
               cat "$f"
               echo "</workflow>"
             done
+            for f in .github/actions/*/action.yml; do
+              [ -f "$f" ] || continue
+              echo "<action path=\"$f\">"
+              cat "$f"
+              echo "</action>"
+            done
           } > eval-input.txt
           wc -l eval-input.txt
 
-      - name: Gemini evaluate
-        id: eval
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-input
+          path: |
+            eval-input.txt
+            memory-canonical.md
+
+  gemini-eval:
+    name: Gemini VSDD CI evaluation
+    needs: [prep]
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.parse.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: eval-input
+          path: ./
+
+      - name: Run Gemini
+        uses: ./.github/actions/gemini
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: eval-input.txt
+          output-file: gemini-output.txt
+          prompt: |
+            You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
+
+            Read the canonical VSDD doc inside <vsdd-canonical> tags.
+            Read each CI workflow file inside <workflow path="..."> tags.
+            Read each composite action file inside <action path="..."> tags.
+
+            Evaluate whether the workflows correctly enforce VSDD requirements:
+            - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
+            - Phase 2a (Red Gate): a mechanism that confirms tests fail before implementation lands.
+            - Phase 2b (Green Gate): tests pass after minimal implementation.
+            - 4-Result Rule (§VIII): regression set runs alongside new tests on Red AND Green gates.
+            - Phase 3: adversarial review of code changes (Gemini and/or Claude on PR diffs).
+            - §IX: multi-word symbol audit (camelCase/snake_case scan on code PRs).
+            - Spec discipline (§VII): tech specs are discrete; goal specs are bulk.
+
+            Classify each: ENFORCED, PARTIAL, or MISSING.
+
+            A repo with no test suite (e.g. sw2m/philosophies — a docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A in that case, not MISSING.
+
+            Output ONLY valid JSON between exactly one <verdict>...</verdict> tag pair. No prose outside the tags.
+
+            {
+              "verdict": "pass" | "fail",
+              "rationale": "one paragraph",
+              "gaps": [
+                {"title": "[ci-meta] short description (≤60 chars)", "body": "detailed explanation with VSDD section reference and concrete remediation"}
+              ]
+            }
+
+            verdict=pass: every applicable requirement is ENFORCED or PARTIAL with no critical gaps.
+            verdict=fail: at least one applicable requirement is MISSING, or significant PARTIAL gaps undermine VSDD.
+            For each MISSING or significant PARTIAL, add a gaps entry.
+
+      - name: Parse verdict
+        id: parse
         run: |
-          set -euo pipefail
-          PROMPT='You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
-
-          Read the canonical VSDD doc inside <vsdd-canonical> tags.
-          Read each CI workflow file inside <workflow path="..."> tags.
-
-          Evaluate whether the workflows correctly enforce VSDD requirements:
-          - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against the spec discipline rules in §VII.
-          - Phase 2a (Red Gate): a mechanism that confirms tests fail before implementation lands. May be a CI check on PRs labeled or titled `tests:` that asserts the test suite reports failures.
-          - Phase 2b (Green Gate): tests pass after minimal implementation.
-          - 4-Result Rule (§VIII): regression set runs alongside new tests on Red AND Green gates.
-          - Phase 3: adversarial review of code changes (Gemini and/or Claude on PR diffs).
-          - §IX: multi-word symbol audit (camelCase/snake_case scan on code PRs).
-          - Spec discipline (§VII): tech specs are discrete; goal specs are bulk.
-
-          For each requirement, classify: ENFORCED, PARTIAL, or MISSING.
-
-          A repo that has no test suite (e.g. a docs repo like sw2m/philosophies) cannot enforce 2a/2b/§VIII; treat those as N/A in that case, not MISSING.
-
-          Output ONLY valid JSON between exactly one <verdict>...</verdict> tag pair. No prose outside the tags.
-
-          {
-            "verdict": "pass" | "fail",
-            "rationale": "one paragraph summarizing the evaluation",
-            "gaps": [
-              {"title": "[ci-meta] short description (≤60 chars)", "body": "detailed explanation with VSDD section reference and concrete remediation"}
-            ]
-          }
-
-          verdict=pass: every applicable requirement is ENFORCED or PARTIAL with no critical gaps.
-          verdict=fail: at least one applicable requirement is MISSING, or significant PARTIAL gaps undermine VSDD.
-          For each MISSING or significant PARTIAL, add a gaps entry.'
-
-          # Build the full input as one stdin stream (prompt + content) — gemini-cli
-          # accepts either -p or stdin; mixing the two has been unreliable.
-          { printf '%s\n\n' "$PROMPT"; cat eval-input.txt; } > combined-input.txt
-
-          set +e
-          gemini --yolo --skip-trust -m gemini-3-pro-preview < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "Gemini 3 exited with code $rc; falling back to 2.5"
-            echo "--- gemini 3 stderr ---"
-            cat gemini-stderr.log
-            gemini --yolo --skip-trust -m gemini-2.5-pro < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
-            rc=$?
-            if [ $rc -ne 0 ]; then
-              echo "Gemini 2.5 exited with code $rc"
-              echo "--- gemini 2.5 stderr ---"
-              cat gemini-stderr.log
-              echo "--- gemini 2.5 stdout ---"
-              cat gemini-output.txt
-              exit $rc
-            fi
-          fi
-          set -e
-
           python3 - <<'PY'
           import re, json, sys, os
           out = open('gemini-output.txt').read()
           m = re.search(r'<verdict>(.*?)</verdict>', out, re.DOTALL)
           if not m:
-              print('ERROR: no <verdict>...</verdict> tag found in gemini output', file=sys.stderr)
-              print('--- raw output ---', file=sys.stderr)
+              print('ERROR: no <verdict>...</verdict> tag in gemini output', file=sys.stderr)
               print(out, file=sys.stderr)
               sys.exit(1)
           try:
-              eval_data = json.loads(m.group(1).strip())
+              data = json.loads(m.group(1).strip())
           except json.JSONDecodeError as e:
               print(f'ERROR: invalid JSON inside <verdict>: {e}', file=sys.stderr)
-              print('--- raw json ---', file=sys.stderr)
               print(m.group(1), file=sys.stderr)
               sys.exit(1)
-          eval_data['reviewer'] = 'gemini'
-          json.dump(eval_data, open('gemini-eval.json', 'w'), indent=2)
+          data['reviewer'] = 'gemini'
+          json.dump(data, open('gemini-eval.json', 'w'), indent=2)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"verdict={eval_data['verdict']}\n")
-          print(f"gemini verdict: {eval_data['verdict']}")
-          print(f"gaps: {len(eval_data.get('gaps', []))}")
+              f.write(f"verdict={data['verdict']}\n")
+          print(f"gemini verdict: {data['verdict']}, gaps: {len(data.get('gaps', []))}")
           PY
 
       - uses: actions/upload-artifact@v4
@@ -204,36 +179,26 @@ jobs:
 
   claude-eval:
     name: Claude VSDD CI evaluation
-    needs: [membership-gate]
-    if: needs.membership-gate.outputs.is-member == 'true'
+    needs: [prep]
     runs-on: ubuntu-latest
     outputs:
-      verdict: ${{ steps.eval.outputs.verdict }}
+      verdict: ${{ steps.parse.outputs.verdict }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Fetch canonical MEMORY.md
-        run: |
-          if [ -f MEMORY.md ] && [ "${{ inputs.memory_md_repo || 'sw2m/philosophies' }}" = "${{ github.repository }}" ]; then
-            cp MEMORY.md memory-canonical.md
-          else
-            gh api \
-              "repos/${{ inputs.memory_md_repo || 'sw2m/philosophies' }}/contents/MEMORY.md?ref=${{ inputs.memory_md_ref || 'main' }}" \
-              --jq '.content' | base64 -d > memory-canonical.md
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Claude evaluate
-        id: eval
-        uses: anthropics/claude-code-action@v1
+      - uses: actions/download-artifact@v4
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          name: eval-input
+          path: ./
+
+      - name: Run Claude
+        uses: ./.github/actions/claude
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          output-file: claude-eval.json
           prompt: |
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
-            Read `memory-canonical.md` (the canonical VSDD doc).
-            Read each `.github/workflows/*.yml` file in this repo.
+            Read `memory-canonical.md` (the canonical VSDD doc) and `eval-input.txt` (which already bundles MEMORY.md plus every workflow and composite action in this PR — use whichever is more convenient). The repo's `.github/workflows/*.yml` and `.github/actions/*/action.yml` files are also available for direct inspection.
 
             Evaluate whether the workflows correctly enforce VSDD requirements:
             - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
@@ -244,9 +209,9 @@ jobs:
             - §IX: multi-word symbol audit.
             - Spec discipline (§VII): tech specs are discrete.
 
-            A repo that has no test suite (docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A, not MISSING.
+            A repo with no test suite (docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A, not MISSING.
 
-            Write your evaluation to `claude-eval.json` in the repo root with this exact schema:
+            The output file MUST be valid JSON with this exact schema:
             {
               "verdict": "pass" or "fail",
               "rationale": "one paragraph",
@@ -254,13 +219,11 @@ jobs:
               "reviewer": "claude"
             }
 
-            Do NOT commit, push, or open PRs. Just write the file. The CI workflow will read it.
-
-      - name: Set verdict output
+      - name: Parse verdict
         id: parse
         run: |
           if [ ! -f claude-eval.json ]; then
-            echo "ERROR: claude-eval.json not produced by Claude" >&2
+            echo "::error::claude-eval.json not produced"
             exit 1
           fi
           VERDICT=$(python3 -c "import json; print(json.load(open('claude-eval.json'))['verdict'])")
@@ -285,29 +248,19 @@ jobs:
           echo "gemini-eval: $GEMINI_RESULT"
           echo "claude-eval: $CLAUDE_RESULT"
           fail=0
-          if [ "$GEMINI_RESULT" != "success" ]; then
-            echo "::error::Gemini reviewer did not complete successfully ($GEMINI_RESULT)."
-            fail=1
-          fi
-          if [ "$CLAUDE_RESULT" != "success" ]; then
-            echo "::error::Claude reviewer did not complete successfully ($CLAUDE_RESULT)."
-            fail=1
-          fi
+          [ "$GEMINI_RESULT" != "success" ] && { echo "::error::Gemini reviewer did not complete successfully ($GEMINI_RESULT)."; fail=1; }
+          [ "$CLAUDE_RESULT" != "success" ] && { echo "::error::Claude reviewer did not complete successfully ($CLAUDE_RESULT)."; fail=1; }
           if [ "$fail" = "1" ]; then
             echo ""
-            echo "Both reviewers must complete successfully before consensus can be computed."
-            echo "If a reviewer is failing on quota, billing, or auth, fix the upstream issue —"
-            echo "the meta-CI deliberately does not let a missing reviewer count as 'pass'."
+            echo "Both reviewers must complete before consensus. A missing reviewer must not count as 'pass'."
             exit 1
           fi
 
       - uses: actions/checkout@v4
-
       - uses: actions/download-artifact@v4
         with:
           name: gemini-eval
           path: ./eval/
-
       - uses: actions/download-artifact@v4
         with:
           name: claude-eval
@@ -330,19 +283,13 @@ jobs:
           print()
           print(f"gemini rationale: {gemini.get('rationale', '')}")
           print(f"claude rationale: {claude.get('rationale', '')}")
-          print()
 
-          # Consensus rules:
-          # - Both pass with empty gaps → CI passes, no issues opened.
-          # - Either fails → CI fails; open issues for the union of gaps (deduped).
-          # - One pass + one fail → CI fails (no consensus); issues from the failing reviewer.
           fail = gemini['verdict'] == 'fail' or claude['verdict'] == 'fail'
 
           all_gaps = []
           for g in gemini.get('gaps', []):
               all_gaps.append({**g, 'flagged_by': ['gemini']})
           for g in claude.get('gaps', []):
-              # Dedupe by normalized title
               norm = re.sub(r'\W+', ' ', g['title'].lower()).strip()
               merged = False
               for existing in all_gaps:
@@ -353,9 +300,7 @@ jobs:
               if not merged:
                   all_gaps.append({**g, 'flagged_by': ['claude']})
 
-          pr_number = os.environ.get('PR_NUMBER', '')
           pr_url = os.environ.get('PR_URL', '')
-
           opened = []
           for g in all_gaps:
               flagged_by = ' + '.join(sorted(g['flagged_by']))
@@ -365,7 +310,6 @@ jobs:
                   f"---\n"
                   f"PR triggering this evaluation: {pr_url or '(self-evaluation)'}\n"
               )
-              # Idempotency: skip if a similar open issue already exists
               search = subprocess.run(
                   ['gh', 'issue', 'list', '--state', 'open', '--search', g['title'], '--json', 'number,title'],
                   capture_output=True, text=True, check=True,
@@ -374,26 +318,19 @@ jobs:
               if any(item['title'] == g['title'] for item in existing):
                   print(f"  skip (already open): {g['title']}")
                   continue
-              # Create
               r = subprocess.run(
                   ['gh', 'issue', 'create', '--title', g['title'], '--body', body, '--label', 'ci-meta'],
                   capture_output=True, text=True,
               )
-              if r.returncode == 0:
-                  url = r.stdout.strip().splitlines()[-1]
-                  print(f"  opened: {url}")
-                  opened.append(url)
-              else:
-                  # Label may not exist; retry without label
-                  r2 = subprocess.run(
+              if r.returncode != 0:
+                  r = subprocess.run(
                       ['gh', 'issue', 'create', '--title', g['title'], '--body', body],
                       capture_output=True, text=True, check=True,
                   )
-                  url = r2.stdout.strip().splitlines()[-1]
-                  print(f"  opened: {url}  (label 'ci-meta' did not exist; create it manually if you want filtering)")
-                  opened.append(url)
+              url = r.stdout.strip().splitlines()[-1]
+              print(f"  opened: {url}")
+              opened.append(url)
 
-          # Summary for the GitHub Actions run
           summary = os.environ.get('GITHUB_STEP_SUMMARY')
           if summary:
               with open(summary, 'a') as f:
@@ -411,8 +348,7 @@ jobs:
                           f.write("\n")
 
           if fail:
-              print(f"\nFAIL: consensus not reached. {len(all_gaps)} gap issue(s) opened or already open.")
+              print(f"\nFAIL: {len(all_gaps)} gap issue(s) opened or already open.")
               sys.exit(1)
-          else:
-              print("\nPASS: both reviewers agree the CI enforces VSDD correctly.")
+          print("\nPASS: both reviewers agree the CI enforces VSDD correctly.")
           PY

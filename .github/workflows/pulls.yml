@@ -2,7 +2,9 @@ name: VSDD Pull Request Review (Phase 3)
 
 # Advisory only — never gates the merge. Two adversarial reviewers run in
 # parallel for cognitive diversity (MEMORY.md §V): Gemini and Claude. Each
-# posts its findings as a PR comment. The gating CI is test.yml.
+# posts its findings as a PR comment. Org-membership is enforced inside the
+# composite actions.
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -20,99 +22,88 @@ permissions:
   id-token: write
 
 jobs:
-  gemini-review:
-    name: Gemini adversarial review
+  prep:
+    name: Compute PR diff
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Gemini CLI
-        run: npm install -g @google/gemini-cli
 
       - name: Compute diff against base
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          mkdir -p /tmp/vsdd
           git fetch origin "$BASE_SHA" --depth=1 || true
-          git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/vsdd/pr.diff
-          wc -c /tmp/vsdd/pr.diff
-          # Truncate huge diffs so we don't blow the context window.
-          if [ "$(wc -c < /tmp/vsdd/pr.diff)" -gt 200000 ]; then
-            head -c 200000 /tmp/vsdd/pr.diff > /tmp/vsdd/pr.diff.trunc
-            mv /tmp/vsdd/pr.diff.trunc /tmp/vsdd/pr.diff
-            echo "[diff truncated to 200KB]" >> /tmp/vsdd/pr.diff
+          git diff "$BASE_SHA"..."$HEAD_SHA" > pr.diff
+          wc -c pr.diff
+          if [ "$(wc -c < pr.diff)" -gt 200000 ]; then
+            head -c 200000 pr.diff > pr.diff.trunc
+            mv pr.diff.trunc pr.diff
+            echo "[diff truncated to 200KB]" >> pr.diff
           fi
 
-      - name: Run Gemini PR review with model fallback
-        id: gemini
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - name: Build prompts (gemini + claude)
         run: |
-          set -u
+          cat > gemini-stdin.txt <<'PROMPT_EOF'
+          You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified
+          Spec-Driven Development). Review the PR diff below against the
+          standards in MEMORY.md (§I–§IX). Look ONLY for:
+            - Code that diverges from the spec it's supposed to satisfy
+            - Tautological tests
+            - Hidden coupling, race conditions, missing cleanup
+            - Multi-word symbols that should be Subject.verb (§IX)
+            - Inconsistent error handling
+            - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
+
+          Output rules: terse bullets only. Each bullet a concrete flaw with
+          file:line and a proposed fix. If genuinely none: output exactly
+          "No Phase 3 concerns identified." This review is advisory.
+
+          --- MEMORY.md ---
+          PROMPT_EOF
+          cat MEMORY.md >> gemini-stdin.txt
           {
-            echo "You are Sarcasmotron, the adversarial reviewer described in"
-            echo "MEMORY.md. You are running Phase 3 (Adversarial Refinement)"
-            echo "on the diff below. Use MEMORY.md in this repo as the standard."
-            echo ""
-            echo "Look for: spec fidelity gaps, weak/tautological tests, code"
-            echo "quality issues (placeholders, generic error handling, hidden"
-            echo "coupling, race conditions), security surface, spec gaps the"
-            echo "implementation reveals, multi-word symbol smells (§IX),"
-            echo "regression-set/4-Result-Rule violations (§VIII), and spec"
-            echo "discipline violations (§VII)."
-            echo ""
-            echo "Output rules: bullet points only, each one a concrete flaw"
-            echo "with a file:line reference and a proposed fix or question."
-            echo "If genuinely nothing, output exactly: 'No Phase 3 concerns"
-            echo "identified.' This review is advisory."
-            echo ""
-            echo "--- MEMORY.md ---"
-            cat MEMORY.md
-            echo ""
-            echo "--- DIFF ---"
-            cat /tmp/vsdd/pr.diff
-          } > /tmp/vsdd/prompt.txt
+            printf '\n--- PR DIFF ---\n'
+            cat pr.diff
+          } >> gemini-stdin.txt
 
-          run_gemini() {
-            local model="$1"
-            gemini --yolo --skip-trust --model "$model" \
-              --prompt "$(cat /tmp/vsdd/prompt.txt)" \
-              > /tmp/vsdd/review.md 2> /tmp/vsdd/err.log
-          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-context
+          path: |
+            gemini-stdin.txt
+            pr.diff
+            MEMORY.md
 
-          if run_gemini "gemini-3-pro-preview"; then
-            echo "model=gemini-3-pro-preview" >> "$GITHUB_OUTPUT"
-          elif run_gemini "gemini-2.5-pro"; then
-            echo "model=gemini-2.5-pro" >> "$GITHUB_OUTPUT"
-          else
-            echo "model=none" >> "$GITHUB_OUTPUT"
-            echo "Gemini CLI failed on both gemini-3-pro-preview and gemini-2.5-pro." > /tmp/vsdd/review.md
-            echo "stderr tail:" >> /tmp/vsdd/review.md
-            tail -n 40 /tmp/vsdd/err.log >> /tmp/vsdd/review.md || true
-          fi
+  gemini-review:
+    name: Gemini adversarial review
+    needs: [prep]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr-context
+          path: ./
 
-      - name: Post Gemini review as PR comment
+      - name: Run Gemini (composite; org-member gate inside)
+        uses: ./.github/actions/gemini
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: gemini-stdin.txt
+          output-file: review.md
+
+      - name: Post Gemini comment
         uses: actions/github-script@v7
-        env:
-          MODEL: ${{ steps.gemini.outputs.model }}
         with:
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('/tmp/vsdd/review.md', 'utf8');
-            const model = process.env.MODEL || 'unknown';
-            const header = `**VSDD Phase 3 — Gemini Adversarial Review** _(advisory, model: \`${model}\`)_\n\n`;
-            const footer = `\n\n---\n_Advisory review per MEMORY.md §II Phase 3. Does not gate the merge._`;
+            const body = fs.readFileSync('review.md', 'utf8');
+            const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory)_\n\n`;
+            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 3. Does not gate the merge._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -122,37 +113,46 @@ jobs:
 
   claude-review:
     name: Claude adversarial review
+    needs: [prep]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          name: pr-context
+          path: ./
 
-      - name: Run Claude review (anthropics/claude-code-action)
-        uses: anthropics/claude-code-action@v1
+      - name: Run Claude (composite; org-member gate inside)
+        uses: ./.github/actions/claude
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          output-file: review.md
           prompt: |
-            You are the second adversarial reviewer in MEMORY.md's Phase 3
-            (Adversarial Refinement). Your role here mirrors Sarcasmotron, but
-            you are Claude — the cognitive-diversity counterpart per §V.
+            You are an adversarial Phase 3 reviewer (MEMORY.md §II — VSDD).
+            Read `MEMORY.md` and `pr.diff` in the working directory. Apply
+            these review rules:
+              - Code that diverges from the spec it's supposed to satisfy
+              - Tautological tests
+              - Hidden coupling, race conditions, missing cleanup
+              - Multi-word symbols that should be `Subject.verb` (§IX)
+              - Inconsistent error handling
+              - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
 
-            Read MEMORY.md in this repo as the standard. Review this pull
-            request's diff against it. Look for: spec fidelity, weak or
-            tautological tests, code quality (placeholders, generic error
-            handling, hidden coupling, race conditions), security surface,
-            spec gaps the implementation reveals, multi-word symbol smells
-            (§IX), regression-set / 4-Result-Rule violations (§VIII), and
-            spec discipline violations (§VII — goal vs tech specs, one
-            problem per tech spec).
+            Output rules: terse bullets only. Each bullet a concrete flaw
+            with `file:line` and a proposed fix. If none: write exactly
+            "No Phase 3 concerns identified.". This review is advisory.
 
-            Output rules: bullet points only. Every bullet is a concrete flaw
-            with a specific file:line reference and a proposed fix or
-            question. No preamble. If you genuinely cannot find anything,
-            output exactly: "No Phase 3 concerns identified."
-
-            This review is advisory. It does not gate the merge.
-          claude_args: |
-            --max-turns 8
+      - name: Post Claude comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('review.md', 'utf8');
+            const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory)_\n\n`;
+            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 3. Does not gate the merge._`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: header + body + footer,
+            });
