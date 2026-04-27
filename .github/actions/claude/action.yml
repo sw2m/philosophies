@@ -97,10 +97,12 @@ runs:
         echo "input bytes: $(wc -c < combined-input.txt)"
 
         # `--print` = non-interactive single-turn; pipe stdin as the prompt.
-        # We deliberately do NOT enable tools — this is pure inference. The
-        # CLI's default permission gate would prompt for tool use anyway
-        # in a non-TTY context, but being explicit here is cheap insurance.
-        claude --print --model "$MODEL" --permission-mode plan < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
+        # Pure inference: we want claude to produce text, not run tools.
+        # `--allowed-tools ""` disables every tool (Bash, Edit, etc.). We
+        # tried `--permission-mode plan` first but plan mode makes claude
+        # write a *plan summary* of what it would do, not actually do it
+        # — useless for our 'produce frontmatter + bullets' contract.
+        claude --print --model "$MODEL" --allowed-tools "" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
         echo "stdout (first 500 chars):"
         head -c 500 "$OUTPUT"
         echo ""
