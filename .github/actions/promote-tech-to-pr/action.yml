@@ -295,15 +295,16 @@ runs:
           fi
 
           # Extract the frontmatter from the END of the agent output.
-          # The parser writes phase2-meta.json and prints declared files.
-          NEW_FILES=$(python3 .github/scripts/parse-phase2-frontmatter.py "$PHASE2_OUTPUT" 2>phase2-parse-err.log) || {
-            last_failure="Phase 2 frontmatter parse failed (attempt $attempt). $(cat phase2-parse-err.log)"
+          # Parser writes ${RUNNER_TEMP}/phase2-meta.json (out-of-tree per
+          # #65) and prints declared files.
+          NEW_FILES=$(python3 .github/scripts/parse-phase2-frontmatter.py "$PHASE2_OUTPUT" "${RUNNER_TEMP}/phase2-meta.json" 2>${RUNNER_TEMP}/phase2-parse-err.log) || {
+            last_failure="Phase 2 frontmatter parse failed (attempt $attempt). $(cat ${RUNNER_TEMP}/phase2-parse-err.log)"
             echo "::warning::$last_failure"
             continue
           }
 
-          NEW_CMD=$(jq -r '.new_cmd' phase2-meta.json)
-          REG_CMD=$(jq -r '.reg_cmd' phase2-meta.json)
+          NEW_CMD=$(jq -r '.new_cmd' ${RUNNER_TEMP}/phase2-meta.json)
+          REG_CMD=$(jq -r '.reg_cmd' ${RUNNER_TEMP}/phase2-meta.json)
 
           if [ -z "$NEW_CMD" ] || [ -z "$REG_CMD" ] || [ -z "$NEW_FILES" ]; then
             last_failure="Phase 2 declared empty new_test_files / new_cmd / reg_cmd (attempt $attempt). The agent did not produce a usable test set."
@@ -318,9 +319,9 @@ runs:
           echo ""
           echo "=== Phase 3 — Red gate (attempt $attempt) ==="
           set +e
-          eval "$NEW_CMD" >red-new.log 2>&1
+          eval "$NEW_CMD" >${RUNNER_TEMP}/red-new.log 2>&1
           NEW_RC=$?
-          eval "$REG_CMD" >red-reg.log 2>&1
+          eval "$REG_CMD" >${RUNNER_TEMP}/red-reg.log 2>&1
           REG_RC=$?
           set -e
 
@@ -356,19 +357,19 @@ runs:
             echo ""
             echo "Last new-tests output:"
             echo '```'
-            tail -100 red-new.log 2>/dev/null || true
+            tail -100 ${RUNNER_TEMP}/red-new.log 2>/dev/null || true
             echo '```'
             echo ""
             echo "Last regression-tests output:"
             echo '```'
-            tail -100 red-reg.log 2>/dev/null || true
+            tail -100 ${RUNNER_TEMP}/red-reg.log 2>/dev/null || true
             echo '```'
-          } > red-bail.md
+          } > ${RUNNER_TEMP}/red-bail.md
           echo "bailed=true" >> "$GITHUB_OUTPUT"
         else
           echo "bailed=false" >> "$GITHUB_OUTPUT"
           # Persist the test commands for Phase 5.
-          cp phase2-meta.json phase2-meta-final.json
+          cp ${RUNNER_TEMP}/phase2-meta.json ${RUNNER_TEMP}/phase2-meta-final.json
         fi
 
     - name: Bail on Red-gate exhaustion
@@ -393,7 +394,7 @@ runs:
           echo "interacts with the regression set in a way the agent can't"
           echo "isolate._"
           echo ""
-          cat red-bail.md
+          cat ${RUNNER_TEMP}/red-bail.md
           echo ""
           echo "@$OWNER_LOGIN — over to you. Inspect the draft PR (#$PR_NUMBER), "
           echo "either refine the tech-spec into smaller pieces or take over"
@@ -447,8 +448,8 @@ runs:
           REG_CMD=""
         else
           ATTEMPTS=$((MAX_RETRIES + 1))
-          NEW_CMD=$(jq -r '.new_cmd' phase2-meta-final.json)
-          REG_CMD=$(jq -r '.reg_cmd' phase2-meta-final.json)
+          NEW_CMD=$(jq -r '.new_cmd' ${RUNNER_TEMP}/phase2-meta-final.json)
+          REG_CMD=$(jq -r '.reg_cmd' ${RUNNER_TEMP}/phase2-meta-final.json)
         fi
 
         attempt=0
@@ -550,9 +551,9 @@ runs:
           echo ""
           echo "=== Phase 5 — Green gate (attempt $attempt) ==="
           set +e
-          eval "$NEW_CMD" >green-new.log 2>&1
+          eval "$NEW_CMD" >${RUNNER_TEMP}/green-new.log 2>&1
           NEW_RC=$?
-          eval "$REG_CMD" >green-reg.log 2>&1
+          eval "$REG_CMD" >${RUNNER_TEMP}/green-reg.log 2>&1
           REG_RC=$?
           set -e
 
@@ -590,12 +591,12 @@ runs:
             echo ""
             if [ "$NO_RUNNER" != "true" ]; then
               echo "Last new-tests output:"; echo '```'
-              tail -100 green-new.log 2>/dev/null || true; echo '```'
+              tail -100 ${RUNNER_TEMP}/green-new.log 2>/dev/null || true; echo '```'
               echo ""
               echo "Last regression-tests output:"; echo '```'
-              tail -100 green-reg.log 2>/dev/null || true; echo '```'
+              tail -100 ${RUNNER_TEMP}/green-reg.log 2>/dev/null || true; echo '```'
             fi
-          } > green-bail.md
+          } > ${RUNNER_TEMP}/green-bail.md
           echo "bailed=true" >> "$GITHUB_OUTPUT"
         else
           echo "bailed=false" >> "$GITHUB_OUTPUT"
@@ -621,7 +622,7 @@ runs:
           echo "(from Phase 2) are committed on the branch; the failed"
           echo "Phase 4 implementation attempts have been discarded._"
           echo ""
-          cat green-bail.md
+          cat ${RUNNER_TEMP}/green-bail.md
           echo ""
           echo "@$OWNER_LOGIN — over to you. Either implement by hand on"
           echo "branch \`${BRANCH:-the PR branch}\`, or refine the tech-spec"
