@@ -58,9 +58,36 @@ jobs:
             - Inconsistent error handling
             - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
 
-          Output rules: terse bullets only. Each bullet a concrete flaw with
-          file:line and a proposed fix. If genuinely none: output exactly
-          "No Phase 3 concerns identified." This review is advisory.
+          # OUTPUT FORMAT (strict)
+
+          Begin your response with YAML frontmatter, exactly this shape:
+
+          ---
+          verdict: pass | fail
+          ---
+
+          The verdict answers "should this PR be approved?", **not** "are
+          there zero concerns?". A `pass` with listed nitpicks is correct
+          and expected — concerns can exist without blocking.
+
+          - `verdict: pass` ⇔ concerns are nits/style/nice-to-have. The PR
+            is acceptable as-is; the human can address the nits or dismiss
+            them. Translates to APPROVE.
+          - `verdict: fail` ⇔ at least one concern is genuinely blocking
+            (correctness, security, broken contract, spec violation that
+            invalidates the change). Translates to REQUEST_CHANGES.
+
+          The frontmatter MUST be the first thing in your output (no leading
+          whitespace, no preamble).
+
+          After the closing `---`, list every concern (blocking and
+          nitpicks alike) as terse bullets. Each bullet: a concrete flaw
+          with `file:line` and a proposed fix. Mark blocking concerns
+          explicitly with **(blocking)** at the start of the bullet so the
+          human reading can scan for them.
+
+          If you genuinely have nothing to say, the body may be a single
+          line.
 
           --- MEMORY.md ---
           PROMPT_EOF
@@ -96,18 +123,31 @@ jobs:
           stdin-file: gemini-stdin.txt
           output-file: review.md
 
-      - name: Post Gemini comment
+      - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('review.md', 'utf8');
-            const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory)_\n\n`;
-            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 3. Does not gate the merge._`;
-            await github.rest.issues.createComment({
+            const raw = fs.readFileSync('review.md', 'utf8');
+            // Parse YAML frontmatter at the top: ---\nverdict: pass|fail\n---\n
+            const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+            let verdict = null, body = raw;
+            if (m) {
+              const fmMatch = m[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
+              verdict = fmMatch ? fmMatch[1].toLowerCase() : null;
+              body = m[2].trim();
+            }
+            if (verdict !== 'pass' && verdict !== 'fail') {
+              core.setFailed(`Gemini did not produce a parseable verdict frontmatter (got: ${verdict ?? 'none'}). Raw output preserved as the review body for human triage; failing the workflow.`);
+            }
+            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
+            const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
+            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
+            await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              pull_number: context.issue.number,
+              event,
               body: header + body + footer,
             });
 
@@ -138,21 +178,59 @@ jobs:
               - Inconsistent error handling
               - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
 
-            Output rules: terse bullets only. Each bullet a concrete flaw
-            with `file:line` and a proposed fix. If none: write exactly
-            "No Phase 3 concerns identified.". This review is advisory.
+            # OUTPUT FORMAT (strict)
 
-      - name: Post Claude comment
+            Begin your written output with YAML frontmatter, exactly:
+
+            ---
+            verdict: pass | fail
+            ---
+
+            The verdict answers "should this PR be approved?", not "are
+            there zero concerns?". A `pass` with listed nitpicks is
+            correct — concerns can exist without blocking.
+
+            - `verdict: pass` ⇔ concerns are nits/style/nice-to-have.
+              Translates to APPROVE.
+            - `verdict: fail` ⇔ at least one concern is genuinely blocking
+              (correctness, security, broken contract, spec violation).
+              Translates to REQUEST_CHANGES.
+
+            The frontmatter MUST be the first thing in the file (no
+            leading whitespace, no preamble).
+
+            After the closing `---`, list every concern (blocking and
+            nitpicks alike) as terse bullets. Each bullet: a concrete
+            flaw with `file:line` and a proposed fix. Mark blocking
+            concerns explicitly with **(blocking)** at the start of the
+            bullet so the human can scan for them.
+
+            If you genuinely have nothing to say, the body may be a
+            single line.
+
+      - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('review.md', 'utf8');
-            const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory)_\n\n`;
-            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 3. Does not gate the merge._`;
-            await github.rest.issues.createComment({
+            const raw = fs.readFileSync('review.md', 'utf8');
+            const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+            let verdict = null, body = raw;
+            if (m) {
+              const fmMatch = m[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
+              verdict = fmMatch ? fmMatch[1].toLowerCase() : null;
+              body = m[2].trim();
+            }
+            if (verdict !== 'pass' && verdict !== 'fail') {
+              core.setFailed(`Claude did not produce a parseable verdict frontmatter (got: ${verdict ?? 'none'}).`);
+            }
+            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
+            const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
+            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
+            await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              pull_number: context.issue.number,
+              event,
               body: header + body + footer,
             });

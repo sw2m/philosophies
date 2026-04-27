@@ -130,46 +130,60 @@ jobs:
             - §IX: multi-word symbol audit (camelCase/snake_case scan on code PRs).
             - Spec discipline (§VII): tech specs are discrete; goal specs are bulk.
 
-            Classify each: ENFORCED, PARTIAL, or MISSING.
+            Classify each requirement: ENFORCED, PARTIAL, or MISSING.
 
             A repo with no test suite (e.g. sw2m/philosophies — a docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A in that case, not MISSING.
 
-            Output ONLY valid JSON between exactly one <verdict>...</verdict> tag pair. No prose outside the tags.
+            # OUTPUT FORMAT (strict)
 
-            {
-              "verdict": "pass" | "fail",
-              "rationale": "one paragraph",
-              "gaps": [
-                {"title": "[ci-meta] short description (≤60 chars)", "body": "detailed explanation with VSDD section reference and concrete remediation"}
-              ]
-            }
+            Begin your output with YAML frontmatter, then prose. The frontmatter MUST be the first thing — no leading whitespace, no preamble.
 
-            verdict=pass: every applicable requirement is ENFORCED or PARTIAL with no critical gaps.
-            verdict=fail: at least one applicable requirement is MISSING, or significant PARTIAL gaps undermine VSDD.
-            For each MISSING or significant PARTIAL, add a gaps entry.
+            ---
+            verdict: pass | fail
+            rationale: |
+              one paragraph summarizing the evaluation
+            gaps:
+              - title: "[ci-meta] short description (≤60 chars)"
+                body: |
+                  detailed explanation with VSDD section reference and concrete remediation
+              - title: "..."
+                body: |
+                  ...
+            ---
 
-      - name: Parse verdict
+            (free-form summary may follow but is ignored by the parser)
+
+            Verdict semantics: `pass` answers "should this PR be approved?", not "are there zero gaps?". A `pass` with non-critical gaps listed is fine — the gaps still get tracked as issues but the meta-CI doesn't block merge.
+
+            - `verdict: pass` ⇔ gaps are nice-to-have / non-critical / partial coverage that doesn't undermine VSDD.
+            - `verdict: fail` ⇔ at least one gap is critical (a MISSING applicable requirement, or a significant PARTIAL that undermines VSDD).
+
+            For each MISSING applicable requirement, AND each significant PARTIAL, AND any nit you'd want tracked, add a `gaps` entry. The verdict tells the reader whether those gaps block merge or not.
+
+      - name: Parse frontmatter
         id: parse
         run: |
           python3 - <<'PY'
-          import re, json, sys, os
-          out = open('gemini-output.txt').read()
-          m = re.search(r'<verdict>(.*?)</verdict>', out, re.DOTALL)
+          import re, json, sys, os, yaml
+          raw = open('gemini-output.txt').read()
+          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n(.*)$', raw, re.DOTALL)
           if not m:
-              print('ERROR: no <verdict>...</verdict> tag in gemini output', file=sys.stderr)
-              print(out, file=sys.stderr)
+              print('ERROR: no YAML frontmatter at the top of gemini output', file=sys.stderr)
+              print('--- raw ---', file=sys.stderr); print(raw, file=sys.stderr)
               sys.exit(1)
           try:
-              data = json.loads(m.group(1).strip())
-          except json.JSONDecodeError as e:
-              print(f'ERROR: invalid JSON inside <verdict>: {e}', file=sys.stderr)
-              print(m.group(1), file=sys.stderr)
-              sys.exit(1)
-          data['reviewer'] = 'gemini'
-          json.dump(data, open('gemini-eval.json', 'w'), indent=2)
+              fm = yaml.safe_load(m.group(1))
+          except yaml.YAMLError as e:
+              print(f'ERROR: invalid YAML in frontmatter: {e}', file=sys.stderr)
+              print(m.group(1), file=sys.stderr); sys.exit(1)
+          if fm.get('verdict') not in ('pass', 'fail'):
+              print(f"ERROR: verdict must be pass|fail, got {fm.get('verdict')!r}", file=sys.stderr); sys.exit(1)
+          fm['reviewer'] = 'gemini'
+          fm['summary'] = m.group(2).strip()
+          json.dump(fm, open('gemini-eval.json', 'w'), indent=2)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"verdict={data['verdict']}\n")
-          print(f"gemini verdict: {data['verdict']}, gaps: {len(data.get('gaps', []))}")
+              f.write(f"verdict={fm['verdict']}\n")
+          print(f"gemini verdict: {fm['verdict']}, gaps: {len(fm.get('gaps') or [])}")
           PY
 
       - uses: actions/upload-artifact@v4
@@ -194,11 +208,11 @@ jobs:
         uses: ./.github/actions/claude
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          output-file: claude-eval.json
+          output-file: claude-eval.md
           prompt: |
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
-            Read `memory-canonical.md` (the canonical VSDD doc) and `eval-input.txt` (which already bundles MEMORY.md plus every workflow and composite action in this PR — use whichever is more convenient). The repo's `.github/workflows/*.yml` and `.github/actions/*/action.yml` files are also available for direct inspection.
+            Read `memory-canonical.md` (the canonical VSDD doc) and `eval-input.txt` (which bundles MEMORY.md plus every workflow and composite action in this PR — use whichever is more convenient). `.github/workflows/*.yml` and `.github/actions/*/action.yml` are also available for direct inspection.
 
             Evaluate whether the workflows correctly enforce VSDD requirements:
             - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
@@ -211,24 +225,58 @@ jobs:
 
             A repo with no test suite (docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A, not MISSING.
 
-            The output file MUST be valid JSON with this exact schema:
-            {
-              "verdict": "pass" or "fail",
-              "rationale": "one paragraph",
-              "gaps": [{"title": "[ci-meta] short description ≤60 chars", "body": "detailed explanation with VSDD section reference"}],
-              "reviewer": "claude"
-            }
+            # OUTPUT FORMAT (strict)
 
-      - name: Parse verdict
+            Write a single file at the path you were told to use as `output-file`. Begin the file with YAML frontmatter:
+
+            ---
+            verdict: pass | fail
+            rationale: |
+              one paragraph
+            gaps:
+              - title: "[ci-meta] short description ≤60 chars"
+                body: |
+                  detailed explanation with VSDD section reference and concrete remediation
+              - title: "..."
+                body: |
+                  ...
+            ---
+
+            (free-form summary may follow but is ignored by the parser)
+
+            The frontmatter MUST be the first thing in the file (no leading whitespace, no preamble).
+
+            Verdict semantics: `pass` answers "should this PR be approved?", not "are there zero gaps?". A `pass` with non-critical gaps listed is fine — the gaps still get tracked but the meta-CI doesn't block merge.
+
+            - `verdict: pass` ⇔ gaps are nice-to-have / non-critical / partial coverage that doesn't undermine VSDD.
+            - `verdict: fail` ⇔ at least one gap is critical (a MISSING applicable requirement, or a significant PARTIAL that undermines VSDD).
+
+      - name: Parse frontmatter
         id: parse
         run: |
-          if [ ! -f claude-eval.json ]; then
-            echo "::error::claude-eval.json not produced"
-            exit 1
-          fi
-          VERDICT=$(python3 -c "import json; print(json.load(open('claude-eval.json'))['verdict'])")
-          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
-          echo "claude verdict: $VERDICT"
+          python3 - <<'PY'
+          import re, json, sys, os, yaml
+          if not os.path.exists('claude-eval.md'):
+              print('::error::claude-eval.md not produced'); sys.exit(1)
+          raw = open('claude-eval.md').read()
+          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n(.*)$', raw, re.DOTALL)
+          if not m:
+              print('ERROR: no YAML frontmatter at top of claude output', file=sys.stderr)
+              print('--- raw ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
+          try:
+              fm = yaml.safe_load(m.group(1))
+          except yaml.YAMLError as e:
+              print(f'ERROR: invalid YAML in frontmatter: {e}', file=sys.stderr)
+              print(m.group(1), file=sys.stderr); sys.exit(1)
+          if fm.get('verdict') not in ('pass', 'fail'):
+              print(f"ERROR: verdict must be pass|fail, got {fm.get('verdict')!r}", file=sys.stderr); sys.exit(1)
+          fm['reviewer'] = 'claude'
+          fm['summary'] = m.group(2).strip()
+          json.dump(fm, open('claude-eval.json', 'w'), indent=2)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"verdict={fm['verdict']}\n")
+          print(f"claude verdict: {fm['verdict']}, gaps: {len(fm.get('gaps') or [])}")
+          PY
 
       - uses: actions/upload-artifact@v4
         with:
@@ -347,8 +395,56 @@ jobs:
                               f.write(f" — {url}")
                           f.write("\n")
 
+          # Stash the consensus state for the PR-review step downstream.
+          state = {
+              'verdict': 'fail' if fail else 'pass',
+              'gemini_verdict': gemini['verdict'],
+              'claude_verdict': claude['verdict'],
+              'gemini_rationale': gemini.get('rationale', ''),
+              'claude_rationale': claude.get('rationale', ''),
+              'gaps': all_gaps,
+              'opened_issue_urls': opened,
+          }
+          json.dump(state, open('consensus-state.json', 'w'), indent=2)
+
           if fail:
               print(f"\nFAIL: {len(all_gaps)} gap issue(s) opened or already open.")
               sys.exit(1)
           print("\nPASS: both reviewers agree the CI enforces VSDD correctly.")
           PY
+
+      - name: Submit consensus PR review (APPROVE / REQUEST_CHANGES)
+        if: always() && hashFiles('consensus-state.json') != '' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const state = JSON.parse(fs.readFileSync('consensus-state.json', 'utf8'));
+            const event = state.verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
+            const lines = [
+              `**VSDD CI Meta-Review** _(advisory; status check is what gates merge)_  `,
+              `_Consensus: \`${state.verdict}\` &nbsp;·&nbsp; Gemini: \`${state.gemini_verdict}\` &nbsp;·&nbsp; Claude: \`${state.claude_verdict}\`_`,
+              ``,
+              `**Gemini rationale.** ${state.gemini_rationale}`,
+              ``,
+              `**Claude rationale.** ${state.claude_rationale}`,
+              ``,
+            ];
+            if (state.gaps.length > 0) {
+              lines.push(`### Gaps (${state.gaps.length})`, ``);
+              for (let i = 0; i < state.gaps.length; i++) {
+                const g = state.gaps[i];
+                const flagged = (g.flagged_by || []).sort().join(' + ');
+                const url = state.opened_issue_urls[i];
+                lines.push(`- ${g.title} _(flagged by ${flagged})_${url ? ` — ${url}` : ''}`);
+              }
+              lines.push(``);
+            }
+            lines.push(`---`, `_Automated meta-review per MEMORY.md §I (Adversary). Two cognitive sources required to reach consensus._`);
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+              event,
+              body: lines.join('\n'),
+            });
