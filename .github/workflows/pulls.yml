@@ -7,7 +7,10 @@ name: VSDD Pull Request Review (Phase 3)
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # `ready_for_review` is added so jobs run when a draft is promoted to
+    # ready. Drafts themselves are skipped at job level via the
+    # `if: github.event.pull_request.draft != true` guard below.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_call:
     secrets:
       GEMINI_API_KEY:
@@ -24,6 +27,7 @@ permissions:
 jobs:
   prep:
     name: Compute PR diff
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
