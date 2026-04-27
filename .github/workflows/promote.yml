@@ -1,0 +1,130 @@
+name: VSDD Promotion Pipeline
+
+# Assignment-triggered promotion of issues through the VSDD lifecycle.
+#
+#   - `spec:goal` issue + org-member self-assignment
+#       → promote-goal-to-tech: agent decomposes the goal into N tech-spec
+#         sub-issues (one technical problem each) and opens them.
+#
+#   - `spec:tech` issue + org-member self-assignment
+#       → promote-tech-to-pr: 5-phase pipeline opens a draft PR
+#         (1 scaffold → 2 author tests → 3 Red gate → 4 implement → 5
+#         Green gate, with retry loops capped at 3 attempts each).
+#
+# Ownership gate: the assignment must result in at least one org-member
+# assignee on the issue. External or bot-authored issues stay dormant
+# until an org member self-assigns. This gives a single uniform HIL gate
+# for autonomous-but-supervised work across sw2m repos.
+
+on:
+  issues:
+    types: [assigned]
+  workflow_call:
+    secrets:
+      GEMINI_API_KEY:
+        required: true
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  ownership:
+    name: Verify org-member ownership
+    runs-on: ubuntu-latest
+    outputs:
+      owned: ${{ steps.check.outputs.owned }}
+      owner: ${{ steps.check.outputs.owner }}
+      kind: ${{ steps.classify.outputs.kind }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORG: sw2m
+          ASSIGNEES_JSON: ${{ toJson(github.event.issue.assignees) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OWNER=""
+          for login in $(jq -r '.[].login' <<< "$ASSIGNEES_JSON"); do
+            if [ -n "$login" ] && gh api "orgs/$ORG/members/$login" >/dev/null 2>&1; then
+              OWNER="$login"
+              echo "Owner: $login (assignee, org member)"
+              break
+            fi
+          done
+          if [ -n "$OWNER" ]; then
+            echo "owned=true"   >> "$GITHUB_OUTPUT"
+            echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+          else
+            echo "owned=false"  >> "$GITHUB_OUTPUT"
+            echo "owner="       >> "$GITHUB_OUTPUT"
+            echo "::notice::No org-member assignee. Promotion pipeline skipped."
+          fi
+
+      - id: classify
+        env:
+          LABELS_JSON: ${{ toJson(github.event.issue.labels) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Pick the FIRST recognized spec label encountered. If both are
+          # set (a misconfiguration), prefer `spec:tech` — tech is the
+          # narrower, more actionable promotion.
+          KIND=""
+          if jq -e '.[] | select(.name == "spec:tech")' <<< "$LABELS_JSON" >/dev/null; then
+            KIND="tech"
+          elif jq -e '.[] | select(.name == "spec:goal")' <<< "$LABELS_JSON" >/dev/null; then
+            KIND="goal"
+          fi
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          if [ -z "$KIND" ]; then
+            echo "::notice::Issue has neither spec:goal nor spec:tech. Promotion pipeline is a no-op."
+          else
+            echo "Spec kind: $KIND"
+          fi
+
+  promote-goal-to-tech:
+    name: Decompose goal-spec into tech-spec sub-issues
+    needs: [ownership]
+    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.kind == 'goal' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run promote-goal-to-tech (composite; org gate inside)
+        uses: ./.github/actions/promote-goal-to-tech
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          owner-login: ${{ needs.ownership.outputs.owner }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  promote-tech-to-pr:
+    name: Implement tech-spec via 5-phase pipeline
+    needs: [ownership]
+    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.kind == 'tech' }}
+    runs-on: ubuntu-latest
+    # Serialize per-issue runs to avoid race on branch creation if the
+    # same tech-spec is unassigned and reassigned quickly. `cancel-in-progress`
+    # = false: let the in-flight run finish — half-implemented PRs are
+    # worse than two ordered runs.
+    concurrency:
+      group: promote-tech-to-pr-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run promote-tech-to-pr (composite; org gate inside)
+        uses: ./.github/actions/promote-tech-to-pr
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          owner-login: ${{ needs.ownership.outputs.owner }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

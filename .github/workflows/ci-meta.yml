@@ -149,7 +149,15 @@ jobs:
             gaps:
               - title: "[ci-meta] short description (≤60 chars)"
                 body: |
-                  detailed explanation with VSDD section reference and concrete remediation
+                  Goal-spec form. Describe the problem only — what's missing,
+                  what's broken, what symptom is observed, which §-reference
+                  the gap maps to. Concrete technical detail is welcome ONLY
+                  insofar as it characterizes the problem ("Phase 2a is
+                  unenforced because no workflow runs tests with new tests
+                  expected to fail").
+                  Do NOT propose a solution, fix, or implementation path.
+                  Solutions belong in tech-spec sub-issues, opened by the
+                  promotion pipeline once an org member assigns themselves.
               - title: "..."
                 body: |
                   ...
@@ -289,7 +297,13 @@ jobs:
             gaps:
               - title: "[ci-meta] short description ≤60 chars"
                 body: |
-                  detailed explanation with VSDD section reference and concrete remediation
+                  Goal-spec form. Describe the problem only — what's missing,
+                  what's broken, what symptom is observed, which §-reference
+                  the gap maps to. Concrete technical detail is welcome ONLY
+                  insofar as it characterizes the problem.
+                  Do NOT propose a solution, fix, or implementation path.
+                  Solutions belong in tech-spec sub-issues, opened by the
+                  promotion pipeline once an org member assigns themselves.
               - title: "..."
                 body: |
                   ...
@@ -446,11 +460,19 @@ jobs:
               if any(item['title'] == g['title'] for item in existing):
                   print(f"  skip (already open): {g['title']}")
                   continue
+              # `spec:goal` enables the assignment-triggered promotion
+              # pipeline (promote.yml). When an org member self-assigns
+              # this issue, promote-goal-to-tech decomposes it into
+              # tech-spec sub-issues. `ci-meta` is provenance only.
               r = subprocess.run(
-                  ['gh', 'issue', 'create', '--title', g['title'], '--body', body, '--label', 'ci-meta'],
+                  ['gh', 'issue', 'create', '--title', g['title'], '--body', body,
+                   '--label', 'ci-meta', '--label', 'spec:goal'],
                   capture_output=True, text=True,
               )
               if r.returncode != 0:
+                  # Labels may not exist yet on first run of this workflow
+                  # in a downstream repo. Fall back to label-less creation
+                  # so a missing label doesn't block tracking the gap.
                   r = subprocess.run(
                       ['gh', 'issue', 'create', '--title', g['title'], '--body', body],
                       capture_output=True, text=True, check=True,

@@ -294,12 +294,48 @@ Multi-word symbols are an indicator of poorly architected code, because they can
 
 ## CI/CD
 
-This repo's `.github/workflows/` enforces VSDD on itself. Four workflows, mirroring the pipeline:
+This repo's `.github/workflows/` enforces VSDD on itself. Six workflows, mirroring the pipeline:
 
-- **`issues.yml`** — fires on `issues: [opened, edited]`. Runs Gemini as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body and posts the critique as a comment. **Advisory only — never gates.**
-- **`pulls.yml`** — fires on `pull_request: [opened, synchronize, reopened]`. Runs *two* adversarial reviewers in parallel — Gemini and Claude — against the diff with `MEMORY.md` as the standard (Phase 3, Adversarial Refinement). Two cognitive sources per §V. Each posts a PR comment. **Advisory only — never gates.**
+- **`issues.yml`** — fires on `issues: [opened, edited, assigned]`. Runs Gemini as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body and posts the critique as a comment. **Advisory only — never gates.** Subject to the **ownership gate** (see below) — issues authored by non-org-members stay dormant until an org member self-assigns.
+- **`pulls.yml`** — fires on `pull_request: [opened, synchronize, reopened, ready_for_review, assigned]`. Runs *two* adversarial reviewers in parallel — Gemini and Claude — against the diff with `MEMORY.md` as the standard (Phase 3, Adversarial Refinement). Two cognitive sources per §V. Each posts a PR comment. **Advisory only — never gates.** Also subject to the ownership gate.
+- **`promote.yml`** — fires on `issues: [assigned]`. The assignment-triggered promotion pipeline (see below).
+- **`labels.yml`** — fires on `workflow_dispatch` and on push to `main` when `.github/labels.yml` changes. Idempotent label sync; manages `spec:goal`, `spec:tech`, `needs-human`, `ci-meta`.
 - **`test.yml`** — fires on `push` to `main` and on `pull_request`. Markdown lint, external link check (lychee), and a structural sanity check that all nine Roman-numeral sections of `MEMORY.md` are present. **Gating** — required by the branch-protection rule on `main`.
-- **`ci-meta.yml`** — fires on `pull_request` when `.github/workflows/**` or `MEMORY.md` change. Runs Gemini *and* Claude in parallel against the proposed CI workflows; both must reach consensus that the CI correctly enforces VSDD. Disagreement opens a tracked issue per gap (deduped by title) and fails the consensus check. **Surfaces red on disagreement but is not in the protection rule's required-checks list** — gaps are tracked as issues for follow-up; the user decides whether to address each before merge.
+- **`ci-meta.yml`** — fires on `pull_request` when `.github/workflows/**` or `MEMORY.md` change. Runs Gemini *and* Claude in parallel against the proposed CI workflows; both must reach consensus that the CI correctly enforces VSDD. Disagreement opens a tracked **goal-spec** issue per gap (deduped by title; labeled `spec:goal` and `ci-meta`) and fails the consensus check. The opened issues are problem-only — they describe what's missing, never propose a solution; solutions come from the promotion pipeline after an org member assigns themselves. **Surfaces red on disagreement but is not in the protection rule's required-checks list** — gaps are tracked as issues for follow-up; the user decides whether to address each before merge.
+
+### Ownership gate (HIL)
+
+CI runs are gated on **ownership**: an issue or PR is *owned* iff its author is an org member OR at least one current assignee is. Unowned items stay dormant — workflows skip until an org member self-assigns. This gives a single uniform Human-In-The-Loop control:
+
+- External or bot-authored issues/PRs cannot consume agent budget by default.
+- An org member assigning themselves IS the "I take responsibility for this" signal.
+- Re-trigger by unassigning + reassigning.
+
+The gate runs as a top-level `ownership` job in each workflow; downstream jobs `needs: [ownership]` and skip when unowned. The owner login is also threaded into the gemini/claude composite actions as `actor-override` so the inner org-member check validates against the *owner*, not the workflow trigger sender (which on a fork-PR `synchronize` event would be the external pusher).
+
+### Promotion pipeline (`promote.yml`)
+
+The promotion pipeline lets sw2m repos run autonomously with HIL only at decision points (assignment). On `issues: [assigned]`:
+
+1. **Goal → tech.** A `spec:goal` issue, when assigned to an org member, is decomposed by Claude into N tech-spec sub-issues (one technical problem each per §VII). Each new sub-issue carries `spec:tech` and a back-link to the parent goal. The agent's job is decomposition, not solution.
+
+2. **Tech → draft PR.** A `spec:tech` issue, when assigned, kicks off the **5-phase tech-to-PR pipeline** mapped to §VIII (4-Result Rule):
+
+   | Phase | Run by | Purpose |
+   | --- | --- | --- |
+   | 1. Scaffold | CI (no agent) | Branch off `main`, draft PR with `Closes #N` and the tech-spec embedded in the body. |
+   | 2. Author tests | Agent | Write new tests + identify regression set. Tests must be non-tautological and must not modify the regression set. |
+   | 3. Red gate | CI (no agent) | Run new tests (expect fail) and regression tests (expect pass). Mismatch → loop to Phase 2. **Cap: 3 retries.** |
+   | 4. Implement | Agent | Write code that makes the new tests pass without breaking regressions. Tests are immutable in this phase. |
+   | 5. Green gate | CI (no agent) | Run new tests (expect pass) and regression tests (expect pass). Mismatch → loop to Phase 4. **Cap: 3 retries.** |
+
+   On exhaustion of either retry budget the pipeline **bails**: applies `needs-human` to the issue, comments with the last test output on the issue and PR, leaves the PR draft. A human takes over.
+
+   On success the PR is left as draft; promoting to ready-for-review is a human decision and triggers `pulls.yml` Phase 3 adversarial review.
+
+   **Docs-repo carve-out.** Repos with no detectable test runner (e.g. this one) follow the §VIII N/A path: Phases 2/3/5 are skipped and Phase 4 runs once. The draft PR is the artifact for human review.
+
+### Reusing the workflows
 
 Each workflow exposes a `workflow_call:` trigger so other `sw2m` repos can reuse them:
 

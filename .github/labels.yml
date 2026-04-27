@@ -1,0 +1,22 @@
+# Labels managed by `.github/workflows/labels.yml`. Re-run that workflow
+# manually (workflow_dispatch) after editing this file — push-on-main is
+# wired but only for the philosophies repo itself.
+#
+# Color palette: green = positive/goal, blue = technical/scoped,
+# yellow = attention-needed, gray = provenance/meta.
+
+- name: "spec:goal"
+  color: "0e8a16"  # green
+  description: "Goal-spec issue. Carries breadth (many goals), no implementation detail. Assignment to an org member triggers goal→tech promotion."
+
+- name: "spec:tech"
+  color: "1d76db"  # blue
+  description: "Tech-spec issue. Covers exactly one technical problem. Assignment to an org member triggers tech→PR promotion (5-phase pipeline)."
+
+- name: "needs-human"
+  color: "fbca04"  # yellow
+  description: "Promotion pipeline bailed (Red gate or Green gate exhausted retries). Human intervention required."
+
+- name: "ci-meta"
+  color: "5319e7"  # purple
+  description: "Issue opened by VSDD CI meta-review consensus. Tracks a CI gap against MEMORY.md."

@@ -1,0 +1,636 @@
+name: "Promote tech-spec to draft PR (5-phase pipeline)"
+description: |
+  Implements a tech-spec issue end-to-end via a 5-phase pipeline mapped
+  to MEMORY.md §VIII (Regression Sets and the 4-Result Rule):
+
+    Phase 1 — Scaffold     (CI: branch + draft PR with spec embedded)
+    Phase 2 — Author tests (agent writes new tests, declares regression set)
+    Phase 3 — Red gate     (CI runs tests, expects new=red + regression=green)
+                            mismatch → loop to Phase 2 (max 3 retries)
+    Phase 4 — Implement    (agent writes code)
+    Phase 5 — Green gate   (CI runs tests, expects new=green + regression=green)
+                            mismatch → loop to Phase 4 (max 3 retries)
+
+  On exhaustion of either retry budget the action labels the issue
+  `needs-human` and comments with the last test output. The PR stays
+  draft — a human takes over from there.
+
+  Repos with no detectable test runner (docs repos, e.g. sw2m/philosophies)
+  follow the §VIII N/A path: Phases 2/3/5 are skipped and Phase 4 runs
+  once. The draft PR is the artifact for human review.
+
+inputs:
+  issue-number:
+    description: "Tech-spec issue to implement."
+    required: true
+  owner-login:
+    description: "Org-member login that took ownership by self-assigning."
+    required: true
+  anthropic-api-key:
+    description: "ANTHROPIC_API_KEY value."
+    required: true
+  github-token:
+    description: "Token used to read/edit the issue, push branch, open PR."
+    required: true
+  base-branch:
+    description: "Branch to fork the implementation branch from."
+    required: false
+    default: "main"
+  max-retries:
+    description: "Max retries per gate (Red, Green). 3 = up to 4 attempts each."
+    required: false
+    default: "3"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify org membership of the owner
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ORG: sw2m
+        OWNER: ${{ inputs.owner-login }}
+      run: |
+        if ! gh api "orgs/$ORG/members/$OWNER" >/dev/null 2>&1; then
+          echo "::error::owner-login '$OWNER' is not a public sw2m member; refusing to run."
+          exit 1
+        fi
+        echo "✓ owner $OWNER is a $ORG org member."
+
+    - name: Read tech-spec issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+      run: |
+        set -euo pipefail
+        gh issue view "$ISSUE_NUMBER" --json title,body,number,url > tech.json
+        jq -r '.title' tech.json > tech-title.txt
+        jq -r '.body'  tech.json > tech-body.txt
+        jq -r '.url'   tech.json > tech-url.txt
+        echo "tech-spec: $(cat tech-title.txt)"
+
+    - name: Detect test runner
+      id: runner
+      shell: bash
+      run: |
+        set -euo pipefail
+        # First match wins. The detected default command is a hint to the
+        # agent in Phase 2; the agent may override with a more specific
+        # command in its frontmatter output.
+        CMD=""
+        if [ -f Makefile ] && grep -qE '^test:' Makefile; then
+          CMD="make test"
+        elif [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then
+          if [ -f bun.lockb ] || [ -f bun.lock ]; then CMD="bun test"; else CMD="npm test"; fi
+        elif [ -f deno.json ] || [ -f deno.jsonc ]; then
+          CMD="deno test -A"
+        elif [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -f setup.py ]; then
+          CMD="pytest"
+        elif [ -f Cargo.toml ]; then
+          CMD="cargo test"
+        elif [ -f go.mod ]; then
+          CMD="go test ./..."
+        fi
+        echo "default-cmd=$CMD" >> "$GITHUB_OUTPUT"
+        if [ -z "$CMD" ]; then
+          echo "no-runner=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::No test runner detected. §VIII (4-Result Rule) is N/A; Phases 2/3/5 will be skipped."
+        else
+          echo "no-runner=false" >> "$GITHUB_OUTPUT"
+          echo "Detected test command: $CMD"
+        fi
+
+    - name: Configure git
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        git config user.name  "promote-tech-to-pr[bot]"
+        git config user.email "promote-tech-to-pr@users.noreply.github.com"
+
+    - name: Phase 1 — Scaffold (branch + draft PR)
+      id: scaffold
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        OWNER_LOGIN: ${{ inputs.owner-login }}
+        BASE_BRANCH: ${{ inputs.base-branch }}
+      run: |
+        set -euo pipefail
+        BRANCH="feat/issue-$ISSUE_NUMBER-promote"
+        # Idempotent: if the branch already exists upstream from a prior
+        # run, check it out instead of creating fresh. Half-implemented
+        # state from an interrupted run is still useful context for the
+        # agent.
+        git fetch origin "$BASE_BRANCH"
+        if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+          git fetch origin "$BRANCH"
+          git checkout "$BRANCH"
+          echo "Branch $BRANCH already existed; resuming."
+        else
+          git checkout -b "$BRANCH" "origin/$BASE_BRANCH"
+          # Make a no-op commit so the branch can be pushed and a PR opened.
+          # The actual implementation lands in subsequent phases.
+          mkdir -p .vsdd
+          {
+            echo "Promotion run for issue #$ISSUE_NUMBER"
+            echo "Owner: @$OWNER_LOGIN"
+            echo "Started: $(date -u +%FT%TZ)"
+          } > .vsdd/promotion-$ISSUE_NUMBER.log
+          git add .vsdd/promotion-$ISSUE_NUMBER.log
+          git commit -m "chore(promote): scaffold for #$ISSUE_NUMBER"
+          git push -u origin "$BRANCH"
+        fi
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+        # Open or reuse the draft PR.
+        EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+        if [ -n "$EXISTING_PR" ]; then
+          echo "pr-number=$EXISTING_PR" >> "$GITHUB_OUTPUT"
+          echo "Reusing existing PR #$EXISTING_PR for branch $BRANCH"
+        else
+          TITLE=$(cat tech-title.txt)
+          BODY_FILE=$(mktemp)
+          {
+            echo "Closes #$ISSUE_NUMBER"
+            echo ""
+            echo "_Draft PR scaffolded by \`promote-tech-to-pr\` after @$OWNER_LOGIN"
+            echo "self-assigned the tech-spec. The 5-phase pipeline (Phase 1 scaffold →"
+            echo "Phase 2 author tests → Phase 3 Red gate → Phase 4 implement → Phase 5"
+            echo "Green gate) drives this PR to completion or bails with \`needs-human\`._"
+            echo ""
+            echo "## Embedded tech-spec"
+            echo ""
+            cat tech-body.txt
+          } > "$BODY_FILE"
+          PR_URL=$(gh pr create --draft --base "$BASE_BRANCH" --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE")
+          PR_NUMBER=$(basename "$PR_URL")
+          echo "pr-number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "Opened draft PR #$PR_NUMBER: $PR_URL"
+        fi
+
+    - uses: actions/setup-node@v6
+      with:
+        node-version: "20"
+
+    - name: Install Claude Code CLI
+      shell: bash
+      run: npm install -g @anthropic-ai/claude-code@latest
+
+    - name: Phases 2-3 — Author tests + Red gate (with retry)
+      id: red-gate
+      if: ${{ steps.runner.outputs.no-runner == 'false' }}
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BRANCH: ${{ steps.scaffold.outputs.branch }}
+        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
+        DEFAULT_TEST_CMD: ${{ steps.runner.outputs.default-cmd }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+      run: |
+        set -euo pipefail
+
+        invoke_claude() {
+          local input="$1" output="$2"
+          local primary="claude-opus-4-5" fallback="claude-sonnet-4-5"
+          set +e
+          claude --print --model "$primary" \
+            --allowed-tools "Bash Edit Write Read Glob Grep" \
+            --permission-mode bypassPermissions \
+            < "$input" > "$output" 2>claude-err.log
+          local rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Phase agent: primary $primary exited $rc; falling back to $fallback"
+            tail -50 claude-err.log
+            claude --print --model "$fallback" \
+              --allowed-tools "Bash Edit Write Read Glob Grep" \
+              --permission-mode bypassPermissions \
+              < "$input" > "$output" 2>claude-err.log
+            rc=$?
+          fi
+          set -e
+          return $rc
+        }
+
+        ATTEMPTS=$((MAX_RETRIES + 1))
+        attempt=0
+        red_gate_passed=false
+        last_failure=""
+
+        while [ $attempt -lt $ATTEMPTS ]; do
+          attempt=$((attempt + 1))
+          echo ""
+          echo "=== Phase 2 — Author tests (attempt $attempt of $ATTEMPTS) ==="
+
+          PHASE2_INPUT=$(mktemp)
+          {
+            cat <<'PROMPT_EOF'
+        # CRITICAL OUTPUT FORMAT (read FIRST)
+
+        At the END of your response, after you have used your tools to write
+        the test files, output a YAML frontmatter block summarizing what you
+        did. The block must be the LAST thing in your response, delimited
+        by `---` lines:
+
+        ---
+        new_test_files:
+          - path/to/new_test_file_1.ext
+          - path/to/new_test_file_2.ext
+        new_test_command: "exact command to run ONLY the new tests"
+        regression_test_command: "exact command to run ONLY the pre-existing tests"
+        ---
+
+        Both commands must exit 0 on pass, non-zero on fail. They will be
+        run from the repo root. They are how Phase 3 (Red Gate) and Phase 5
+        (Green Gate) classify results.
+
+        # TASK
+
+        You are running Phase 2 of the VSDD tech-to-PR pipeline. Read
+        MEMORY.md §VIII (4-Result Rule) for context. Your job:
+
+        1. Read the embedded tech-spec issue.
+        2. Identify the regression set: pre-existing tests in this repo
+           that exercise the blast radius of the change. Do NOT modify
+           those — they are the regression set.
+        3. Write NEW test files for the tech-spec. The new tests must
+           FAIL right now (no implementation yet — that's Phase 4) and
+           must be non-tautological (they would fail even if you wrote a
+           naive wrong implementation).
+        4. Use your tools (Write, Edit, Bash) to create the new test
+           files in this repo. Do not commit — Phase 3 commits if Red
+           passes.
+        5. Output the frontmatter block at the END of your response.
+
+        Constraints:
+        - One technical problem per tech-spec (per §VII). If the issue
+          covers more than one, STOP and write a single-line frontmatter
+          with empty `new_test_files` and a comment in the response body
+          explaining why; the pipeline will bail.
+        - The default test command detected for this repo is in env var
+          DEFAULT_TEST_CMD; you may use it as a hint but must produce the
+          two specific commands above.
+
+        ---
+        PROMPT_EOF
+            printf 'DEFAULT_TEST_CMD=%s\n\n' "$DEFAULT_TEST_CMD"
+            printf -- '--- MEMORY.md ---\n'
+            cat MEMORY.md
+            printf '\n--- TECH-SPEC ISSUE TITLE ---\n'
+            cat tech-title.txt
+            printf '\n--- TECH-SPEC ISSUE BODY ---\n'
+            cat tech-body.txt
+          } > "$PHASE2_INPUT"
+
+          PHASE2_OUTPUT=$(mktemp)
+          if ! invoke_claude "$PHASE2_INPUT" "$PHASE2_OUTPUT"; then
+            last_failure="Phase 2 agent (attempt $attempt) exited non-zero on both primary and fallback models."
+            echo "::warning::$last_failure"
+            tail -50 claude-err.log || true
+            continue
+          fi
+
+          # Extract the frontmatter from the END of the agent output.
+          # The parser writes phase2-meta.json and prints declared files.
+          NEW_FILES=$(python3 .github/scripts/parse-phase2-frontmatter.py "$PHASE2_OUTPUT" 2>phase2-parse-err.log) || {
+            last_failure="Phase 2 frontmatter parse failed (attempt $attempt). $(cat phase2-parse-err.log)"
+            echo "::warning::$last_failure"
+            continue
+          }
+
+          NEW_CMD=$(jq -r '.new_cmd' phase2-meta.json)
+          REG_CMD=$(jq -r '.reg_cmd' phase2-meta.json)
+
+          if [ -z "$NEW_CMD" ] || [ -z "$REG_CMD" ] || [ -z "$NEW_FILES" ]; then
+            last_failure="Phase 2 declared empty new_test_files / new_cmd / reg_cmd (attempt $attempt). The agent did not produce a usable test set."
+            echo "::warning::$last_failure"
+            continue
+          fi
+
+          echo "Phase 2 declared new test files:"; echo "$NEW_FILES"
+          echo "Phase 2 new test command: $NEW_CMD"
+          echo "Phase 2 regression test command: $REG_CMD"
+
+          echo ""
+          echo "=== Phase 3 — Red gate (attempt $attempt) ==="
+          set +e
+          eval "$NEW_CMD" >red-new.log 2>&1
+          NEW_RC=$?
+          eval "$REG_CMD" >red-reg.log 2>&1
+          REG_RC=$?
+          set -e
+
+          echo "  new tests exit: $NEW_RC (expect non-zero)"
+          echo "  regression tests exit: $REG_RC (expect zero)"
+
+          if [ $NEW_RC -ne 0 ] && [ $REG_RC -eq 0 ]; then
+            echo "✓ Red gate passed."
+            red_gate_passed=true
+            git add .
+            if ! git diff --cached --quiet; then
+              git commit -m "test(promote): Phase 2 — author tests for #$ISSUE_NUMBER"
+              git push origin "$BRANCH"
+            fi
+            break
+          fi
+
+          if [ $NEW_RC -eq 0 ]; then
+            last_failure="Red gate FAIL: new tests passed before implementation (likely tautological tests). attempt $attempt of $ATTEMPTS."
+          elif [ $REG_RC -ne 0 ]; then
+            last_failure="Red gate FAIL: regression tests broken by Phase 2 changes. attempt $attempt of $ATTEMPTS."
+          fi
+          echo "::warning::$last_failure"
+          # Reset Phase 2 changes before retry — start clean each attempt.
+          git checkout -- .
+          git clean -fd
+        done
+
+        if [ "$red_gate_passed" != "true" ]; then
+          echo "::error::Red gate exhausted retries. Last failure: $last_failure"
+          {
+            echo "$last_failure"
+            echo ""
+            echo "Last new-tests output:"
+            echo '```'
+            tail -100 red-new.log 2>/dev/null || true
+            echo '```'
+            echo ""
+            echo "Last regression-tests output:"
+            echo '```'
+            tail -100 red-reg.log 2>/dev/null || true
+            echo '```'
+          } > red-bail.md
+          echo "bailed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "bailed=false" >> "$GITHUB_OUTPUT"
+          # Persist the test commands for Phase 5.
+          cp phase2-meta.json phase2-meta-final.json
+        fi
+
+    - name: Bail on Red-gate exhaustion
+      if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
+        OWNER_LOGIN: ${{ inputs.owner-login }}
+      run: |
+        set -euo pipefail
+        gh issue edit "$ISSUE_NUMBER" --add-label needs-human || true
+        BODY=$(mktemp)
+        {
+          echo "**Promote-tech-to-pr bailed at Red gate (Phase 3).**"
+          echo ""
+          echo "_The agent exhausted its retry budget trying to write tests"
+          echo "that fail before implementation while keeping the regression"
+          echo "set green. This usually means: the tech-spec covers more"
+          echo "than one technical problem (§VII violation), or the change"
+          echo "interacts with the regression set in a way the agent can't"
+          echo "isolate._"
+          echo ""
+          cat red-bail.md
+          echo ""
+          echo "@$OWNER_LOGIN — over to you. Inspect the draft PR (#$PR_NUMBER), "
+          echo "either refine the tech-spec into smaller pieces or take over"
+          echo "the implementation by hand."
+        } > "$BODY"
+        gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"
+        gh pr comment "$PR_NUMBER" --body-file "$BODY"
+        echo "::error::Red gate bailed; needs-human label applied."
+        exit 1
+
+    - name: Phases 4-5 — Implement + Green gate (with retry)
+      id: green-gate
+      if: ${{ steps.red-gate.outputs.bailed != 'true' }}
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BRANCH: ${{ steps.scaffold.outputs.branch }}
+        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
+        NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+      run: |
+        set -euo pipefail
+
+        invoke_claude() {
+          local input="$1" output="$2"
+          local primary="claude-opus-4-5" fallback="claude-sonnet-4-5"
+          set +e
+          claude --print --model "$primary" \
+            --allowed-tools "Bash Edit Write Read Glob Grep" \
+            --permission-mode bypassPermissions \
+            < "$input" > "$output" 2>claude-err.log
+          local rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Phase agent: primary $primary exited $rc; falling back to $fallback"
+            tail -50 claude-err.log
+            claude --print --model "$fallback" \
+              --allowed-tools "Bash Edit Write Read Glob Grep" \
+              --permission-mode bypassPermissions \
+              < "$input" > "$output" 2>claude-err.log
+            rc=$?
+          fi
+          set -e
+          return $rc
+        }
+
+        if [ "$NO_RUNNER" = "true" ]; then
+          ATTEMPTS=1
+          NEW_CMD=""
+          REG_CMD=""
+        else
+          ATTEMPTS=$((MAX_RETRIES + 1))
+          NEW_CMD=$(jq -r '.new_cmd' phase2-meta-final.json)
+          REG_CMD=$(jq -r '.reg_cmd' phase2-meta-final.json)
+        fi
+
+        attempt=0
+        green_gate_passed=false
+        last_failure=""
+
+        while [ $attempt -lt $ATTEMPTS ]; do
+          attempt=$((attempt + 1))
+          echo ""
+          echo "=== Phase 4 — Implement (attempt $attempt of $ATTEMPTS) ==="
+
+          PHASE4_INPUT=$(mktemp)
+          {
+            cat <<'PROMPT_EOF'
+        # TASK
+
+        You are running Phase 4 of the VSDD tech-to-PR pipeline. The tests
+        from Phase 2 are committed and failing (Red gate). Your job:
+
+        1. Read the embedded tech-spec issue.
+        2. Implement the spec using your tools (Write, Edit, Bash, Read).
+        3. Do NOT modify the test files — the tests are the spec made
+           executable; modifying them is cheating. If a test is genuinely
+           wrong, comment about it in your response and the pipeline will
+           bail to a human.
+        4. Make the new tests pass without breaking the regression set.
+        5. Be minimal — only write the code that makes the tests pass.
+           Avoid scope creep, refactors, or speculative abstractions.
+
+        Inputs are EMBEDDED below. Do not look for files on disk you did
+        not check out.
+
+        ---
+        PROMPT_EOF
+            printf -- '--- MEMORY.md ---\n'
+            cat MEMORY.md
+            printf '\n--- TECH-SPEC ISSUE TITLE ---\n'
+            cat tech-title.txt
+            printf '\n--- TECH-SPEC ISSUE BODY ---\n'
+            cat tech-body.txt
+            if [ "$NO_RUNNER" != "true" ]; then
+              printf '\n--- TEST RUN COMMANDS ---\n'
+              printf 'New tests command (must end up exit 0): %s\n' "$NEW_CMD"
+              printf 'Regression tests command (must end up exit 0): %s\n' "$REG_CMD"
+            fi
+          } > "$PHASE4_INPUT"
+
+          PHASE4_OUTPUT=$(mktemp)
+          if ! invoke_claude "$PHASE4_INPUT" "$PHASE4_OUTPUT"; then
+            last_failure="Phase 4 agent (attempt $attempt) exited non-zero on both primary and fallback models."
+            echo "::warning::$last_failure"
+            tail -50 claude-err.log || true
+            git checkout -- . && git clean -fd
+            continue
+          fi
+
+          if [ "$NO_RUNNER" = "true" ]; then
+            # No tests to run; agent's tool changes are the artifact.
+            echo "No test runner — committing Phase 4 changes as final."
+            git add .
+            if git diff --cached --quiet; then
+              last_failure="Phase 4 produced no changes (no-runner path)."
+              echo "::warning::$last_failure"
+            else
+              git commit -m "feat(promote): Phase 4 implementation for #$ISSUE_NUMBER"
+              git push origin "$BRANCH"
+              green_gate_passed=true
+            fi
+            break
+          fi
+
+          echo ""
+          echo "=== Phase 5 — Green gate (attempt $attempt) ==="
+          set +e
+          eval "$NEW_CMD" >green-new.log 2>&1
+          NEW_RC=$?
+          eval "$REG_CMD" >green-reg.log 2>&1
+          REG_RC=$?
+          set -e
+
+          echo "  new tests exit: $NEW_RC (expect zero)"
+          echo "  regression tests exit: $REG_RC (expect zero)"
+
+          if [ $NEW_RC -eq 0 ] && [ $REG_RC -eq 0 ]; then
+            echo "✓ Green gate passed."
+            green_gate_passed=true
+            git add .
+            if ! git diff --cached --quiet; then
+              git commit -m "feat(promote): Phase 4 implementation for #$ISSUE_NUMBER"
+              git push origin "$BRANCH"
+            fi
+            break
+          fi
+
+          if [ $NEW_RC -ne 0 ]; then
+            last_failure="Green gate FAIL: new tests still failing — implementation incomplete. attempt $attempt of $ATTEMPTS."
+          elif [ $REG_RC -ne 0 ]; then
+            last_failure="Green gate FAIL: regression broken by implementation. attempt $attempt of $ATTEMPTS."
+          fi
+          echo "::warning::$last_failure"
+          # Reset Phase 4 changes before retry — keep Phase 2 tests
+          # (already committed in last Red-gate-pass) but throw away the
+          # bad implementation attempt. Stash and drop.
+          git stash --include-untracked || true
+          git stash drop || true
+        done
+
+        if [ "$green_gate_passed" != "true" ]; then
+          echo "::error::Green gate exhausted retries. Last failure: $last_failure"
+          {
+            echo "$last_failure"
+            echo ""
+            if [ "$NO_RUNNER" != "true" ]; then
+              echo "Last new-tests output:"; echo '```'
+              tail -100 green-new.log 2>/dev/null || true; echo '```'
+              echo ""
+              echo "Last regression-tests output:"; echo '```'
+              tail -100 green-reg.log 2>/dev/null || true; echo '```'
+            fi
+          } > green-bail.md
+          echo "bailed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "bailed=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Bail on Green-gate exhaustion
+      if: ${{ steps.green-gate.outputs.bailed == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
+        OWNER_LOGIN: ${{ inputs.owner-login }}
+      run: |
+        set -euo pipefail
+        gh issue edit "$ISSUE_NUMBER" --add-label needs-human || true
+        BODY=$(mktemp)
+        {
+          echo "**Promote-tech-to-pr bailed at Green gate (Phase 5).**"
+          echo ""
+          echo "_The implementation either could not pass the new tests"
+          echo "or broke regressions, even after the retry budget. Tests"
+          echo "(from Phase 2) are committed on the branch; the failed"
+          echo "Phase 4 implementation attempts have been discarded._"
+          echo ""
+          cat green-bail.md
+          echo ""
+          echo "@$OWNER_LOGIN — over to you. Either implement by hand on"
+          echo "branch \`${BRANCH:-the PR branch}\`, or refine the tech-spec"
+          echo "and re-trigger by re-assigning yourself."
+        } > "$BODY"
+        gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"
+        gh pr comment "$PR_NUMBER" --body-file "$BODY"
+        echo "::error::Green gate bailed; needs-human label applied."
+        exit 1
+
+    - name: Final summary comment on success
+      if: ${{ steps.green-gate.outputs.bailed == 'false' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
+        OWNER_LOGIN: ${{ inputs.owner-login }}
+        NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
+      run: |
+        set -euo pipefail
+        BODY=$(mktemp)
+        if [ "$NO_RUNNER" = "true" ]; then
+          echo "**Promote-tech-to-pr completed (no-runner path).**" > "$BODY"
+          echo ""                                                  >> "$BODY"
+          echo "_§VIII (4-Result Rule) is N/A on this repo (no test runner detected)._" >> "$BODY"
+          echo "_Phase 4 implementation is committed on the draft PR._"  >> "$BODY"
+        else
+          echo "**Promote-tech-to-pr completed (5-phase path).**"  > "$BODY"
+          echo ""                                                  >> "$BODY"
+          echo "_Red gate ✓ &nbsp;·&nbsp; Green gate ✓_"            >> "$BODY"
+          echo "_4 results across 2 runs satisfied per §VIII._"     >> "$BODY"
+        fi
+        echo ""                                                    >> "$BODY"
+        echo "Draft PR: #$PR_NUMBER. Promoting from draft to ready" >> "$BODY"
+        echo "is a human decision — Phase 3 adversarial review (pulls.yml)" >> "$BODY"
+        echo "runs after promotion."                                >> "$BODY"
+        gh pr comment "$PR_NUMBER" --body-file "$BODY"
+        gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"
