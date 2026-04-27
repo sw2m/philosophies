@@ -129,16 +129,29 @@ jobs:
           script: |
             const fs = require('fs');
             const raw = fs.readFileSync('review.md', 'utf8');
-            // Parse YAML frontmatter at the top: ---\nverdict: pass|fail\n---\n
-            const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-            let verdict = null, body = raw;
-            if (m) {
-              const fmMatch = m[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
-              verdict = fmMatch ? fmMatch[1].toLowerCase() : null;
-              body = m[2].trim();
+            // Forgiving verdict extractor (same as ci-meta consensus parser):
+            //   1. Strict frontmatter at the top: ---\nverdict: ...\n---
+            //   2. An embedded frontmatter block elsewhere
+            //   3. A bare 'verdict: pass|fail' line anywhere
+            // Falls through to 'unparseable' which fails the workflow.
+            function extractVerdict(text) {
+              const m1 = text.match(/^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
+              if (m1) {
+                const fm = m1[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
+                if (fm) return { verdict: fm[1].toLowerCase(), body: m1[2].trim() };
+              }
+              const m2 = text.match(/\n---\s*\n(verdict\s*:\s*(?:pass|fail)[\s\S]*?)\n---\s*\n/);
+              if (m2) {
+                const fm = m2[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
+                if (fm) return { verdict: fm[1].toLowerCase(), body: text };
+              }
+              const m3 = text.match(/^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b/im);
+              if (m3) return { verdict: m3[1].toLowerCase(), body: text };
+              return { verdict: null, body: text };
             }
+            const { verdict, body } = extractVerdict(raw);
             if (verdict !== 'pass' && verdict !== 'fail') {
-              core.setFailed(`Gemini did not produce a parseable verdict frontmatter (got: ${verdict ?? 'none'}). Raw output preserved as the review body for human triage; failing the workflow.`);
+              core.setFailed('Gemini output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
             }
             const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
             const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
@@ -172,6 +185,26 @@ jobs:
           # directly in the prompt rather than asking Claude to "read" them.
           stdin-file: gemini-stdin.txt
           prompt: |
+            # CRITICAL OUTPUT FORMAT (read this FIRST)
+
+            Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
+
+            Acceptable response example:
+
+            ```
+            ---
+            verdict: fail
+            ---
+
+            - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
+            - path/to/other.ts:10 — Nitpick. Fix: …
+            ```
+
+            If you do not produce frontmatter as your first output, the workflow
+            will fail and your review will be discarded. Non-negotiable.
+
+            # TASK
+
             You are an adversarial Phase 3 reviewer (MEMORY.md §II — VSDD).
             The canonical VSDD doc and the PR diff under review are
             EMBEDDED below in the same message — do not look for files; if
@@ -224,15 +257,25 @@ jobs:
           script: |
             const fs = require('fs');
             const raw = fs.readFileSync('review.md', 'utf8');
-            const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-            let verdict = null, body = raw;
-            if (m) {
-              const fmMatch = m[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
-              verdict = fmMatch ? fmMatch[1].toLowerCase() : null;
-              body = m[2].trim();
+            // Same forgiving verdict extractor as the Gemini job above.
+            function extractVerdict(text) {
+              const m1 = text.match(/^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/);
+              if (m1) {
+                const fm = m1[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
+                if (fm) return { verdict: fm[1].toLowerCase(), body: m1[2].trim() };
+              }
+              const m2 = text.match(/\n---\s*\n(verdict\s*:\s*(?:pass|fail)[\s\S]*?)\n---\s*\n/);
+              if (m2) {
+                const fm = m2[1].match(/^\s*verdict\s*:\s*(pass|fail)\s*$/im);
+                if (fm) return { verdict: fm[1].toLowerCase(), body: text };
+              }
+              const m3 = text.match(/^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b/im);
+              if (m3) return { verdict: m3[1].toLowerCase(), body: text };
+              return { verdict: null, body: text };
             }
+            const { verdict, body } = extractVerdict(raw);
             if (verdict !== 'pass' && verdict !== 'fail') {
-              core.setFailed(`Claude did not produce a parseable verdict frontmatter (got: ${verdict ?? 'none'}).`);
+              core.setFailed('Claude output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
             }
             const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
             const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;

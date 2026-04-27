@@ -166,20 +166,32 @@ jobs:
           python3 - <<'PY'
           import re, json, sys, os, yaml
           raw = open('gemini-output.txt').read()
-          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n(.*)$', raw, re.DOTALL)
-          if not m:
-              print('ERROR: no YAML frontmatter at the top of gemini output', file=sys.stderr)
-              print('--- raw ---', file=sys.stderr); print(raw, file=sys.stderr)
-              sys.exit(1)
-          try:
-              fm = yaml.safe_load(m.group(1))
-          except yaml.YAMLError as e:
-              print(f'ERROR: invalid YAML in frontmatter: {e}', file=sys.stderr)
-              print(m.group(1), file=sys.stderr); sys.exit(1)
-          if fm.get('verdict') not in ('pass', 'fail'):
-              print(f"ERROR: verdict must be pass|fail, got {fm.get('verdict')!r}", file=sys.stderr); sys.exit(1)
+          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n?(.*)$', raw, re.DOTALL)
+          fm = None
+          summary = raw
+          if m:
+              try:
+                  fm = yaml.safe_load(m.group(1))
+                  summary = m.group(2).strip()
+              except yaml.YAMLError as e:
+                  print(f'WARN: frontmatter present but invalid YAML: {e}', file=sys.stderr)
+                  fm = None
+          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
+              m2 = re.search(r'\n---\s*\n(verdict\s*:\s*(?:pass|fail).*?)\n---\s*\n', raw, re.DOTALL)
+              if m2:
+                  try:
+                      fm = yaml.safe_load(m2.group(1))
+                  except yaml.YAMLError:
+                      fm = None
+          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
+              m3 = re.search(r'(?im)^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b', raw)
+              if m3:
+                  fm = {'verdict': m3.group(1).lower(), 'rationale': '(verdict extracted from prose; frontmatter missing)', 'gaps': []}
+          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
+              print('::error::Could not extract a verdict from gemini output (no frontmatter, no fallback match).', file=sys.stderr)
+              print('--- raw output ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
           fm['reviewer'] = 'gemini'
-          fm['summary'] = m.group(2).strip()
+          fm['summary'] = summary
           json.dump(fm, open('gemini-eval.json', 'w'), indent=2)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"verdict={fm['verdict']}\n")
@@ -215,6 +227,32 @@ jobs:
           # directly in the prompt rather than asking Claude to "read" files.
           stdin-file: eval-input.txt
           prompt: |
+            # CRITICAL OUTPUT FORMAT (read this FIRST)
+
+            Your response MUST start, on the very first line, with exactly the three characters `---` (no leading whitespace, no preamble, no markdown heading), then a YAML block, then `---` to close, then optional prose.
+
+            Concrete example of an acceptable response:
+
+            ```
+            ---
+            verdict: pass
+            rationale: |
+              All applicable VSDD requirements are enforced. Phase 1c, 3, §VII,
+              §IX are implemented; 2a/2b/§VIII are N/A on a docs repo.
+            gaps:
+              - title: "[ci-meta] sample non-blocking gap"
+                body: |
+                  Optional improvement that doesn't block merge.
+            ---
+
+            (any free-form summary may follow here, ignored by the parser)
+            ```
+
+            If you do not produce frontmatter as your first output, the workflow
+            will fail and your analysis will be discarded. This is non-negotiable.
+
+            # TASK
+
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
             The canonical VSDD doc, every CI workflow file, and every
@@ -268,19 +306,35 @@ jobs:
           if not os.path.exists('claude-eval.md'):
               print('::error::claude-eval.md not produced'); sys.exit(1)
           raw = open('claude-eval.md').read()
-          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n(.*)$', raw, re.DOTALL)
-          if not m:
-              print('ERROR: no YAML frontmatter at top of claude output', file=sys.stderr)
-              print('--- raw ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
-          try:
-              fm = yaml.safe_load(m.group(1))
-          except yaml.YAMLError as e:
-              print(f'ERROR: invalid YAML in frontmatter: {e}', file=sys.stderr)
-              print(m.group(1), file=sys.stderr); sys.exit(1)
-          if fm.get('verdict') not in ('pass', 'fail'):
-              print(f"ERROR: verdict must be pass|fail, got {fm.get('verdict')!r}", file=sys.stderr); sys.exit(1)
+          # Primary: strict frontmatter block at the top.
+          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n?(.*)$', raw, re.DOTALL)
+          fm = None
+          summary = raw
+          if m:
+              try:
+                  fm = yaml.safe_load(m.group(1))
+                  summary = m.group(2).strip()
+              except yaml.YAMLError as e:
+                  print(f'WARN: frontmatter present but invalid YAML: {e}', file=sys.stderr)
+                  fm = None
+          # Fallback 1: an embedded frontmatter block anywhere in the doc.
+          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
+              m2 = re.search(r'\n---\s*\n(verdict\s*:\s*(?:pass|fail).*?)\n---\s*\n', raw, re.DOTALL)
+              if m2:
+                  try:
+                      fm = yaml.safe_load(m2.group(1))
+                  except yaml.YAMLError:
+                      fm = None
+          # Fallback 2: scan for a bare 'verdict: pass|fail' line.
+          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
+              m3 = re.search(r'(?im)^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b', raw)
+              if m3:
+                  fm = {'verdict': m3.group(1).lower(), 'rationale': '(verdict extracted from prose; frontmatter missing)', 'gaps': []}
+          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
+              print('::error::Could not extract a verdict from claude output (no frontmatter, no fallback match).', file=sys.stderr)
+              print('--- raw output ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
           fm['reviewer'] = 'claude'
-          fm['summary'] = m.group(2).strip()
+          fm['summary'] = summary
           json.dump(fm, open('claude-eval.json', 'w'), indent=2)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"verdict={fm['verdict']}\n")
