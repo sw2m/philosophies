@@ -292,13 +292,14 @@ Multi-word symbols are an indicator of poorly architected code, because they can
 
 ## CI/CD
 
-This repo's `.github/workflows/` enforces VSDD on itself. Three workflows, mirroring the pipeline:
+This repo's `.github/workflows/` enforces VSDD on itself. Four workflows, mirroring the pipeline:
 
 - **`issues.yml`** — fires on `issues: [opened, edited]`. Runs Gemini as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body and posts the critique as a comment. **Advisory only — never gates.**
 - **`pulls.yml`** — fires on `pull_request: [opened, synchronize, reopened]`. Runs *two* adversarial reviewers in parallel — Gemini and Claude — against the diff with `MEMORY.md` as the standard (Phase 3, Adversarial Refinement). Two cognitive sources per §V. Each posts a PR comment. **Advisory only — never gates.**
-- **`test.yml`** — fires on `push` to `main` and on `pull_request`. Markdown lint, external link check (lychee), and a structural sanity check that all nine Roman-numeral sections of `MEMORY.md` are present. **This is the gating workflow** required by the branch-protection rule on `main`.
+- **`test.yml`** — fires on `push` to `main` and on `pull_request`. Markdown lint, external link check (lychee), and a structural sanity check that all nine Roman-numeral sections of `MEMORY.md` are present. **Gating** — required by the branch-protection rule on `main`.
+- **`ci-meta.yml`** — fires on `pull_request` when `.github/workflows/**` or `MEMORY.md` change. Runs Gemini *and* Claude in parallel against the proposed CI workflows; both must reach consensus that the CI correctly enforces VSDD. Disagreement opens a tracked issue per gap (deduped by title) and fails the consensus check. **Surfaces red on disagreement but is not in the protection rule's required-checks list** — gaps are tracked as issues for follow-up; the user decides whether to address each before merge.
 
-Each workflow also exposes a `workflow_call:` trigger so other `sw2m` repos can reuse them:
+Each workflow exposes a `workflow_call:` trigger so other `sw2m` repos can reuse them:
 
 ```yaml
 jobs:
@@ -307,7 +308,7 @@ jobs:
     secrets: inherit
 ```
 
-Required repo secrets: `GEMINI_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`.
+Required repo secrets: `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`.
 
 ---
 

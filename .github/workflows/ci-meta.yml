@@ -1,0 +1,342 @@
+name: VSDD CI Meta-Review
+
+# Reviews CI workflow files against VSDD methodology with TWO independent
+# adversarial reviewers (Gemini + Claude). Both must reach consensus that the
+# proposed CI correctly enforces VSDD; disagreement opens an issue per gap and
+# fails the check.
+#
+# Self-evaluation runs on philosophies' own PRs that touch CI files or
+# MEMORY.md. Other sw2m repos invoke via `workflow_call` to have their own CI
+# evaluated against the canonical VSDD doc.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "MEMORY.md"
+  workflow_call:
+    inputs:
+      memory_md_repo:
+        description: "Repo to fetch MEMORY.md from. Defaults to sw2m/philosophies."
+        type: string
+        required: false
+        default: "sw2m/philosophies"
+      memory_md_ref:
+        description: "Branch/tag/SHA on memory_md_repo. Defaults to main."
+        type: string
+        required: false
+        default: "main"
+    secrets:
+      GEMINI_API_KEY:
+        required: true
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  gemini-eval:
+    name: Gemini VSDD CI evaluation
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.eval.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch canonical MEMORY.md
+        run: |
+          if [ -f MEMORY.md ] && [ "${{ inputs.memory_md_repo || 'sw2m/philosophies' }}" = "${{ github.repository }}" ]; then
+            cp MEMORY.md memory-canonical.md
+          else
+            gh api \
+              "repos/${{ inputs.memory_md_repo || 'sw2m/philosophies' }}/contents/MEMORY.md?ref=${{ inputs.memory_md_ref || 'main' }}" \
+              --jq '.content' | base64 -d > memory-canonical.md
+          fi
+          wc -l memory-canonical.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install -g @google/gemini-cli@latest
+
+      - name: Build evaluation input
+        run: |
+          {
+            echo "<vsdd-canonical>"
+            cat memory-canonical.md
+            echo "</vsdd-canonical>"
+            echo ""
+            for f in .github/workflows/*.yml; do
+              [ -f "$f" ] || continue
+              echo "<workflow path=\"$f\">"
+              cat "$f"
+              echo "</workflow>"
+            done
+          } > eval-input.txt
+          wc -l eval-input.txt
+
+      - name: Gemini evaluate
+        id: eval
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          PROMPT='You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
+
+          Read the canonical VSDD doc inside <vsdd-canonical> tags.
+          Read each CI workflow file inside <workflow path="..."> tags.
+
+          Evaluate whether the workflows correctly enforce VSDD requirements:
+          - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against the spec discipline rules in §VII.
+          - Phase 2a (Red Gate): a mechanism that confirms tests fail before implementation lands. May be a CI check on PRs labeled or titled `tests:` that asserts the test suite reports failures.
+          - Phase 2b (Green Gate): tests pass after minimal implementation.
+          - 4-Result Rule (§VIII): regression set runs alongside new tests on Red AND Green gates.
+          - Phase 3: adversarial review of code changes (Gemini and/or Claude on PR diffs).
+          - §IX: multi-word symbol audit (camelCase/snake_case scan on code PRs).
+          - Spec discipline (§VII): tech specs are discrete; goal specs are bulk.
+
+          For each requirement, classify: ENFORCED, PARTIAL, or MISSING.
+
+          A repo that has no test suite (e.g. a docs repo like sw2m/philosophies) cannot enforce 2a/2b/§VIII; treat those as N/A in that case, not MISSING.
+
+          Output ONLY valid JSON between exactly one <verdict>...</verdict> tag pair. No prose outside the tags.
+
+          {
+            "verdict": "pass" | "fail",
+            "rationale": "one paragraph summarizing the evaluation",
+            "gaps": [
+              {"title": "[ci-meta] short description (≤60 chars)", "body": "detailed explanation with VSDD section reference and concrete remediation"}
+            ]
+          }
+
+          verdict=pass: every applicable requirement is ENFORCED or PARTIAL with no critical gaps.
+          verdict=fail: at least one applicable requirement is MISSING, or significant PARTIAL gaps undermine VSDD.
+          For each MISSING or significant PARTIAL, add a gaps entry.'
+
+          (gemini --yolo -m gemini-3-pro-preview -p "$PROMPT" < eval-input.txt > gemini-output.txt 2>gemini-stderr.log) || \
+            gemini --yolo -m gemini-2.5-pro -p "$PROMPT" < eval-input.txt > gemini-output.txt 2>gemini-stderr.log
+
+          python3 - <<'PY'
+          import re, json, sys, os
+          out = open('gemini-output.txt').read()
+          m = re.search(r'<verdict>(.*?)</verdict>', out, re.DOTALL)
+          if not m:
+              print('ERROR: no <verdict>...</verdict> tag found in gemini output', file=sys.stderr)
+              print('--- raw output ---', file=sys.stderr)
+              print(out, file=sys.stderr)
+              sys.exit(1)
+          try:
+              eval_data = json.loads(m.group(1).strip())
+          except json.JSONDecodeError as e:
+              print(f'ERROR: invalid JSON inside <verdict>: {e}', file=sys.stderr)
+              print('--- raw json ---', file=sys.stderr)
+              print(m.group(1), file=sys.stderr)
+              sys.exit(1)
+          eval_data['reviewer'] = 'gemini'
+          json.dump(eval_data, open('gemini-eval.json', 'w'), indent=2)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"verdict={eval_data['verdict']}\n")
+          print(f"gemini verdict: {eval_data['verdict']}")
+          print(f"gaps: {len(eval_data.get('gaps', []))}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gemini-eval
+          path: gemini-eval.json
+
+  claude-eval:
+    name: Claude VSDD CI evaluation
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.eval.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch canonical MEMORY.md
+        run: |
+          if [ -f MEMORY.md ] && [ "${{ inputs.memory_md_repo || 'sw2m/philosophies' }}" = "${{ github.repository }}" ]; then
+            cp MEMORY.md memory-canonical.md
+          else
+            gh api \
+              "repos/${{ inputs.memory_md_repo || 'sw2m/philosophies' }}/contents/MEMORY.md?ref=${{ inputs.memory_md_ref || 'main' }}" \
+              --jq '.content' | base64 -d > memory-canonical.md
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Claude evaluate
+        id: eval
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
+
+            Read `memory-canonical.md` (the canonical VSDD doc).
+            Read each `.github/workflows/*.yml` file in this repo.
+
+            Evaluate whether the workflows correctly enforce VSDD requirements:
+            - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
+            - Phase 2a (Red Gate): tests fail before implementation; CI confirms.
+            - Phase 2b (Green Gate): tests pass after minimal impl.
+            - 4-Result Rule (§VIII): regression set runs alongside new tests on Red AND Green gates.
+            - Phase 3: adversarial review of code changes.
+            - §IX: multi-word symbol audit.
+            - Spec discipline (§VII): tech specs are discrete.
+
+            A repo that has no test suite (docs repo) cannot enforce 2a/2b/§VIII; treat those as N/A, not MISSING.
+
+            Write your evaluation to `claude-eval.json` in the repo root with this exact schema:
+            {
+              "verdict": "pass" or "fail",
+              "rationale": "one paragraph",
+              "gaps": [{"title": "[ci-meta] short description ≤60 chars", "body": "detailed explanation with VSDD section reference"}],
+              "reviewer": "claude"
+            }
+
+            Do NOT commit, push, or open PRs. Just write the file. The CI workflow will read it.
+
+      - name: Set verdict output
+        id: parse
+        run: |
+          if [ ! -f claude-eval.json ]; then
+            echo "ERROR: claude-eval.json not produced by Claude" >&2
+            exit 1
+          fi
+          VERDICT=$(python3 -c "import json; print(json.load(open('claude-eval.json'))['verdict'])")
+          echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
+          echo "claude verdict: $VERDICT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: claude-eval
+          path: claude-eval.json
+
+  consensus:
+    name: Consensus + open issues for gaps
+    needs: [gemini-eval, claude-eval]
+    runs-on: ubuntu-latest
+    if: always() && (needs.gemini-eval.result == 'success' || needs.claude-eval.result == 'success')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gemini-eval
+          path: ./eval/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claude-eval
+          path: ./eval/
+
+      - name: Reach consensus + open gap issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys
+
+          gemini = json.load(open('eval/gemini-eval.json'))
+          claude = json.load(open('eval/claude-eval.json'))
+
+          print(f"gemini: verdict={gemini['verdict']}, gaps={len(gemini.get('gaps', []))}")
+          print(f"claude: verdict={claude['verdict']}, gaps={len(claude.get('gaps', []))}")
+          print()
+          print(f"gemini rationale: {gemini.get('rationale', '')}")
+          print(f"claude rationale: {claude.get('rationale', '')}")
+          print()
+
+          # Consensus rules:
+          # - Both pass with empty gaps → CI passes, no issues opened.
+          # - Either fails → CI fails; open issues for the union of gaps (deduped).
+          # - One pass + one fail → CI fails (no consensus); issues from the failing reviewer.
+          fail = gemini['verdict'] == 'fail' or claude['verdict'] == 'fail'
+
+          all_gaps = []
+          for g in gemini.get('gaps', []):
+              all_gaps.append({**g, 'flagged_by': ['gemini']})
+          for g in claude.get('gaps', []):
+              # Dedupe by normalized title
+              norm = re.sub(r'\W+', ' ', g['title'].lower()).strip()
+              merged = False
+              for existing in all_gaps:
+                  if re.sub(r'\W+', ' ', existing['title'].lower()).strip() == norm:
+                      existing['flagged_by'].append('claude')
+                      merged = True
+                      break
+              if not merged:
+                  all_gaps.append({**g, 'flagged_by': ['claude']})
+
+          pr_number = os.environ.get('PR_NUMBER', '')
+          pr_url = os.environ.get('PR_URL', '')
+
+          opened = []
+          for g in all_gaps:
+              flagged_by = ' + '.join(sorted(g['flagged_by']))
+              body = (
+                  f"_Flagged by **{flagged_by}** in the VSDD CI meta-review._\n\n"
+                  f"{g['body']}\n\n"
+                  f"---\n"
+                  f"PR triggering this evaluation: {pr_url or '(self-evaluation)'}\n"
+              )
+              # Idempotency: skip if a similar open issue already exists
+              search = subprocess.run(
+                  ['gh', 'issue', 'list', '--state', 'open', '--search', g['title'], '--json', 'number,title'],
+                  capture_output=True, text=True, check=True,
+              )
+              existing = json.loads(search.stdout)
+              if any(item['title'] == g['title'] for item in existing):
+                  print(f"  skip (already open): {g['title']}")
+                  continue
+              # Create
+              r = subprocess.run(
+                  ['gh', 'issue', 'create', '--title', g['title'], '--body', body, '--label', 'ci-meta'],
+                  capture_output=True, text=True,
+              )
+              if r.returncode == 0:
+                  url = r.stdout.strip().splitlines()[-1]
+                  print(f"  opened: {url}")
+                  opened.append(url)
+              else:
+                  # Label may not exist; retry without label
+                  r2 = subprocess.run(
+                      ['gh', 'issue', 'create', '--title', g['title'], '--body', body],
+                      capture_output=True, text=True, check=True,
+                  )
+                  url = r2.stdout.strip().splitlines()[-1]
+                  print(f"  opened: {url}  (label 'ci-meta' did not exist; create it manually if you want filtering)")
+                  opened.append(url)
+
+          # Summary for the GitHub Actions run
+          summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary:
+              with open(summary, 'a') as f:
+                  f.write(f"# VSDD CI Meta-Review\n\n")
+                  f.write(f"- Gemini: **{gemini['verdict']}**\n")
+                  f.write(f"- Claude: **{claude['verdict']}**\n")
+                  f.write(f"- Consensus: **{'fail' if fail else 'pass'}**\n\n")
+                  if all_gaps:
+                      f.write(f"## Gaps ({len(all_gaps)})\n\n")
+                      for g, url in zip(all_gaps, opened or [None] * len(all_gaps)):
+                          flagged_by = ' + '.join(sorted(g['flagged_by']))
+                          f.write(f"- {g['title']} _(flagged by {flagged_by})_")
+                          if url:
+                              f.write(f" — {url}")
+                          f.write("\n")
+
+          if fail:
+              print(f"\nFAIL: consensus not reached. {len(all_gaps)} gap issue(s) opened or already open.")
+              sys.exit(1)
+          else:
+              print("\nPASS: both reviewers agree the CI enforces VSDD correctly.")
+          PY

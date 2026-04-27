@@ -10,7 +10,7 @@ on:
     secrets:
       GEMINI_API_KEY:
         required: false
-      CLAUDE_CODE_OAUTH_TOKEN:
+      ANTHROPIC_API_KEY:
         required: false
 
 permissions:
@@ -133,7 +133,7 @@ jobs:
       - name: Run Claude review (anthropics/claude-code-action)
         uses: anthropics/claude-code-action@v1
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             You are the second adversarial reviewer in MEMORY.md's Phase 3
             (Adversarial Refinement). Your role here mirrors Sarcasmotron, but
