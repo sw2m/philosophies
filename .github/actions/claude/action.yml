@@ -60,6 +60,9 @@ runs:
       uses: anthropics/claude-code-action@v1
       with:
         anthropic_api_key: ${{ inputs.api-key }}
+        # Default mode is `tag` (only runs on @claude mentions). We want
+        # autonomous one-shot execution per the prompt input.
+        mode: agent
         prompt: |
           ${{ inputs.prompt }}
 
