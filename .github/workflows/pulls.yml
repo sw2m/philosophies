@@ -36,10 +36,10 @@ permissions:
 env:
   # Single source of truth for the Phase 3 reviewer prompt. Both reviewers
   # (Gemini, Claude) receive this identical text — the only mechanical
-  # difference is HOW the input substrate (MEMORY.md + diff) is attached:
-  # Gemini reads it via stdin; Claude's composite action prepends this
-  # prompt to the same stdin-file. Adding a new review rule means editing
-  # this one block.
+  # difference is HOW the input substrate (MEMORY.md + repo tree + diff)
+  # is attached: Gemini reads it via stdin; Claude's composite action
+  # prepends this prompt to the same stdin-file. Adding a new review
+  # rule means editing this one block.
   PHASE_3_PROMPT: |-
     # CRITICAL OUTPUT FORMAT (read this FIRST)
 
@@ -63,9 +63,9 @@ env:
 
     You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified Spec-Driven Development / VSDD).
 
-    The canonical VSDD doc, the PR body and any linked tech-spec issues (in `<pr-context>` and `<linked-issue n="N">` tags), and the PR diff under review are EMBEDDED below in the same message — do not look for files on disk; if you cite something, cite from the embedded content. For spec-fidelity findings (whether the diff matches the spec it's supposed to satisfy), cite from the linked-issue or pr-context content.
+    The canonical VSDD doc, the PR body and any linked tech-spec issues (in `<pr-context>` and `<linked-issue n="N">` tags), the full repo file tree (in `<file path="...">` tags, with `truncated="true"` markers when a file exceeds the per-file or total budget), and the PR diff under review are EMBEDDED below in the same message — do not look for files on disk; if you cite something, cite from the embedded content. For spec-fidelity findings (whether the diff matches the spec it's supposed to satisfy), cite from the linked-issue or pr-context content. The repo-tree section gives you context for WHERE the diff fits; the diff gives you WHAT changed.
 
-    Critical: if you find yourself citing a file or symbol that isn't actually present in the embedded diff, STOP — that is a hallucination. Only cite what's in the embedded content.
+    Critical: if you find yourself citing a file or symbol that isn't actually present in the embedded content, STOP — that is a hallucination. You may cite content from `<file>` blocks AND from the diff.
 
     # DIFF-TRUNCATION CHECK
 
@@ -273,6 +273,64 @@ jobs:
           echo '</pr-context>' >> pr-context.txt
           wc -l pr-context.txt
 
+      - name: Build repo manifest and embed file contents
+        # VSDD §II Phase 3: the verified, test-passing codebase — along with
+        # the spec and test suite — is presented to the Adversary. The diff
+        # alone hides architectural coupling, purity-boundary violations,
+        # and tautological tests that depend on unmodified code. This step
+        # emits a manifest of every tracked file plus the contents of each
+        # file under PER_FILE_BUDGET, capped at TOTAL_BUDGET total payload.
+        env:
+          # Per-file cap (bytes). Files larger than this are listed in the
+          # manifest but their content is omitted with a `truncated="true"`
+          # marker. 50 KiB comfortably covers source files while excluding
+          # generated bundles, fixtures, and minified assets.
+          PER_FILE_BUDGET: 51200
+          # Hard cap on total embedded payload (bytes). Sized to fit
+          # comfortably alongside MEMORY.md + diff inside a Claude Sonnet /
+          # Gemini Pro context window without crowding the model's response
+          # budget. 800 KiB.
+          TOTAL_BUDGET: 819200
+        run: |
+          set -euo pipefail
+          : > repo-files.xml
+          : > repo-manifest.txt
+          total=0
+          # Stable ordering — git ls-files is already sorted, but be explicit.
+          while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            size=$(wc -c < "$f")
+            # Detect binaries via the same heuristic git uses (NUL byte in
+            # first 8000 bytes). Skip embedding; list in manifest only.
+            if LC_ALL=C grep -qP '\x00' -- "$f" 2>/dev/null; then
+              printf '%10d  %s  [binary, omitted]\n' "$size" "$f" >> repo-manifest.txt
+              printf '<file path="%s" size="%d" truncated="true" reason="binary"/>\n' "$f" "$size" >> repo-files.xml
+              continue
+            fi
+            if [ "$size" -gt "$PER_FILE_BUDGET" ]; then
+              printf '%10d  %s  [oversize, omitted]\n' "$size" "$f" >> repo-manifest.txt
+              printf '<file path="%s" size="%d" truncated="true" reason="size"/>\n' "$f" "$size" >> repo-files.xml
+              continue
+            fi
+            if [ $((total + size)) -gt "$TOTAL_BUDGET" ]; then
+              printf '%10d  %s  [budget exhausted, omitted]\n' "$size" "$f" >> repo-manifest.txt
+              printf '<file path="%s" size="%d" truncated="true" reason="total-budget"/>\n' "$f" "$size" >> repo-files.xml
+              continue
+            fi
+            printf '%10d  %s\n' "$size" "$f" >> repo-manifest.txt
+            # CDATA can't contain the literal sequence ']]>'. Split any
+            # occurrence across two CDATA sections so the model still sees
+            # the original bytes verbatim.
+            {
+              printf '<file path="%s" size="%d"><![CDATA[\n' "$f" "$size"
+              sed 's/]]>/]]]]><![CDATA[>/g' "$f"
+              printf ']]></file>\n'
+            } >> repo-files.xml
+            total=$((total + size))
+          done < <(git ls-files)
+          echo "embedded payload bytes: $total"
+          wc -c repo-files.xml repo-manifest.txt
+
       - name: Build prompts (gemini + claude)
         run: |
           # Both reviewers receive the same prompt structure: the strict-output
@@ -289,9 +347,15 @@ jobs:
           {
             printf '\n--- PR + LINKED ISSUE CONTEXT ---\n'
             cat pr-context.txt
+            printf '\n--- REPO MANIFEST (every tracked file, sizes in bytes) ---\n'
+            cat repo-manifest.txt
+            printf '\n--- REPO FILES (full contents where under budget) ---\n'
+            cat repo-files.xml
             printf '\n--- PR DIFF ---\n'
             cat pr.diff
           } >> gemini-stdin.txt
+          echo "gemini-stdin.txt size:"
+          wc -c gemini-stdin.txt
 
       - uses: actions/upload-artifact@v7
         with:
@@ -301,6 +365,8 @@ jobs:
             pr.diff
             pr-context.txt
             MEMORY.md
+            repo-manifest.txt
+            repo-files.xml
 
   symbol-audit:
     name: §IX symbol audit (advisory)
@@ -408,8 +474,8 @@ jobs:
           output-file: review.md
           # Same stdin-file pattern as Gemini — Claude has no filesystem
           # access via the Messages API, so we embed MEMORY.md, the PR /
-          # linked-issue context, and pr.diff directly in the prompt
-          # rather than asking Claude to "read" them.
+          # linked-issue context, the full repo tree, and pr.diff directly
+          # in the prompt rather than asking Claude to "read" them.
           stdin-file: gemini-stdin.txt
           prompt: |
             ${{ env.PHASE_3_PROMPT }}
