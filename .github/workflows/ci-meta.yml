@@ -430,7 +430,14 @@ jobs:
     name: Consensus + open issues for gaps
     needs: [gemini-eval, claude-eval]
     runs-on: ubuntu-latest
-    if: always()
+    # `always()` so consensus runs even when reviewers fail (we want a
+    # report of what failed). BUT: skip the whole consensus job on draft
+    # PRs — `prep`, `gemini-eval`, and `claude-eval` all carry a
+    # `draft != true` guard and SKIP on drafts; without the same guard
+    # here, consensus would try to fail-fast on the SKIPPED reviewers and
+    # record a FAILURE check that lingers in the required-checks rollup
+    # and pollutes branch protection on the next push (#52).
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft != true) }}
     # Serialize issue creation across concurrent runs of this workflow.
     # Without this, two concurrent PRs identifying the same gap can both
     # see "no existing issue" and create duplicates (TOCTOU between
