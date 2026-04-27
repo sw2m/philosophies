@@ -120,8 +120,29 @@ jobs:
           verdict=fail: at least one applicable requirement is MISSING, or significant PARTIAL gaps undermine VSDD.
           For each MISSING or significant PARTIAL, add a gaps entry.'
 
-          (gemini --yolo -m gemini-3-pro-preview -p "$PROMPT" < eval-input.txt > gemini-output.txt 2>gemini-stderr.log) || \
-            gemini --yolo -m gemini-2.5-pro -p "$PROMPT" < eval-input.txt > gemini-output.txt 2>gemini-stderr.log
+          # Build the full input as one stdin stream (prompt + content) — gemini-cli
+          # accepts either -p or stdin; mixing the two has been unreliable.
+          { printf '%s\n\n' "$PROMPT"; cat eval-input.txt; } > combined-input.txt
+
+          set +e
+          gemini --yolo -m gemini-3-pro-preview < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "Gemini 3 exited with code $rc; falling back to 2.5"
+            echo "--- gemini 3 stderr ---"
+            cat gemini-stderr.log
+            gemini --yolo -m gemini-2.5-pro < combined-input.txt > gemini-output.txt 2>gemini-stderr.log
+            rc=$?
+            if [ $rc -ne 0 ]; then
+              echo "Gemini 2.5 exited with code $rc"
+              echo "--- gemini 2.5 stderr ---"
+              cat gemini-stderr.log
+              echo "--- gemini 2.5 stdout ---"
+              cat gemini-output.txt
+              exit $rc
+            fi
+          fi
+          set -e
 
           python3 - <<'PY'
           import re, json, sys, os
