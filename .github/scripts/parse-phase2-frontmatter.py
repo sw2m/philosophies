@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Parse Phase 2 agent output frontmatter (promote-tech-to-pr).
 
-Reads the Phase 2 output file from `sys.argv[1]`, extracts the YAML
-frontmatter block at the END of the response (the agent appends it
-after using its tools), and writes:
+Reads the Phase 2 output file from `sys.argv[1]`. Output path for the
+JSON metadata defaults to `phase2-meta.json` in cwd, but the caller
+can override via `sys.argv[2]` (the action.yml writes to
+`${RUNNER_TEMP}/phase2-meta.json` so the file isn't swept by Phase 4's
+`git add .` — see issue #65).
 
-  - phase2-meta.json — {"files": [...], "new_cmd": "...", "reg_cmd": "..."}
+Writes:
+  - <out-path> — {"files": [...], "new_cmd": "...", "reg_cmd": "..."}
   - prints each file path on stdout, one per line (so the bash caller
     can iterate or verify non-emptiness)
 
@@ -22,10 +25,11 @@ import yaml
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print('usage: parse-phase2-frontmatter.py <phase2-output-file>', file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print('usage: parse-phase2-frontmatter.py <phase2-output-file> [<meta-out-path>]', file=sys.stderr)
         return 2
     path = sys.argv[1]
+    out_path = sys.argv[2] if len(sys.argv) == 3 else 'phase2-meta.json'
     with open(path) as f:
         raw = f.read()
 
@@ -49,7 +53,7 @@ def main() -> int:
         print('new_test_files is not a list', file=sys.stderr)
         return 1
 
-    with open('phase2-meta.json', 'w') as f:
+    with open(out_path, 'w') as f:
         json.dump({'files': files, 'new_cmd': new_cmd, 'reg_cmd': reg_cmd}, f)
 
     for p in files:
