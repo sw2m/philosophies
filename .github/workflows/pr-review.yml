@@ -488,13 +488,14 @@ jobs:
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           output-file: review.md
-          # Same stdin-file pattern as Gemini — Claude has no filesystem
-          # access via the Messages API, so we embed MEMORY.md, the PR /
-          # linked-issue context, the full repo tree, and pr.diff directly
-          # in the prompt rather than asking Claude to "read" them.
+          # Same stdin-file as Gemini — `gemini-stdin.txt` already starts
+          # with `${{ env.PHASE_3_PROMPT }}`, followed by MEMORY.md, the PR /
+          # linked-issue context, the full repo tree, and pr.diff. Do NOT
+          # also pass `prompt: PHASE_3_PROMPT` here — the claude composite
+          # concatenates `prompt` + `stdin-file`, so a separate `prompt:`
+          # would deliver the system prompt twice. The gemini-review step
+          # is the correct shape (stdin-file only).
           stdin-file: gemini-stdin.txt
-          prompt: |
-            ${{ env.PHASE_3_PROMPT }}
           actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
