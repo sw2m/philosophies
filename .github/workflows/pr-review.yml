@@ -90,6 +90,7 @@ env:
     - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
     - Security Surface (§II Phase 3): input validation gaps, injection vectors (SQL/command/path), unsafe deserialization, missing auth/authz checks
     - Spec gaps revealed by implementation (§II Phase 3): behavior in the diff that the spec doesn't cover
+    - Purity-boundary violations (§II Phase 5): newly-introduced side effects (I/O, mutable globals, time/random reads, network calls) inside a function or module the spec marks as a pure core. Flag any new dependency from a pure unit on impure infrastructure.
 
     # OUTPUT FORMAT (strict)
 
