@@ -137,7 +137,7 @@ jobs:
             # Deno fetches third-party deps on first run; install step
             # not needed, but the runtime IS needed (not preinstalled
             # on ubuntu-latest).
-            DENO="vx.x.x"
+            DENO="v2.x"
             CMD="deno test -A"
           elif [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -f setup.py ]; then
             PY="3.x"
