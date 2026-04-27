@@ -1,0 +1,110 @@
+name: VSDD Non-test-blocker (ancestry enforcement)
+
+# §VIII Red Gate enforcement, second half (#54): once the Red-conditions
+# Gate (#61's red-conditions-gate.yml) has posted the bot marker
+# `✓ VSDD Red gate cleared at <SHA>`, all subsequent non-test commits
+# on this PR must be descendants of that SHA. This workflow walks every
+# commit on the PR, classifies each via #60, and fails when a non-test
+# commit lands BEFORE the marker (i.e., is not an ancestor-or-descendant
+# of the cleared SHA chain).
+#
+# Tamper-resistance: the marker comment must be authored by
+# `github-actions[bot]`. A contributor can post `✓ VSDD Red gate cleared
+# at <SHA>` from their own account, but the gate filters by
+# `user.login == "github-actions[bot]"` and ignores anything else.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  shape:
+    name: Detect repo shape
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    outputs:
+      has-tests: ${{ steps.s.outputs.has-tests }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: s
+        uses: ./.github/actions/repo-shape
+
+  blocker:
+    name: Non-test-commit ancestry enforcement
+    needs: [shape]
+    # Docs repos: §VIII N/A, every commit is "documentation"; the
+    # marker contract is meaningless. Skip cleanly.
+    if: ${{ github.event.pull_request.draft != true && needs.shape.outputs.has-tests == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Walk PR commits + enforce ancestry against marker
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GLOBS: ${{ vars.VSDD_TEST_GLOBS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$BASE_REF" --no-tags
+
+          # Find the most recent Red-gate-cleared marker comment from the
+          # bot. The marker body is `✓ VSDD Red gate cleared at <SHA>`;
+          # we extract the SHA. Multiple markers may exist (e.g., the
+          # Red gate re-passed after a regression); the LATEST applies.
+          CLEARED_SHA=$(gh api "repos/${{ github.repository }}/issues/${PR}/comments" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("✓ VSDD Red gate cleared at "))] | sort_by(.created_at) | last | .body' \
+            2>/dev/null \
+            | grep -oE 'cleared at [0-9a-f]{7,40}' \
+            | awk '{print $3}' \
+            || true)
+
+          # Walk every commit on the PR; classify each via #60.
+          fail=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            output=$(bash .github/scripts/classify-changes.sh "$sha" \
+              ${GLOBS:+--patterns "$GLOBS"})
+            tests_only=$(grep '^tests-only=' <<<"$output" | cut -d= -f2)
+            if [ "$tests_only" = "true" ]; then
+              # Test commits land before AND after the marker, freely.
+              continue
+            fi
+            # Non-test commit. Must be a descendant of CLEARED_SHA.
+            if [ -z "$CLEARED_SHA" ]; then
+              echo "::error::commit $sha contains non-test changes but no Red-gate-cleared marker has been posted yet."
+              echo "::error::Land test-only commits first; the Red-conditions Gate will post the marker; THEN push impl commits."
+              fail=1
+              continue
+            fi
+            # `git merge-base --is-ancestor A B` exits 0 if A is an
+            # ancestor of B. CLEARED_SHA is an ancestor of (this commit)
+            # iff (this commit) descends from the cleared point.
+            if ! git merge-base --is-ancestor "$CLEARED_SHA" "$sha" 2>/dev/null; then
+              echo "::error::non-test commit $sha is NOT a descendant of the Red-gate-cleared marker SHA $CLEARED_SHA."
+              echo "::error::Either rebase to land this commit after $CLEARED_SHA, or revert it and re-do via the Red-conditions Gate."
+              fail=1
+            fi
+          done < <(git rev-list "$BASE_SHA".."$HEAD_SHA")
+
+          if [ "$fail" = "1" ]; then
+            echo ""
+            echo "::error::Non-test-blocker enforcement failed. See the per-commit errors above."
+            exit 1
+          fi
+          if [ -z "$CLEARED_SHA" ]; then
+            echo "✓ All commits classify as test-only. Marker not posted yet (nothing to enforce against)."
+          else
+            echo "✓ Every non-test commit on this PR descends from cleared marker SHA $CLEARED_SHA."
+          fi
