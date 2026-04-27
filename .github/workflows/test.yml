@@ -61,6 +61,156 @@ jobs:
       - name: Assert all 9 numbered sections are present
         run: bash .github/scripts/check-memory-structure.sh
 
+  green-gate:
+    name: Green Gate (§VIII tests on PR HEAD)
+    # §VIII Green Gate enforcement on human-authored PRs (#42). Docs
+    # repos (no detected test runner) succeed with a "§VIII N/A" notice
+    # so branch protection gets a definitive PASS rather than SKIPPED.
+    # Red Gate (tests-failing-before-impl) is NOT enforced here — that
+    # would require reverting only the implementation hunks, brittle on
+    # human commit histories. Humans are trusted to have followed
+    # Red→Green discipline locally; the agent-driven path
+    # (promote-tech-to-pr) is the only fully-automated 4-Result chain.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - id: shape
+        uses: ./.github/actions/repo-shape
+      - name: Detect runner + emit install/test commands
+        id: runner
+        env:
+          HAS_TESTS: ${{ steps.shape.outputs.has-tests }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Coarse "no runner detected at all" → trivially N/A.
+          if [ "$HAS_TESTS" != "true" ]; then
+            echo "::notice::§VIII N/A (repo-shape says no test runner)."
+            echo "- Green Gate: **N/A** (no test runner detected)" >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # repo-shape returns has-tests=true on permissive markers like
+          # "package.json exists" or "tests/ directory exists". That's
+          # NOT the same as "an actual test command is configured".
+          # Discover a real runner; if none is configured, treat as N/A
+          # (a docs-shaped repo that happens to have package.json for
+          # tooling, e.g., markdownlint-cli config). Per Gemini's
+          # adversarial review on this PR, the prior fall-through-to-
+          # error was wrong: many repos are valid `has-tests=true`
+          # without a runnable test command.
+          INSTALL=""
+          CMD=""
+          NODE=""
+          PY=""
+          BUN=""
+          DENO=""
+          if [ -f Makefile ] && grep -qE '^test:' Makefile; then
+            CMD="make test"
+          elif [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then
+            if [ -f bun.lockb ] || [ -f bun.lock ]; then
+              # Bun has its own runtime — set up explicitly rather than
+              # relying on the ubuntu-latest preinstall (could disappear
+              # in a runner image refresh; per Gemini's adversarial
+              # review on this PR).
+              BUN="latest"
+              INSTALL="bun install --frozen-lockfile"; CMD="bun test"
+            else
+              NODE="20"
+              if [ -f package-lock.json ]; then
+                INSTALL="npm ci"; CMD="npm test"
+              elif [ -f yarn.lock ]; then
+                INSTALL="corepack enable && yarn install --frozen-lockfile"; CMD="yarn test"
+              elif [ -f pnpm-lock.yaml ]; then
+                INSTALL="corepack enable && pnpm install --frozen-lockfile"; CMD="pnpm test"
+              else
+                # No lockfile — fall back to npm install. Less reproducible
+                # but at least functional; the repo should add a lockfile.
+                INSTALL="npm install"; CMD="npm test"
+              fi
+            fi
+          elif [ -f deno.json ] || [ -f deno.jsonc ]; then
+            # Deno fetches third-party deps on first run; install step
+            # not needed, but the runtime IS needed (not preinstalled
+            # on ubuntu-latest).
+            DENO="v2.x"
+            CMD="deno test -A"
+          elif [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -f setup.py ]; then
+            PY="3.x"
+            # Best-effort install: editable install if pyproject/setup.py;
+            # otherwise pull pytest only.
+            if [ -f pyproject.toml ] || [ -f setup.py ]; then
+              INSTALL="python -m pip install --upgrade pip && python -m pip install -e ."
+            else
+              INSTALL="python -m pip install --upgrade pip pytest"
+            fi
+            CMD="pytest"
+          elif [ -f Cargo.toml ]; then
+            # cargo test handles its own dep resolution.
+            CMD="cargo test"
+          elif [ -f go.mod ]; then
+            INSTALL="go mod download"; CMD="go test ./..."
+          else
+            echo "::notice::§VIII N/A (no recognized runner — repo-shape was permissive but no Make/npm/bun/yarn/pnpm/deno/pytest/cargo/go target was found)."
+            echo "- Green Gate: **N/A** (no recognized runner configured)" >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Surface what we picked so the downstream steps can act on it
+          # AND so the human reading the run summary can audit the choice.
+          echo "skip=false"          >> "$GITHUB_OUTPUT"
+          echo "install=$INSTALL"    >> "$GITHUB_OUTPUT"
+          echo "cmd=$CMD"            >> "$GITHUB_OUTPUT"
+          echo "node=$NODE"          >> "$GITHUB_OUTPUT"
+          echo "py=$PY"              >> "$GITHUB_OUTPUT"
+          echo "bun=$BUN"            >> "$GITHUB_OUTPUT"
+          echo "deno=$DENO"          >> "$GITHUB_OUTPUT"
+          {
+            echo "- Green Gate runner: \`$CMD\`"
+            [ -n "$INSTALL" ] && echo "- Install step: \`$INSTALL\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up Node
+        if: steps.runner.outputs.node != ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ steps.runner.outputs.node }}
+
+      - name: Set up Python
+        if: steps.runner.outputs.py != ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ steps.runner.outputs.py }}
+
+      - name: Set up Bun
+        if: steps.runner.outputs.bun != ''
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.runner.outputs.bun }}
+
+      - name: Set up Deno
+        if: steps.runner.outputs.deno != ''
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: ${{ steps.runner.outputs.deno }}
+
+      - name: Install dependencies
+        if: steps.runner.outputs.skip != 'true' && steps.runner.outputs.install != ''
+        shell: bash
+        run: ${{ steps.runner.outputs.install }}
+
+      - name: Run Green Gate
+        if: steps.runner.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          eval "${{ steps.runner.outputs.cmd }}"
+          echo "- Green Gate: **PASS**" >> "$GITHUB_STEP_SUMMARY"
+
   issue-linkage:
     name: PR body links a spec issue
     # Gating per #30: every PR must reference a tracked issue with a
