@@ -24,6 +24,7 @@ name: VSDD Red-conditions Gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call: {}
 
 permissions:
   contents: read
