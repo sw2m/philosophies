@@ -87,6 +87,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Fetch philosophies for the canonical MEMORY.md fallback when the
+      # consumer doesn't have one of their own.
+      - name: Fetch sw2m/philosophies (canonical MEMORY.md)
+        uses: actions/checkout@v6
+        with:
+          repository: sw2m/philosophies
+          ref: main
+          path: .vsdd-philosophies
+
       - name: Build prompt
         env:
           ISSUE_TITLE: ${{ github.event.issue.title }}
@@ -126,7 +135,13 @@ jobs:
 
           --- MEMORY.md ---
           PROMPT_EOF
-          cat MEMORY.md >> stdin.txt
+          # Prefer the consumer's own MEMORY.md if it exists; fall back
+          # to philosophies' canonical copy fetched above.
+          if [ -f MEMORY.md ]; then
+            cat MEMORY.md >> stdin.txt
+          else
+            cat .vsdd-philosophies/MEMORY.md >> stdin.txt
+          fi
           {
             printf '\n--- ISSUE TITLE ---\n%s\n' "$ISSUE_TITLE"
             printf '\n--- ISSUE BODY ---\n%s\n' "$ISSUE_BODY"
@@ -137,7 +152,6 @@ jobs:
           name: issue-context
           path: |
             stdin.txt
-            MEMORY.md
 
   gemini-review:
     name: Gemini VSDD Phase 1c review

@@ -203,6 +203,18 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
+      # Fetch philosophies — used both for scripts (extract-verdict.js,
+      # symbol-audit.sh) and for the canonical MEMORY.md that gets
+      # embedded in the Phase 3 reviewer prompt. Downstream consumers
+      # may not have a MEMORY.md of their own; this fallback ensures
+      # the prompt always carries the canonical VSDD doc.
+      - name: Fetch sw2m/philosophies (canonical MEMORY.md + scripts)
+        uses: actions/checkout@v6
+        with:
+          repository: sw2m/philosophies
+          ref: main
+          path: .vsdd-philosophies
+
       - name: Compute diff against base
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -365,12 +377,20 @@ jobs:
           # output format spec. The only per-reviewer difference is HOW the
           # content gets embedded — Gemini reads stdin (this file), Claude
           # gets the same file as its `stdin-file` input.
+          # Pick the MEMORY.md to embed. Prefer the consumer's own copy
+          # (philosophies has one; downstream repos like clesty don't);
+          # fall back to philosophies' canonical copy fetched above.
+          if [ -f MEMORY.md ]; then
+            MEMORY_PATH="MEMORY.md"
+          else
+            MEMORY_PATH=".vsdd-philosophies/MEMORY.md"
+          fi
           cat > gemini-stdin.txt <<'PROMPT_EOF'
           ${{ env.PHASE_3_PROMPT }}
 
           --- MEMORY.md ---
           PROMPT_EOF
-          cat MEMORY.md >> gemini-stdin.txt
+          cat "$MEMORY_PATH" >> gemini-stdin.txt
           {
             printf '\n--- PR + LINKED ISSUE CONTEXT ---\n'
             cat pr-context.txt
@@ -383,6 +403,11 @@ jobs:
           } >> gemini-stdin.txt
           echo "gemini-stdin.txt size:"
           wc -c gemini-stdin.txt
+          # Stash the chosen MEMORY.md path next to the artifact so the
+          # downstream reviewer jobs (which run on fresh runners) can
+          # find it via the same fallback. The artifact uploads it as
+          # `MEMORY.md` either way (canonical content).
+          cp "$MEMORY_PATH" MEMORY-canonical.md
 
       - uses: actions/upload-artifact@v7
         with:
@@ -391,7 +416,7 @@ jobs:
             gemini-stdin.txt
             pr.diff
             pr-context.txt
-            MEMORY.md
+            MEMORY-canonical.md
             repo-manifest.txt
             repo-files.xml
 
