@@ -39,7 +39,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Skip if no MEMORY.md
+        id: check
+        shell: bash
+        run: |
+          if [ -f MEMORY.md ]; then
+            echo "has-memory=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-memory=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No MEMORY.md in this repo. Lychee link check is philosophies-specific; skipping."
+          fi
+
       - name: Run lychee
+        if: steps.check.outputs.has-memory == 'true'
         uses: lycheeverse/lychee-action@v2
         with:
           args: >-
