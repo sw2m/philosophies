@@ -116,28 +116,38 @@ jobs:
           updated_epoch=$(date -d "$ISSUE_UPDATED" +%s)
 
           for reviewer in gemini claude; do
-            # Match the marker comment exactly: a single-line body that
-            # starts with `✓ VSDD Phase 1c <reviewer>` or `⛔ VSDD Phase
-            # 1c <reviewer>`. The reviewer's full review comment also
-            # mentions "Phase 1c" in its header, so anchoring on the
-            # glyph-prefixed marker form prevents false positives.
-            pat="^(✓|⛔) VSDD Phase 1c ${reviewer} verdict: (pass|fail)$"
-            latest=$(jq -r --arg pat "$pat" '
+            # Each Phase 1c reviewer comment carries an HTML-comment-
+            # wrapped frontmatter block at the very top:
+            #   <!-- vsdd-phase-1c
+            #   reviewer: gemini
+            #   verdict: pass
+            #   -->
+            # The block is invisible to human readers but parseable here.
+            # Pull the latest comment whose frontmatter matches THIS
+            # reviewer (so a fresh edit→re-review supersedes the prior
+            # verdict for the same reviewer).
+            latest=$(jq -r --arg r "$reviewer" '
               [.[]
                 | select(.user.login == "github-actions[bot]")
-                | select(.body | test($pat))
+                | select(.body | test("<!-- vsdd-phase-1c[\\s\\S]*reviewer:\\s*" + $r + "[\\s\\S]*-->"))
               ]
               | sort_by(.created_at)
               | last
             ' <<<"$comments")
             if [ "$latest" = "null" ] || [ -z "$latest" ]; then
-              echo "::error::No Phase 1c verdict marker from ${reviewer} on this issue. Edit the issue body to re-trigger Phase 1c review."
+              echo "::error::No Phase 1c review from ${reviewer} on this issue. Edit the issue body to re-trigger Phase 1c review."
               echo "cleared=false" >> "$GITHUB_OUTPUT"
               exit 1
             fi
+            # Pull the verdict from the frontmatter of the chosen comment.
             verdict=$(jq -r '.body' <<<"$latest" \
-              | grep -oE 'verdict: (pass|fail)' \
-              | awk '{print $2}')
+              | sed -n 's/^verdict:\s*\(pass\|fail\)\s*$/\1/p' \
+              | head -1)
+            if [ -z "$verdict" ]; then
+              echo "::error::Phase 1c ${reviewer} comment found but verdict frontmatter is missing/unparseable; treating as fail."
+              echo "cleared=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             created_at=$(jq -r '.created_at' <<<"$latest")
             created_epoch=$(date -d "$created_at" +%s)
             if [ "$created_epoch" -lt "$updated_epoch" ]; then

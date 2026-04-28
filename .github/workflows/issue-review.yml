@@ -137,10 +137,13 @@ jobs:
               line, in this format (no other text on the line):
                 _Verdict: `pass`_     (no blocking concerns)
                 _Verdict: `fail`_     (one or more `(blocking)` concerns)
-              The verdict line gates promotion of this issue. A `fail`
-              verdict from EITHER reviewer blocks promote-goal-to-tech
-              and promote-tech-to-pr until the issue body is edited (which
-              re-runs Phase 1c) and BOTH reviewers return `pass`.
+              The verdict line gates promotion of this issue: the CI
+              extracts it into a structured frontmatter block at the
+              top of your posted comment, and `promote.yml`'s
+              `phase-1c-clearance` job blocks goal→tech / tech→PR if
+              EITHER reviewer's latest verdict is `fail` or stale (older
+              than the issue's last edit). Edit the issue body to
+              re-run Phase 1c.
 
           --- MEMORY.md ---
           PROMPT_EOF
@@ -184,7 +187,7 @@ jobs:
           output-file: review.md
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Post review + verdict marker as issue comments
+      - name: Post review with embedded verdict frontmatter
         uses: actions/github-script@v9
         with:
           script: |
@@ -195,23 +198,21 @@ jobs:
             // line. If absent or unparseable, fail closed.
             const m = body.match(/_Verdict:\s*`?(pass|fail)`?_/i);
             const verdict = m ? m[1].toLowerCase() : 'fail';
+            // Frontmatter inside an HTML comment — invisible to readers,
+            // parseable by promote.yml's phase-1c-clearance gate. One
+            // frontmatter block per review.
+            const frontmatter =
+              `<!-- vsdd-phase-1c\n` +
+              `reviewer: gemini\n` +
+              `verdict: ${verdict}\n` +
+              `-->\n\n`;
             const header = `**VSDD Phase 1c — Gemini**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: header + body + footer,
-            });
-            // Separate marker comment, parseable by promote.yml's
-            // phase-1c-clearance job. One marker per reviewer per run.
-            const glyph = verdict === 'pass' ? '✓' : '⛔';
-            const marker = `${glyph} VSDD Phase 1c gemini verdict: ${verdict}`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: marker,
+              body: frontmatter + header + body + footer,
             });
 
   claude-review:
@@ -236,7 +237,7 @@ jobs:
           output-file: review.md
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Post review + verdict marker as issue comments
+      - name: Post review with embedded verdict frontmatter
         uses: actions/github-script@v9
         with:
           script: |
@@ -244,19 +245,16 @@ jobs:
             const body = fs.readFileSync('review.md', 'utf8');
             const m = body.match(/_Verdict:\s*`?(pass|fail)`?_/i);
             const verdict = m ? m[1].toLowerCase() : 'fail';
+            const frontmatter =
+              `<!-- vsdd-phase-1c\n` +
+              `reviewer: claude\n` +
+              `verdict: ${verdict}\n` +
+              `-->\n\n`;
             const header = `**VSDD Phase 1c — Claude**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: header + body + footer,
-            });
-            const glyph = verdict === 'pass' ? '✓' : '⛔';
-            const marker = `${glyph} VSDD Phase 1c claude verdict: ${verdict}`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: marker,
+              body: frontmatter + header + body + footer,
             });
