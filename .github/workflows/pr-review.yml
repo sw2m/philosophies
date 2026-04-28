@@ -455,6 +455,15 @@ jobs:
           name: pr-context
           path: ./
 
+      # Fetch philosophies' scripts (extract-verdict.js) for downstream
+      # callers that don't have them in their checkout.
+      - name: Fetch sw2m/philosophies scripts
+        uses: actions/checkout@v6
+        with:
+          repository: sw2m/philosophies
+          ref: main
+          path: .vsdd-philosophies
+
       - name: Run Gemini (composite; org-member gate inside)
         uses: sw2m/philosophies/.github/actions/gemini@main
         with:
@@ -473,7 +482,7 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
-            const { extractVerdict } = require(path.resolve('.github/scripts/extract-verdict.js'));
+            const { extractVerdict } = require(path.resolve('.vsdd-philosophies/.github/scripts/extract-verdict.js'));
             const raw = fs.readFileSync('review.md', 'utf8');
             const { verdict, body } = extractVerdict(raw);
             if (verdict !== 'pass' && verdict !== 'fail') {
@@ -516,6 +525,15 @@ jobs:
           name: pr-context
           path: ./
 
+      # Fetch philosophies' scripts (extract-verdict.js) for downstream
+      # callers that don't have them in their checkout.
+      - name: Fetch sw2m/philosophies scripts
+        uses: actions/checkout@v6
+        with:
+          repository: sw2m/philosophies
+          ref: main
+          path: .vsdd-philosophies
+
       - name: Run Claude (composite; org-member gate inside)
         uses: sw2m/philosophies/.github/actions/claude@main
         with:
@@ -537,7 +555,7 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
-            const { extractVerdict } = require(path.resolve('.github/scripts/extract-verdict.js'));
+            const { extractVerdict } = require(path.resolve('.vsdd-philosophies/.github/scripts/extract-verdict.js'));
             const raw = fs.readFileSync('review.md', 'utf8');
             const { verdict, body } = extractVerdict(raw);
             if (verdict !== 'pass' && verdict !== 'fail') {

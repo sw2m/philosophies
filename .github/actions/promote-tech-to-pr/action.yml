@@ -297,8 +297,10 @@ runs:
 
           # Extract the frontmatter from the END of the agent output.
           # Parser writes ${RUNNER_TEMP}/phase2-meta.json (out-of-tree per
-          # #65) and prints declared files.
-          NEW_FILES=$(python3 .github/scripts/parse-phase2-frontmatter.py "$PHASE2_OUTPUT" "${RUNNER_TEMP}/phase2-meta.json" 2>${RUNNER_TEMP}/phase2-parse-err.log) || {
+          # #65) and prints declared files. Use $GITHUB_ACTION_PATH so
+          # the script resolves against THIS composite action's checkout
+          # (philosophies), not the consumer's repo checkout.
+          NEW_FILES=$(python3 "${GITHUB_ACTION_PATH}/../../scripts/parse-phase2-frontmatter.py" "$PHASE2_OUTPUT" "${RUNNER_TEMP}/phase2-meta.json" 2>${RUNNER_TEMP}/phase2-parse-err.log) || {
             last_failure="Phase 2 frontmatter parse failed (attempt $attempt). $(cat ${RUNNER_TEMP}/phase2-parse-err.log)"
             echo "::warning::$last_failure"
             continue
