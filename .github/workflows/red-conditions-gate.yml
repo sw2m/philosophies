@@ -55,6 +55,15 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
+      # Fetch philosophies' scripts so this workflow works when called
+      # from a downstream sw2m repo via workflow_call.
+      - name: Fetch sw2m/philosophies scripts
+        uses: actions/checkout@v6
+        with:
+          repository: sw2m/philosophies
+          ref: main
+          path: .vsdd-philosophies
+
       # Clause (a) — test-commits-only.
       # Walk every commit on the PR; each must classify as tests-only.
       # `classify-changes` returns `tests-only=true|false` per commit.
@@ -73,7 +82,7 @@ jobs:
           fail=0
           while read -r sha; do
             [ -z "$sha" ] && continue
-            output=$(bash .github/scripts/classify-changes.sh "$sha" \
+            output=$(bash .vsdd-philosophies/.github/scripts/classify-changes.sh "$sha" \
               ${GLOBS:+--patterns "$GLOBS"})
             tests_only=$(grep '^tests-only=' <<<"$output" | cut -d= -f2)
             if [ "$tests_only" != "true" ]; then

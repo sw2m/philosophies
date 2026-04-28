@@ -411,9 +411,19 @@ jobs:
           name: pr-context
           path: ./
 
+      # Fetch philosophies' scripts so this workflow works when called
+      # from a downstream sw2m repo via workflow_call (the consumer's
+      # checkout has neither symbol-audit.sh nor the other VSDD scripts).
+      - name: Fetch sw2m/philosophies scripts
+        uses: actions/checkout@v6
+        with:
+          repository: sw2m/philosophies
+          ref: main
+          path: .vsdd-philosophies
+
       - name: Run symbol audit
         run: |
-          bash .github/scripts/symbol-audit.sh pr.diff symbol-audit.md
+          bash .vsdd-philosophies/.github/scripts/symbol-audit.sh pr.diff symbol-audit.md
           echo '--- symbol-audit.md ---'
           cat symbol-audit.md
 
