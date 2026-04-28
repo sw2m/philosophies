@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: s
-        uses: ./.github/actions/repo-shape
+        uses: sw2m/philosophies/.github/actions/repo-shape@main
 
   blocker:
     name: Non-test-commit ancestry enforcement
