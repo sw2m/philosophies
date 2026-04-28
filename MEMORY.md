@@ -296,7 +296,7 @@ Multi-word symbols are an indicator of poorly architected code, because they can
 
 This repo's `.github/workflows/` enforces VSDD on itself. Six workflows, mirroring the pipeline:
 
-- **`issue-review.yml`** — fires on `issues: [opened, edited, assigned]`. Runs **two** adversarial reviewers (Gemini + Claude) in parallel as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body. Two cognitive sources per §V. Each posts a comment. **Advisory only — never gates.** Subject to the **ownership gate** (see below) — issues authored by non-org-members stay dormant until an org member self-assigns.
+- **`issue-review.yml`** — fires on `issues: [opened, edited, assigned]`. Runs **two** adversarial reviewers (Gemini + Claude) in parallel as Sarcasmotron (Phase 1c, Spec Review Gate) against the issue body. Two cognitive sources per §V. Each reviewer posts (a) the review comment and (b) a separate parseable verdict-marker comment of the form `✓ VSDD Phase 1c <reviewer> verdict: pass` or `⛔ ... fail`. **The verdict gates promotion** — see `promote.yml`. Subject to the **ownership gate** (see below) — issues authored by non-org-members stay dormant until an org member self-assigns.
 - **`pr-review.yml`** — fires on `pull_request: [opened, synchronize, reopened, ready_for_review, assigned]`. Runs *two* adversarial reviewers in parallel — Gemini and Claude — against the diff with `MEMORY.md` as the standard (Phase 3, Adversarial Refinement). Two cognitive sources per §V. Each posts a PR comment. Also runs a deterministic `symbol-audit` job (`.github/scripts/symbol-audit.sh`) that greps the PR diff for camelCase/snake_case identifiers and posts the matches under `<details>` as a §IX pre-check, with PascalCase, SCREAMING_SNAKE, recognized serde-leak fields, and third-party paths soft-filtered. **Advisory only — never gates.** Also subject to the ownership gate.
 - **`promote.yml`** — fires on `issues: [assigned]`. The assignment-triggered promotion pipeline (see below).
 - **`labels.yml`** — fires on `workflow_dispatch` and on push to `main` when `.github/labels.yml` changes. Idempotent label sync; manages `spec:goal`, `spec:tech`, `needs-human`, `ci-meta`.
@@ -316,6 +316,12 @@ The gate runs as a top-level `ownership` job in each workflow; downstream jobs `
 ### Promotion pipeline (`promote.yml`)
 
 The promotion pipeline lets sw2m repos run autonomously with HIL only at decision points (assignment). On `issues: [assigned]`:
+
+**Phase 1c gate.** Before goal→tech or tech→PR runs, the `phase-1c-clearance` job inspects the issue's bot-posted verdict markers. Both Gemini's and Claude's most-recent verdict markers must:
+1. Be `pass` (a `fail` verdict from either reviewer blocks promotion until the issue body is edited and Phase 1c re-runs).
+2. Have been posted **after** the issue's last `updated_at` (a verdict that pre-dates the most recent issue edit is stale and treated as missing).
+
+If either condition fails, promotion is blocked. The fix is to address the reviewer's blocking concerns, edit the issue body (which re-fires `issue-review.yml`), and re-trigger promote (un-assign + re-assign). Race-on-assign: when issue-review and promote both fire from the same `assigned` event, the clearance job typically runs before the reviewers finish; expect to re-assign once Phase 1c completes.
 
 1. **Goal → tech.** A `spec:goal` issue, when assigned to an org member, is decomposed by Claude into N tech-spec sub-issues (one technical problem each per §VII). Each new sub-issue carries `spec:tech` and a back-link to the parent goal. The agent's job is decomposition, not solution.
 
