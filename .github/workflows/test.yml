@@ -39,7 +39,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Skip if no MEMORY.md
+        id: check
+        shell: bash
+        run: |
+          if [ -f MEMORY.md ]; then
+            echo "has-memory=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-memory=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No MEMORY.md in this repo. Lychee link check is philosophies-specific; skipping."
+          fi
+
       - name: Run lychee
+        if: steps.check.outputs.has-memory == 'true'
         uses: lycheeverse/lychee-action@v2
         with:
           args: >-
@@ -52,14 +64,41 @@ jobs:
 
   structural-sanity:
     name: MEMORY.md structural sanity
+    # Skip when consumer doesn't have a MEMORY.md — this check is
+    # philosophies-specific (asserts 9 Roman-numeral sections in the
+    # canonical doc) and not meaningful for repos that don't carry their
+    # own copy. The has-memory check is a cheap precondition.
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Skip if no MEMORY.md
+        id: check
+        shell: bash
+        run: |
+          if [ -f MEMORY.md ]; then
+            echo "has-memory=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-memory=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No MEMORY.md in this repo. Structural sanity is philosophies-specific; skipping."
+          fi
+
+      # Fetch philosophies' check-memory-structure.sh for downstream
+      # callers that don't have it locally. (Only matters when has-memory
+      # is true, but the checkout is cheap and unconditional.)
+      - name: Fetch sw2m/philosophies scripts
+        if: steps.check.outputs.has-memory == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: sw2m/philosophies
+          ref: main
+          path: .vsdd-philosophies
+
       - name: Assert all 9 numbered sections are present
-        run: bash .github/scripts/check-memory-structure.sh
+        if: steps.check.outputs.has-memory == 'true'
+        run: bash .vsdd-philosophies/.github/scripts/check-memory-structure.sh
 
   green-gate:
     name: Green Gate (§VIII tests on PR HEAD)
@@ -79,7 +118,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - id: shape
-        uses: ./.github/actions/repo-shape
+        uses: sw2m/philosophies/.github/actions/repo-shape@main
       - name: Detect runner + emit install/test commands
         id: runner
         env:
