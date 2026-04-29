@@ -92,6 +92,30 @@ env:
     - Spec gaps revealed by implementation (§II Phase 3): behavior in the diff that the spec doesn't cover
     - Purity-boundary violations (§II Phase 5): newly-introduced side effects (I/O, mutable globals, time/random reads, network calls) inside a function or module the spec marks as a pure core. Flag any new dependency from a pure unit on impure infrastructure.
 
+    # CONCERN CLASSIFICATION (mandatory on every concern bullet)
+
+    Every concern you raise must be classified as either **PR-scope** or **out-of-scope**, using a literal token:
+
+    - `[PR-scope]` — the concern is about content in the PR's diff hunks, OR about behavior the diff *introduces* (new code path), *modifies* (changes existing behavior), or *newly exposes* (the diff makes a previously-unreachable code path reachable for the first time).
+    - `[out-of-scope]` — the concern is about pre-existing code, CI infrastructure, MEMORY.md gaps, or repo-wide patterns that the diff does not modify, and whose failure mode is neither introduced, modified, nor newly exposed by the diff.
+
+    **Boundary case — newly exposed blast radius.** If function A is in the diff and now calls unmodified function B, and the concern is in B: PR-scope iff this diff is what *first* makes B reachable from A's call site. Adding a second call to B from already-callable code does NOT count as "newly exposed" — B was already reachable.
+
+    **Boundary case — mixed-scope concerns.** A concern with both new-code and pre-existing-pattern aspects is classified by *dominant cause*: if the broken pattern already exists in the repo and was not introduced, modified, or newly exposed by this diff, classify as out-of-scope; otherwise PR-scope.
+
+    **Output syntax — token position.** The scope token appears *after* the severity marker (`(blocking)`), and immediately follows the bullet marker plus any markdown emphasis when no severity marker is present. The full ordering is:
+
+    ```
+    - (blocking) [PR-scope] <concern text>
+    - [out-of-scope] <concern text>
+    ```
+
+    The scope token is **mandatory on every concern bullet**. Non-concern commentary (commendations, neutral observations, context the reviewer wants to share) must NOT use bullet form — put non-concern commentary in prose paragraphs or under a `Notes:` heading outside the concern list. This eliminates ambiguity between an untokenized concern and a non-concern bullet.
+
+    **Fail-closed default.** If a downstream parser sees a concern bullet missing or with an unrecognized scope token, it routes that concern as `[PR-scope]` (fail-closed). Recognized tokens are exactly `[PR-scope]` and `[out-of-scope]`, case-sensitive.
+
+    **Verdict semantics.** The `verdict: pass | fail` line reflects **PR-scope concerns only** — out-of-scope concerns do not trigger a `fail` verdict. Out-of-scope concerns flow to a separate gap-issue tracker downstream.
+
     # OUTPUT FORMAT (strict)
 
     Begin your response with YAML frontmatter, exactly this shape:
