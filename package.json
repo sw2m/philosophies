@@ -1,0 +1,9 @@
+{
+  "name": "sw2m-philosophies",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Test-runner manifest for sw2m/philosophies. Discovered by .github/workflows/test.yml's Green Gate runner detection; node --test exercises the suites under tests/.",
+  "scripts": {
+    "test": "node --test tests/"
+  }
+}
