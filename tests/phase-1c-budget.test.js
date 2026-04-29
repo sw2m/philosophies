@@ -162,6 +162,28 @@ test('structural pattern: ignores (blocking) outside markdown bullets', () => {
   assert.strictEqual(countMarkers(body), 1);
 });
 
+test('structural pattern: ignores `- (blocking)` inside a fenced block', () => {
+  // Reviewers sometimes put example bullets inside fences — those must NOT
+  // be counted as real blockers per spec §88.
+  const body =
+    'Real concern below; fence above is a literal demonstration.\n' +
+    '\n' +
+    '```\n' +
+    '- (blocking) this is a literal example, not a concern\n' +
+    '- (blocking) likewise\n' +
+    '```\n' +
+    '\n' +
+    '- (blocking) this is the actual concern.\n' +
+    '\n_Verdict: `fail`_\n';
+  assert.strictEqual(countMarkers(body), 1);
+  // And demote-excess at budget 0 demotes only the real one, not the fenced.
+  const result = processReview({ body, round: 5, budget: 0 });
+  assert.strictEqual(result.demoted, 1);
+  // The fenced bullets remain unchanged.
+  assert.match(result.body, /- \(blocking\) this is a literal example/);
+  assert.match(result.body, /- \(advisory; over-budget\) this is the actual/);
+});
+
 test('structural pattern: matches backtick-wrapped marker', () => {
   const body =
     '- `(blocking)` wrapped in inline code at start of bullet.\n' +

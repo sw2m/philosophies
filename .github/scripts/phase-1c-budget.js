@@ -36,29 +36,66 @@ function computeRound(comments, reviewer) {
   return prior + 1;
 }
 
+// Find ``` fenced block ranges so the demote/count logic can skip matches
+// inside them. Spec §88: "Loose `(blocking)` substrings inside prose, fenced
+// code blocks, or pseudocode examples are not counted."
+function fencedRanges(body) {
+  const ranges = [];
+  const re = /```[\s\S]*?```/g;
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    ranges.push([m.index, m.index + m[0].length]);
+  }
+  return ranges;
+}
+
+function inFence(pos, ranges) {
+  for (const [start, end] of ranges) {
+    if (pos >= start && pos < end) return true;
+  }
+  return false;
+}
+
 function computeBudget(round) {
   return Math.max(0, INITIAL_BUDGET - BUDGET_STEP * (round - 1));
 }
 
 // Demote any structural `(blocking)` markers past `budget` to
-// `(advisory; over-budget)`. Returns { body, demoted, originalCount }.
+// `(advisory; over-budget)`. Markers inside fenced code blocks are skipped
+// (they're literal demonstrations, not concerns). Returns
+// { body, demoted, originalCount }.
 function demoteExcess(body, budget) {
+  const fences = fencedRanges(body);
   let count = 0;
   let demoted = 0;
-  const newBody = body.replace(MARKER_REGEX, (match, prefix, suffix) => {
-    count += 1;
-    if (count > budget) {
-      demoted += 1;
-      return `${prefix}(advisory; over-budget)${suffix}`;
-    }
-    return match;
-  });
+  const newBody = body.replace(
+    MARKER_REGEX,
+    (match, prefix, suffix, offset) => {
+      if (inFence(offset, fences)) return match;
+      count += 1;
+      if (count > budget) {
+        demoted += 1;
+        return `${prefix}(advisory; over-budget)${suffix}`;
+      }
+      return match;
+    },
+  );
   return { body: newBody, demoted, originalCount: count };
 }
 
-// Count remaining structural `(blocking)` markers (post-demotion).
+// Count remaining structural `(blocking)` markers (post-demotion). Markers
+// inside fenced code blocks are skipped, matching the demote logic.
 function countMarkers(body) {
-  return (body.match(MARKER_REGEX) || []).length;
+  const fences = fencedRanges(body);
+  let count = 0;
+  let m;
+  // Reset lastIndex on the shared global regex so repeated invocations from
+  // the same module don't pick up where the prior call left off.
+  MARKER_REGEX.lastIndex = 0;
+  while ((m = MARKER_REGEX.exec(body)) !== null) {
+    if (!inFence(m.index, fences)) count += 1;
+  }
+  return count;
 }
 
 // Process a reviewer's review.md content for a given round and reviewer slug.
