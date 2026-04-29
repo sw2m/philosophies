@@ -501,7 +501,7 @@ jobs:
           # fork-PR `synchronize` event can be the external pusher).
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
+      - name: Submit Gemini review (event: COMMENT — verdict in body)
         uses: actions/github-script@v9
         with:
           script: |
@@ -513,26 +513,41 @@ jobs:
             if (verdict !== 'pass' && verdict !== 'fail') {
               core.setFailed('Gemini output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
             }
-            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
+            // Always submit `event: COMMENT`. The verdict is preserved
+            // in the review body header (and as HTML-comment frontmatter)
+            // for downstream gating; using COMMENT keeps the review out
+            // of GitHub's formal review-state, which prevents bot reviews
+            // from blocking merge by themselves. This matches the
+            // "advisory; status check is what gates merge" framing in the
+            // header and avoids an admin-merge bypass when a bot reflexively
+            // returns `fail` on a correctly-staged PR. A future
+            // `phase-3-clearance` job can read the frontmatter and report
+            // a status check that branch protection requires, without
+            // relying on REQUEST_CHANGES.
+            const frontmatter =
+              `<!-- vsdd-phase-3\n` +
+              `reviewer: gemini\n` +
+              `verdict: ${verdict ?? 'unparseable'}\n` +
+              `-->\n\n`;
             const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
-            // Self-review guard — see ci-meta.yml's consensus step
-            // for the rationale and the spec annotation about hardcoding.
             const author = context.payload.pull_request?.user?.login;
             if (author === 'github-actions[bot]') {
+              // Self-review case: createReview rejects when the actor
+              // matches the PR author, so fall back to a plain comment.
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: header + `_(${event} would be rejected: PR author == review actor, posting as comment)_\n\n` + body + footer,
+                body: frontmatter + header + `_(self-review by bot — posting as comment)_\n\n` + body + footer,
               });
             } else {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: context.issue.number,
-                event,
-                body: header + body + footer,
+                event: 'COMMENT',
+                body: frontmatter + header + body + footer,
               });
             }
 
@@ -574,7 +589,7 @@ jobs:
           stdin-file: gemini-stdin.txt
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
+      - name: Submit Claude review (event: COMMENT — verdict in body)
         uses: actions/github-script@v9
         with:
           script: |
@@ -586,24 +601,30 @@ jobs:
             if (verdict !== 'pass' && verdict !== 'fail') {
               core.setFailed('Claude output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
             }
-            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
+            // Always `event: COMMENT`. See the rationale in the gemini step
+            // above — verdict travels in the review body header + frontmatter
+            // for downstream gating; bot reviews don't block merge by themselves.
+            const frontmatter =
+              `<!-- vsdd-phase-3\n` +
+              `reviewer: claude\n` +
+              `verdict: ${verdict ?? 'unparseable'}\n` +
+              `-->\n\n`;
             const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
-            // Self-review guard — same as the gemini-review step.
             const author = context.payload.pull_request?.user?.login;
             if (author === 'github-actions[bot]') {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
-                body: header + `_(${event} would be rejected: PR author == review actor, posting as comment)_\n\n` + body + footer,
+                body: frontmatter + header + `_(self-review by bot — posting as comment)_\n\n` + body + footer,
               });
             } else {
               await github.rest.pulls.createReview({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: context.issue.number,
-                event,
-                body: header + body + footer,
+                event: 'COMMENT',
+                body: frontmatter + header + body + footer,
               });
             }
