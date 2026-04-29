@@ -210,7 +210,11 @@ jobs:
           echo "deno=$DENO"          >> "$GITHUB_OUTPUT"
           {
             echo "- Green Gate runner: \`$CMD\`"
-            [ -n "$INSTALL" ] && echo "- Install step: \`$INSTALL\`"
+            # Use `if` form, not `[ -n "$X" ] && echo ...`. With `set -e`,
+            # the `&&` form propagates the test's non-zero exit when
+            # `$INSTALL` is empty, which is a valid no-install case for
+            # runners like `make test` and `cargo test`.
+            if [ -n "$INSTALL" ]; then echo "- Install step: \`$INSTALL\`"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Node

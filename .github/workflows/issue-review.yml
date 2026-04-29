@@ -187,24 +187,40 @@ jobs:
           output-file: review.md
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Post review with embedded verdict frontmatter
+      - name: Post review with budget-decay reclassification (gemini)
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('review.md', 'utf8');
-            // Extract the verdict line. The reviewer's prompt mandates
-            // exactly one `_Verdict: \`pass\`_` or `_Verdict: \`fail\`_`
-            // line. If absent or unparseable, fail closed.
-            const m = body.match(/_Verdict:\s*`?(pass|fail)`?_/i);
-            const verdict = m ? m[1].toLowerCase() : 'fail';
-            // Frontmatter inside an HTML comment — invisible to readers,
-            // parseable by promote.yml's phase-1c-clearance gate. One
-            // frontmatter block per review.
+            const path = require('path');
+            const budget = require(path.join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/phase-1c-budget.js',
+            ));
+            const REVIEWER = 'gemini';
+            const reviewBody = fs.readFileSync('review.md', 'utf8');
+            // Round counting: paginate through all issue comments, count
+            // prior frontmatter comments authored by this reviewer.
+            const allComments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100,
+              },
+            );
+            const round = budget.computeRound(allComments, REVIEWER);
+            const budgetN = budget.computeBudget(round);
+            const result = budget.processReview({
+              body: reviewBody,
+              round,
+              budget: budgetN,
+            });
             const frontmatter =
               `<!-- vsdd-phase-1c\n` +
-              `reviewer: gemini\n` +
-              `verdict: ${verdict}\n` +
+              `reviewer: ${REVIEWER}\n` +
+              `verdict: ${result.verdict}\n` +
               `-->\n\n`;
             const header = `**VSDD Phase 1c — Gemini**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
@@ -212,7 +228,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: frontmatter + header + body + footer,
+              body: frontmatter + header + result.body + footer,
             });
 
   claude-review:
@@ -237,18 +253,38 @@ jobs:
           output-file: review.md
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Post review with embedded verdict frontmatter
+      - name: Post review with budget-decay reclassification (claude)
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('review.md', 'utf8');
-            const m = body.match(/_Verdict:\s*`?(pass|fail)`?_/i);
-            const verdict = m ? m[1].toLowerCase() : 'fail';
+            const path = require('path');
+            const budget = require(path.join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/phase-1c-budget.js',
+            ));
+            const REVIEWER = 'claude';
+            const reviewBody = fs.readFileSync('review.md', 'utf8');
+            const allComments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100,
+              },
+            );
+            const round = budget.computeRound(allComments, REVIEWER);
+            const budgetN = budget.computeBudget(round);
+            const result = budget.processReview({
+              body: reviewBody,
+              round,
+              budget: budgetN,
+            });
             const frontmatter =
               `<!-- vsdd-phase-1c\n` +
-              `reviewer: claude\n` +
-              `verdict: ${verdict}\n` +
+              `reviewer: ${REVIEWER}\n` +
+              `verdict: ${result.verdict}\n` +
               `-->\n\n`;
             const header = `**VSDD Phase 1c — Claude**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
@@ -256,5 +292,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: frontmatter + header + body + footer,
+              body: frontmatter + header + result.body + footer,
             });
