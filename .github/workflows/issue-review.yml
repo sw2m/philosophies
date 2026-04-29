@@ -129,9 +129,21 @@ jobs:
           Output rules:
             - Be terse. Bullet points only. No preamble.
             - Each bullet: a concrete flaw with a specific quote/location and
-              a proposed fix or clarifying question.
+              a proposed fix or clarifying question. Lead each blocking
+              concern with the literal token `(blocking)`; advisory nits
+              do not need a marker.
             - If genuinely no concerns: output exactly "No Phase 1c concerns identified."
-            - This review is advisory. Do not pretend it gates anything.
+            - End your output with EXACTLY one verdict line, on its own
+              line, in this format (no other text on the line):
+                _Verdict: `pass`_     (no blocking concerns)
+                _Verdict: `fail`_     (one or more `(blocking)` concerns)
+              The verdict line gates promotion of this issue: the CI
+              extracts it into a structured frontmatter block at the
+              top of your posted comment, and `promote.yml`'s
+              `phase-1c-clearance` job blocks goal→tech / tech→PR if
+              EITHER reviewer's latest verdict is `fail` or stale (older
+              than the issue's last edit). Edit the issue body to
+              re-run Phase 1c.
 
           --- MEMORY.md ---
           PROMPT_EOF
@@ -175,19 +187,32 @@ jobs:
           output-file: review.md
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Post review as issue comment
+      - name: Post review with embedded verdict frontmatter
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('review.md', 'utf8');
-            const header = `**VSDD Phase 1c — Gemini** _(advisory)_\n\n`;
-            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 1c. Does not gate anything._`;
+            // Extract the verdict line. The reviewer's prompt mandates
+            // exactly one `_Verdict: \`pass\`_` or `_Verdict: \`fail\`_`
+            // line. If absent or unparseable, fail closed.
+            const m = body.match(/_Verdict:\s*`?(pass|fail)`?_/i);
+            const verdict = m ? m[1].toLowerCase() : 'fail';
+            // Frontmatter inside an HTML comment — invisible to readers,
+            // parseable by promote.yml's phase-1c-clearance gate. One
+            // frontmatter block per review.
+            const frontmatter =
+              `<!-- vsdd-phase-1c\n` +
+              `reviewer: gemini\n` +
+              `verdict: ${verdict}\n` +
+              `-->\n\n`;
+            const header = `**VSDD Phase 1c — Gemini**\n\n`;
+            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: header + body + footer,
+              body: frontmatter + header + body + footer,
             });
 
   claude-review:
@@ -212,17 +237,24 @@ jobs:
           output-file: review.md
           actor-override: ${{ needs.ownership.outputs.owner }}
 
-      - name: Post review as issue comment
+      - name: Post review with embedded verdict frontmatter
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('review.md', 'utf8');
-            const header = `**VSDD Phase 1c — Claude** _(advisory)_\n\n`;
-            const footer = `\n\n---\n_Automated advisory review per MEMORY.md §II Phase 1c. Does not gate anything._`;
+            const m = body.match(/_Verdict:\s*`?(pass|fail)`?_/i);
+            const verdict = m ? m[1].toLowerCase() : 'fail';
+            const frontmatter =
+              `<!-- vsdd-phase-1c\n` +
+              `reviewer: claude\n` +
+              `verdict: ${verdict}\n` +
+              `-->\n\n`;
+            const header = `**VSDD Phase 1c — Claude**\n\n`;
+            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: header + body + footer,
+              body: frontmatter + header + body + footer,
             });
