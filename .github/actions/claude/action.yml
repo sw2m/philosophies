@@ -11,6 +11,7 @@ inputs:
     description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
     required: false
     default: "sw2m"
+  trust-github-actions-bot: {description: "When 'true', accept github-actions[bot] without org-membership check. Caller must validate safe context first. See #112.", required: false, default: 'false'}
   actor-override:
     description: |
       If set, validate this login against the org instead of the workflow
@@ -74,7 +75,14 @@ runs:
         SENDER: ${{ github.event.sender.login || github.actor }}
         OVERRIDE: ${{ inputs.actor-override }}
         ORG: ${{ inputs.org }}
+        INPUT_TRUST_BOT: ${{ inputs.trust-github-actions-bot }}
       run: |
+        # Normalize trust-github-actions-bot input to a boolean shell variable.
+        # Uses tr for POSIX-compatible lowercase (macOS runners have Bash 3.2).
+        case "$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')" in
+          true) trust_bot=true ;;
+          *)    trust_bot=false ;;
+        esac
         # Hard gate: agents must not be invocable by non-org-members.
         # NOTE: the default GITHUB_TOKEN can only see PUBLIC org memberships.
         ACTOR="${OVERRIDE:-$SENDER}"
