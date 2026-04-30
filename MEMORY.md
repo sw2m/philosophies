@@ -313,6 +313,16 @@ CI runs are gated on **ownership**: an issue or PR is *owned* iff its author is 
 
 The gate runs as a top-level `ownership` job in each workflow; downstream jobs `needs: [ownership]` and skip when unowned. The owner login is also threaded into the gemini/claude composite actions as `actor-override` so the inner org-member check validates against the *owner*, not the workflow trigger sender (which on a fork-PR `synchronize` event would be the external pusher).
 
+### Bot-trust opt-in
+
+Bot-trust is an opt-in mechanism that allows workflows to grant elevated permissions to trusted bot accounts (e.g. `promote-tech-to-pr[bot]`). Bot-trust may only be enabled when all of the following conditions are met:
+
+1. The bot account is owned by the org (not a third-party app).
+2. The bot operates within a **safe-context predicate** — the workflow checks that the triggering event, payload fields, and target refs all originate from org-controlled sources.
+3. An org member has explicitly opted in via assignment (the ownership gate).
+
+The safe-context predicate guarantees that bot actions only execute when: (a) the event payload cannot be forged by external actors, (b) the target branch/issue is within the org's control, and (c) no user-supplied content flows into privileged operations unvalidated. These checks ensure that an external attacker cannot exploit bot-trust to escalate privileges, inject malicious payloads, or trigger workflows on forged events — the predicate rejects any context that fails these constraints before bot-trust is evaluated.
+
 ### Promotion pipeline (`promote.yml`)
 
 The promotion pipeline lets sw2m repos run autonomously with HIL only at decision points (assignment). On `issues: [assigned]`:
