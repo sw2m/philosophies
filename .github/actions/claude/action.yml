@@ -11,7 +11,6 @@ inputs:
     description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
     required: false
     default: "sw2m"
-  trust-github-actions-bot: {description: "When 'true', accept github-actions[bot] without org-membership check. Caller must validate safe context first. See #112.", required: false, default: 'false'}
   actor-override:
     description: |
       If set, validate this login against the org instead of the workflow
