@@ -342,6 +342,26 @@ If either condition fails, promotion is blocked. The fix is to address the revie
 
    **Docs-repo carve-out.** Repos with no detectable test runner (e.g. this one) follow the §VIII N/A path: Phases 2/3/5 are skipped and Phase 4 runs once. The draft PR is the artifact for human review.
 
+### Red-gate marker — one-way diode (#129)
+
+The `Red-gate-cleared` marker is a comment on the PR thread authored by `github-actions[bot]` whose body contains the literal token `<!-- vsdd-red-gate-cleared -->` on its own line. Token presence is the entire identifying signal — no SHA, no commit-status, no statuses-API write.
+
+The marker is a **one-way diode**: once `red-conditions-gate.yml` posts it, no workflow in this repo deletes or edits it. Subsequent pushes, force-pushes, and rebases do not revoke the marker; the comment persists across history rewrites. (Earlier marker designs embedded a `$HEAD_SHA` in the body and broke on rebase; the SHA payload is gone.)
+
+`vsdd-marker-check.yml` is a reusable workflow that scans a PR's comments via paginated API for the token and exposes `marker-present: true|false`. It always exits 0 — purely informational, never gates merge.
+
+### Opt-out brand — `vsdd:opt-out` label (#129)
+
+The `vsdd-brand.yml` workflow maintains a `vsdd:opt-out` label on PRs as a visible "out-of-process" brand. The brand is computed from three properties:
+
+- **Whitelist match** — the PR's diff against base is non-empty AND every changed-file path (added, modified, deleted, copied, rename source, rename destination) lies under `.github/` by raw `startsWith('.github/')` prefix match. No symlink resolution.
+- **Has impl content** — the PR's diff against base modifies at least one non-test file (test files identified by `repo-shape`'s detected test glob).
+- **Marker present** — earned marker exists on the thread (per the diode definition above).
+
+Brand applied iff `whitelist OR (hasImpl AND !markerPresent)`. The label is informational; it does not block merge. It records the consequence of choosing impl-first (or being a `.github/`-only meta-PR for which TDD discipline is exempt).
+
+Manual deletion of the marker comment by a human moves the PR back to no-marker state; the bot does not re-post (no comment-deletion handler exists; absence of the handler IS the mechanism). The brand workflow re-evaluates state on every PR event and on `issue_comment.deleted` (resolved to PR via `github.event.issue.pull_request`).
+
 ### Reusing the workflows
 
 Each workflow exposes a `workflow_call:` trigger so other `sw2m` repos can reuse them:

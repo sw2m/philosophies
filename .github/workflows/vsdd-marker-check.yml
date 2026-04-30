@@ -1,0 +1,69 @@
+name: VSDD marker presence check
+
+# Reusable workflow per #129. Consumers (e.g., vsdd-brand.yml) call this
+# via workflow_call to discover whether an earned `Red-gate-cleared` marker
+# is present on a PR. Output is purely informational; this workflow always
+# exits 0 — no merge blocking.
+
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        description: "PR number to check for marker presence."
+        required: true
+        type: number
+    outputs:
+      marker-present:
+        description: "true if any github-actions[bot] comment on this PR contains the marker token; false otherwise."
+        value: ${{ jobs.check.outputs.marker-present }}
+
+permissions:
+  pull-requests: read
+  issues: read
+
+jobs:
+  check:
+    name: Scan PR comments for marker token
+    runs-on: ubuntu-latest
+    outputs:
+      marker-present: ${{ steps.scan.outputs.marker-present }}
+    steps:
+      - name: Scan
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr-number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Per #129: paginated comment fetch with short-circuit on first
+          # match. Filter: author == github-actions[bot] AND body contains
+          # the token literal. On rate-limit failure: retry once with 30s
+          # backoff, then fail-closed (marker-present=false).
+          attempt() {
+            gh api --paginate "repos/${{ github.repository }}/issues/${PR}/comments" \
+              --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- vsdd-red-gate-cleared -->"))] | length' \
+              2>/dev/null
+          }
+
+          if count=$(attempt); then
+            :
+          else
+            echo "::warning::API call failed (likely rate-limit); retrying after 30s."
+            sleep 30
+            if count=$(attempt); then
+              :
+            else
+              echo "::warning::API call failed twice; failing-closed (marker-present=false)."
+              echo "marker-present=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          if [ "${count:-0}" -gt 0 ]; then
+            echo "marker-present=true" >> "$GITHUB_OUTPUT"
+            echo "Marker present on PR #${PR}."
+          else
+            echo "marker-present=false" >> "$GITHUB_OUTPUT"
+            echo "No marker present on PR #${PR}."
+          fi

@@ -136,17 +136,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          # Idempotency: only post if no existing marker matches HEAD.
-          existing=$(gh api "repos/${{ github.repository }}/issues/${PR}/comments" \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\") | select(.body | startswith(\"✓ VSDD Red gate cleared at $HEAD_SHA\"))" \
+          # Per #129: marker is a fixed token, not a SHA. The token alone on
+          # a line identifies an earned marker; downstream consumers check
+          # presence by author + token only. One-way diode: bot never
+          # deletes or edits. Idempotent: skip if any prior bot-authored
+          # comment already contains the token.
+          existing=$(gh api --paginate "repos/${{ github.repository }}/issues/${PR}/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"<!-- vsdd-red-gate-cleared -->\"))" \
             | head -c1) || true
           if [ -n "$existing" ]; then
-            echo "Marker already posted for $HEAD_SHA; skipping."
+            echo "Marker already posted on this PR; skipping (one-way diode)."
             exit 0
           fi
-          gh pr comment "$PR" --body "✓ VSDD Red gate cleared at $HEAD_SHA. Non-test commits descending from this SHA are permitted."
-          echo "Posted Red-gate-cleared marker for $HEAD_SHA."
+          gh pr comment "$PR" --body "$(printf '<!-- vsdd-red-gate-cleared -->\n\n_Phase 2 conditions met. This marker latches; the bot will not revoke it._\n')"
+          echo "Posted Red-gate-cleared marker (token-only)."
