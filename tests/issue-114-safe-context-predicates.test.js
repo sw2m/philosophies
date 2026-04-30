@@ -56,8 +56,8 @@ test('all required event types are documented', () => {
   for (const event of EVENT_TYPES) {
     assert.match(
       content,
-      new RegExp(`###\\s+\`${event}\``),
-      `event type ${event} is not documented with a ### heading`,
+      new RegExp(`##\\s+\`${event}\``),
+      `event type ${event} is not documented with a ## heading`,
     );
   }
 });
@@ -235,12 +235,12 @@ test('pull_request section documents Dependabot edge case', () => {
 });
 
 // -----------------------------------------------------------------------------
-// Helper: extract section from ### `event_type` to next ### or end.
+// Helper: extract section from ### `event_type` to next ## or end.
 // -----------------------------------------------------------------------------
 
 function extractSection(content, event) {
   const pattern = new RegExp(
-    `###\\s+\`${event}\`([\\s\\S]*?)(?=###\\s+\`|$)`,
+    `##\\s+\`${event}\`([\\s\\S]*?)(?=##\\s+\`|$)`,
     'i',
   );
   const match = content.match(pattern);
