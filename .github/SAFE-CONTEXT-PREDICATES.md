@@ -8,9 +8,9 @@ The predicate gate and the identity gate are independent; both must pass for tru
 
 ---
 
-### `pull_request`
+## `pull_request`
 
-```
+```yaml
 ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 ```
 
@@ -20,9 +20,9 @@ ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
 ---
 
-### `pull_request_target`
+## `pull_request_target`
 
-```
+```yaml
 'false'
 ```
 
@@ -30,9 +30,9 @@ ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
 ---
 
-### `push`
+## `push`
 
-```
+```yaml
 ${{ 'true' }}
 ```
 
@@ -40,9 +40,9 @@ ${{ 'true' }}
 
 ---
 
-### `workflow_dispatch`
+## `workflow_dispatch`
 
-```
+```yaml
 ${{ 'true' }}
 ```
 
@@ -50,9 +50,9 @@ ${{ 'true' }}
 
 ---
 
-### `repository_dispatch`
+## `repository_dispatch`
 
-```
+```yaml
 ${{ github.event.client_payload.trusted == true }}
 ```
 
@@ -60,9 +60,9 @@ ${{ github.event.client_payload.trusted == true }}
 
 ---
 
-### `schedule`
+## `schedule`
 
-```
+```yaml
 ${{ 'true' }}
 ```
 
@@ -70,9 +70,9 @@ ${{ 'true' }}
 
 ---
 
-### `workflow_run`
+## `workflow_run`
 
-```
+```yaml
 ${{ github.event.workflow_run.head_repository.full_name == github.repository }}
 ```
 
@@ -80,9 +80,9 @@ ${{ github.event.workflow_run.head_repository.full_name == github.repository }}
 
 ---
 
-### `issues`
+## `issues`
 
-```
+```yaml
 ${{ 'true' }}
 ```
 
@@ -90,9 +90,9 @@ ${{ 'true' }}
 
 ---
 
-### `issue_comment`
+## `issue_comment`
 
-```
+```yaml
 'false'
 ```
 
@@ -102,7 +102,7 @@ ${{ 'true' }}
 
 ### Other / unrecognized event types
 
-```
+```yaml
 'false'
 ```
 
