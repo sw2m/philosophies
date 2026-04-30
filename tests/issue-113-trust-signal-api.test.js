@@ -236,12 +236,33 @@ test('trust-github-actions-bot token is grep-able in claude action', () => {
 // -----------------------------------------------------------------------------
 
 function extractInputBlock(content, name) {
-  // Match from "inputName:" to the next input at the same indentation level
-  // or end of inputs section. This is a simplified parser for YAML inputs.
-  const pattern = new RegExp(
-    `^([ \\t]*)${name}:([\\s\\S]*?)(?=^\\1[a-z-]+:|^[a-z]+:|$)`,
-    'm',
-  );
-  const match = content.match(pattern);
-  return match ? match[0] : null;
+  // Line-based scanner: locate the line declaring `name:` at some indent,
+  // then walk forward to the next line whose indent is <= the declaration
+  // indent and which itself starts a new YAML key. The original regex form
+  // collapsed to a single-line capture under the `m` flag because `$`
+  // matched end-of-line, not end-of-input.
+  const lines = content.split('\n');
+  const headerRe = new RegExp(`^([ \\t]*)${name}:`);
+  let startIdx = -1;
+  let indentLen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(headerRe);
+    if (m) {
+      startIdx = i;
+      indentLen = m[1].length;
+      break;
+    }
+  }
+  if (startIdx === -1) return null;
+  const keyRe = /^([ \t]*)[A-Za-z_][A-Za-z0-9_-]*:/;
+  let endIdx = lines.length;
+  for (let i = startIdx + 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    const m = lines[i].match(keyRe);
+    if (m && m[1].length <= indentLen) {
+      endIdx = i;
+      break;
+    }
+  }
+  return lines.slice(startIdx, endIdx).join('\n');
 }
