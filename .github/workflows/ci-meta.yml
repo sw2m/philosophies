@@ -147,6 +147,8 @@ jobs:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: eval-input.txt
           output-file: gemini-output.txt
+          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
+          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           prompt: |
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
@@ -284,6 +286,8 @@ jobs:
           # (canonical MEMORY.md + every workflow + every composite action)
           # directly in the prompt rather than asking Claude to "read" files.
           stdin-file: eval-input.txt
+          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
+          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           prompt: |
             # CRITICAL OUTPUT FORMAT (read this FIRST)
 
