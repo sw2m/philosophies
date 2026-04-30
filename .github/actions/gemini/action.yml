@@ -21,6 +21,13 @@ inputs:
       (default) preserves the original sender-based check.
     required: false
     default: ""
+  trust-github-actions-bot:
+    description: |
+      When 'true', accepts github-actions[bot] as a valid actor without
+      calling the org-member API. Used for safe contexts where the bot
+      is acting on behalf of an org-member-owned artifact. Default 'false'.
+    required: false
+    default: "false"
   prompt:
     description: "Optional inline prompt prepended to stdin-file before piping to gemini."
     required: false
@@ -73,24 +80,29 @@ runs:
         # Members whose membership is private are invisible to this check
         # and will trigger a hard fail. Make membership public on the org
         # page (Settings → People → "Make public") to be recognized.
+        trust_bot=$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')
         ACTOR="${OVERRIDE:-$SENDER}"
         if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "$SENDER" ]; then
           echo "actor-override active: validating '$OVERRIDE' (caller-provided owner) instead of trigger sender '$SENDER'."
         fi
-        if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
-          echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
-          echo ""
-          echo "If you ARE a member but private: visit"
-          echo "https://github.com/orgs/$ORG/people and click 'Make public'"
-          echo "next to your row. The default workflow GITHUB_TOKEN cannot"
-          echo "see private memberships."
-          echo ""
-          echo "If you are not a member: agent invocations (Gemini) are"
-          echo "restricted to org members. An org member must open the PR"
-          echo "on your behalf or self-assign to take ownership."
-          exit 1
+        if [ "${trust_bot}" = "true" ] && [ "${ACTOR}" = "github-actions[bot]" ]; then
+          echo "::notice::Accepting github-actions[bot] as actor under trust-github-actions-bot opt-in."
+        else
+          if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
+            echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
+            echo ""
+            echo "If you ARE a member but private: visit"
+            echo "https://github.com/orgs/$ORG/people and click 'Make public'"
+            echo "next to your row. The default workflow GITHUB_TOKEN cannot"
+            echo "see private memberships."
+            echo ""
+            echo "If you are not a member: agent invocations (Gemini) are"
+            echo "restricted to org members. An org member must open the PR"
+            echo "on your behalf or self-assign to take ownership."
+            exit 1
+          fi
+          echo "✓ $ACTOR is a $ORG org member (public)."
         fi
-        echo "✓ $ACTOR is a $ORG org member (public)."
 
     - uses: actions/setup-node@v6
       with:
