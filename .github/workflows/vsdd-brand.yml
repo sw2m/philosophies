@@ -71,7 +71,31 @@ jobs:
     if: needs.resolve-pr.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve PR head SHA
+        id: head-sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR: ${{ needs.resolve-pr.outputs.pr-number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # On pull_request events the head SHA is in the payload; on
+          # issue_comment.deleted events it is not, so fetch via API. The
+          # subsequent checkout step uses this so repo-shape and any
+          # tree-dependent logic analyze the PR's content, not main.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            sha="$PR_HEAD_SHA"
+          else
+            sha=$(gh api "repos/${{ github.repository }}/pulls/${PR}" --jq '.head.sha')
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Resolved PR head SHA: $sha"
+
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.head-sha.outputs.sha }}
 
       - name: Compute whitelist-match and impl-content
         id: shape
@@ -139,11 +163,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          has_impl=false
+          impl=false
           # If no tests glob is detected, every changed file is impl.
           if [ -z "$TESTS_GLOB" ]; then
             count=$(gh api --paginate "repos/${{ github.repository }}/pulls/${PR}/files" --jq 'length')
-            if [ "${count:-0}" -gt 0 ]; then has_impl=true; fi
+            if [ "${count:-0}" -gt 0 ]; then impl=true; fi
           else
             # Match each path against the tests glob; non-matching → impl.
             while IFS= read -r path; do
@@ -151,30 +175,30 @@ jobs:
               # The pattern syntax of repo-shape is shell-glob, so case is
               # the right primitive.
               # shellcheck disable=SC2254
-              eval "case \"\$path\" in $TESTS_GLOB) is_test=true ;; *) is_test=false ;; esac"
-              if [ "$is_test" != "true" ]; then has_impl=true; break; fi
+              eval "case \"\$path\" in $TESTS_GLOB) test=true ;; *) test=false ;; esac"
+              if [ "$test" != "true" ]; then impl=true; break; fi
             done < <(gh api --paginate "repos/${{ github.repository }}/pulls/${PR}/files" --jq '.[].filename')
           fi
-          echo "has-impl=$has_impl" >> "$GITHUB_OUTPUT"
+          echo "impl=$impl" >> "$GITHUB_OUTPUT"
 
       - name: Compute brand state
         id: brand-state
         env:
           WHITELIST: ${{ steps.shape.outputs.whitelist }}
-          HAS_IMPL: ${{ steps.impl.outputs.has-impl }}
-          MARKER_PRESENT: ${{ needs.marker.outputs.marker-present }}
+          IMPL: ${{ steps.impl.outputs.impl }}
+          MARKER: ${{ needs.marker.outputs.marker-present }}
         shell: bash
         run: |
           set -euo pipefail
-          # Brand iff (whitelist OR (no marker AND has-impl)).
+          # Brand iff (whitelist OR (impl AND no marker)).
           # `node` is preinstalled on ubuntu-latest; reuse the pure helper
-          # so the workflow logic stays in step with the test contract.
+          # so the workflow logic and the module stay in step.
           node -e '
             const { computeBrandState } = require("./.github/scripts/vsdd-brand.js");
             const out = computeBrandState({
               whitelist: process.env.WHITELIST === "true",
-              hasImpl: process.env.HAS_IMPL === "true",
-              markerPresent: process.env.MARKER_PRESENT === "true",
+              impl: process.env.IMPL === "true",
+              marker: process.env.MARKER === "true",
             });
             require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "brand=" + out + "\n");
           '

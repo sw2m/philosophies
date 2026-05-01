@@ -33,34 +33,82 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ inputs.pr-number }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # Per #129: paginated comment fetch with short-circuit on first
           # match. Filter: author == github-actions[bot] AND body contains
-          # the token literal. On rate-limit failure: retry once with 30s
-          # backoff, then fail-closed (marker-present=false).
-          attempt() {
-            gh api --paginate "repos/${{ github.repository }}/issues/${PR}/comments" \
-              --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- vsdd-red-gate-cleared -->"))] | length' \
-              2>/dev/null
+          # the token literal. On true rate-limit (HTTP 403 +
+          # x-ratelimit-remaining: 0): retry once with 30s backoff, then
+          # fail-closed (marker-present=false). On other errors: fail-
+          # closed immediately rather than burning the retry budget.
+          #
+          # Short-circuit is implemented page-by-page: we drive the
+          # paginator manually via per_page + Link header, exit as soon
+          # as we see any match on a page, and never aggregate the full
+          # comment list in memory.
+          scan_once() {
+            local url="https://api.github.com/repos/${REPO}/issues/${PR}/comments?per_page=100"
+            local page=1
+            while [ -n "$url" ]; do
+              local hdr_file body_file
+              hdr_file=$(mktemp)
+              body_file=$(mktemp)
+              local code
+              code=$(gh api --include "$url" --silent > "$body_file" 2> "$hdr_file"; echo $?)
+              if [ "$code" != "0" ]; then
+                # Distinguish rate-limit from other failures.
+                if grep -qE '^HTTP/[12](\.[0-9])? 403' "$hdr_file" \
+                   && grep -qiE '^x-ratelimit-remaining:\s*0' "$hdr_file"; then
+                  rm -f "$hdr_file" "$body_file"
+                  return 2
+                fi
+                rm -f "$hdr_file" "$body_file"
+                return 1
+              fi
+              # `gh api --include` prints headers then body. The body is
+              # the JSON array; pipe through jq to short-circuit on first
+              # match.
+              if jq -e '
+                .[]
+                | select(.user.login == "github-actions[bot]")
+                | select(.body | contains("<!-- vsdd-red-gate-cleared -->"))
+              ' < "$body_file" >/dev/null 2>&1; then
+                rm -f "$hdr_file" "$body_file"
+                echo "found"
+                return 0
+              fi
+              # Parse Link: header for the next page; absence ends pagination.
+              url=$(grep -i '^link:' "$hdr_file" \
+                    | grep -oE '<[^>]+>; rel="next"' \
+                    | sed -E 's/^<([^>]+)>.*$/\1/' \
+                    | head -1)
+              page=$((page + 1))
+              rm -f "$hdr_file" "$body_file"
+            done
+            echo "absent"
+            return 0
           }
 
-          if count=$(attempt); then
-            :
-          else
-            echo "::warning::API call failed (likely rate-limit); retrying after 30s."
+          result=$(scan_once); rc=$?
+          if [ "$rc" = "2" ]; then
+            echo "::warning::API rate-limited (HTTP 403 + x-ratelimit-remaining: 0); retrying after 30s."
             sleep 30
-            if count=$(attempt); then
-              :
-            else
-              echo "::warning::API call failed twice; failing-closed (marker-present=false)."
+            result=$(scan_once); rc=$?
+            if [ "$rc" = "2" ]; then
+              echo "::warning::Rate-limited twice; failing-closed (marker-present=false)."
               echo "marker-present=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
+          if [ "$rc" != "0" ]; then
+            echo "::warning::API call failed for non-rate-limit reason; failing-closed (marker-present=false)."
+            echo "marker-present=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          if [ "${count:-0}" -gt 0 ]; then
+          if [ "$result" = "found" ]; then
             echo "marker-present=true" >> "$GITHUB_OUTPUT"
             echo "Marker present on PR #${PR}."
           else
