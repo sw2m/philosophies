@@ -40,8 +40,57 @@ runs:
         echo "goal title: $(cat goal-title.txt)"
         echo "goal body bytes: $(wc -c < goal-body.txt)"
 
+    - name: Read orchestrator canonical tuple (#128)
+      id: cardinality
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        ISSUE: ${{ inputs.issue-number }}
+      run: |
+        set -euo pipefail
+        # Find the chronologically-last orchestrator-authored Phase 1c
+        # comment with verdict: pass. Extract subjects/outcomes from its
+        # frontmatter as the canonical tuple. Absence of this comment is
+        # non-fatal — fall back to the LLM's existing decomposition logic.
+        if [ -z "${REPO:-}" ] || [ -z "${ISSUE:-}" ]; then
+          echo "min-cardinality=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        comments=$(gh api -H "Accept: application/vnd.github+json" \
+          "repos/${REPO}/issues/${ISSUE}/comments?per_page=100" 2>/dev/null || echo '[]')
+        latest=$(jq -r '
+          [.[]
+            | select(.user.login == "github-actions[bot]")
+            | select(.body | test("<!-- vsdd-phase-1c[\\s\\S]*reviewer:\\s*orchestrator[\\s\\S]*verdict:\\s*pass[\\s\\S]*-->"))
+          ]
+          | sort_by(.created_at)
+          | last
+        ' <<<"$comments")
+        if [ "$latest" = "null" ] || [ -z "$latest" ]; then
+          echo "::notice::No orchestrator pass comment found; falling back to default decomposition."
+          echo "min-cardinality=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        body=$(jq -r '.body' <<<"$latest")
+        subjects=$(printf '%s\n' "$body" | sed -n 's/^subjects:\s*\([0-9]\+\)\s*$/\1/p' | head -1)
+        outcomes=$(printf '%s\n' "$body" | sed -n 's/^outcomes:\s*\([0-9]\+\)\s*$/\1/p' | head -1)
+        if [ -z "$subjects" ] || [ -z "$outcomes" ]; then
+          echo "min-cardinality=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ "$subjects" -lt "$outcomes" ]; then
+          min=$subjects
+        else
+          min=$outcomes
+        fi
+        echo "min-cardinality=$min" >> "$GITHUB_OUTPUT"
+        echo "Canonical tuple: subjects=${subjects}, outcomes=${outcomes}, min=${min}"
+
     - name: Build agent prompt
       shell: bash
+      env:
+        MIN_CARDINALITY: ${{ steps.cardinality.outputs.min-cardinality }}
       run: |
         set -euo pipefail
         cat > stdin.txt <<'PROMPT_EOF'
@@ -102,6 +151,22 @@ runs:
         --- MEMORY.md ---
         PROMPT_EOF
         cat MEMORY.md >> stdin.txt
+        # Per #128: when the orchestrator emitted a canonical tuple with
+        # min == 1, append a hard constraint to the prompt so the LLM
+        # emits exactly one tech-spec (matching the goal's atomic shape).
+        if [ "${MIN_CARDINALITY:-}" = "1" ]; then
+          cat >> stdin.txt <<'CARD_EOF'
+
+        --- CARDINALITY CONSTRAINT (per #128) ---
+
+        The Phase 1c cardinality orchestrator determined this goal is at
+        single-tech-spec granularity (`min(subjects, outcomes) == 1`). You
+        MUST emit exactly ONE tech-spec covering the whole goal. Do not
+        decompose into multiple siblings — the goal's shape is atomic;
+        any decomposition would split coupled work that is only meaningful
+        together.
+        CARD_EOF
+        fi
         {
           printf '\n--- GOAL ISSUE TITLE ---\n'
           cat goal-title.txt

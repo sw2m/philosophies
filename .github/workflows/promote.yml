@@ -162,6 +162,33 @@ jobs:
             fi
             echo "✓ ${reviewer} verdict pass at ${created_at}"
           done
+          # Per #128: in addition to the strict gemini+claude pass
+          # requirement above, also check for any orchestrator-emitted
+          # `fail` verdict on goal-specs. The orchestrator runs after the
+          # named reviewers and posts `fail` for count-validity issues
+          # or classification disagreement.
+          orch_latest=$(jq -r '
+            [.[]
+              | select(.user.login == "github-actions[bot]")
+              | select(.body | test("<!-- vsdd-phase-1c[\\s\\S]*reviewer:\\s*orchestrator[\\s\\S]*-->"))
+            ]
+            | sort_by(.created_at)
+            | last
+          ' <<<"$comments")
+          if [ "$orch_latest" != "null" ] && [ -n "$orch_latest" ]; then
+            orch_verdict=$(jq -r '.body' <<<"$orch_latest" \
+              | sed -n 's/^verdict:\s*\(pass\|fail\)\s*$/\1/p' \
+              | head -1)
+            orch_created=$(jq -r '.created_at' <<<"$orch_latest")
+            orch_epoch=$(date -d "$orch_created" +%s)
+            # Only enforce when the orchestrator comment is fresh (not
+            # stale relative to the issue's last update).
+            if [ "$orch_epoch" -ge "$updated_epoch" ] && [ "$orch_verdict" = "fail" ]; then
+              echo "::error::Phase 1c orchestrator verdict is 'fail' at ${orch_created}. See the orchestrator comment for blocking concerns."
+              echo "cleared=false" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+          fi
           echo "cleared=true" >> "$GITHUB_OUTPUT"
 
   promote-goal-to-tech:
