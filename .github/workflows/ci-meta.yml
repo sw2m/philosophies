@@ -655,30 +655,37 @@ jobs:
         run: |
           set -euo pipefail
           # Same shape as promote.yml's ownership job: walk assignees first,
-          # take first org-member, fall back to author. Previously this step
-          # naively used pull_request.user.login as actor-override, which
-          # broke on bot-authored PRs from the promote-tech-to-pr pipeline
-          # (the bot is not a public org member, so the gemini composite
-          # action's org gate refused to run).
-          check_member() {
+          # take first org-member, fall back to author. Previously this
+          # step naively used pull_request.user.login as actor-override,
+          # which broke on bot-authored PRs from the promote-tech-to-pr
+          # pipeline (the bot is not a public org member, so the gemini
+          # composite action's org gate refused to run).
+          #
+          # If we cannot resolve an org-member owner, leave OWNER empty
+          # rather than failing the step. The composite action's empty-
+          # actor-override path falls back to its own $SENDER check —
+          # which on non-PR events (workflow_call from push, etc.) is
+          # the org-member trigger and will succeed there. Hard-failing
+          # here would discard already-completed reviewer work.
+          is_member() {
             local login="$1"
             [ -n "$login" ] && gh api "orgs/$ORG/members/$login" >/dev/null 2>&1
           }
           OWNER=""
-          for login in $(jq -r '.[].login' <<<"$ASSIGNEES_JSON"); do
-            if check_member "$login"; then
+          # `.[]?.login` tolerates null assignees (non-PR contexts).
+          for login in $(jq -r '.[]?.login' <<<"$ASSIGNEES_JSON"); do
+            if is_member "$login"; then
               OWNER="$login"
               echo "Owner: $login (assignee, org member)"
               break
             fi
           done
-          if [ -z "$OWNER" ] && check_member "$AUTHOR"; then
+          if [ -z "$OWNER" ] && is_member "$AUTHOR"; then
             OWNER="$AUTHOR"
             echo "Owner: $AUTHOR (PR author, org member)"
           fi
           if [ -z "$OWNER" ]; then
-            echo "::error::No org-member assignee or author found on this PR. Dedup step cannot run; the gemini composite action requires an org-member actor. Assign yourself (or another org member) to the PR and re-run."
-            exit 1
+            echo "::notice::No org-member assignee or author resolvable. Leaving actor-override empty; gemini composite action will fall back to its sender-based check."
           fi
           echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
 
