@@ -51,8 +51,8 @@ jobs:
             local out
             set +e
             out=$(
-              gh api --paginate "repos/${REPO}/issues/${PR}/comments" \
-                  --jq '.[] | {login: .user.login, body: .body}' 2>"$err" \
+              gh api --paginate "repos/${REPO}/issues/${PR}/comments" 2>"$err" \
+                | jq -c '.[] | {login: .user.login, body: .body}' \
                 | node -e '
                   const {hasMarkerToken} = require("./.github/scripts/vsdd-brand.js");
                   const rl = require("readline").createInterface({input: process.stdin});

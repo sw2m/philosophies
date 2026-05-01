@@ -95,6 +95,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.resolve-pr.outputs.head-sha }}
+          # `fetch-depth: 0` so classify-changes.sh's `--pr base...head`
+          # has both refs locally for the git-diff walk.
+          fetch-depth: 0
 
       - name: Fetch PR file list (single call; reused below)
         id: files
@@ -138,39 +141,40 @@ jobs:
           ')
           echo "whitelist=$out" >> "$GITHUB_OUTPUT"
 
-      - name: Detect repo shape (tests glob)
-        id: shape
-        if: steps.whitelist.outputs.whitelist != 'true'
-        uses: ./.github/actions/repo-shape
-
-      - name: Compute impl-content from cached file list
+      - name: Compute impl-content via classify-changes.sh
         id: impl
         if: steps.whitelist.outputs.whitelist != 'true'
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ needs.resolve-pr.outputs.pr-number }}
+          REPO: ${{ github.repository }}
           PR_FILES: pr-files.json
-          TESTS_GLOB: ${{ steps.shape.outputs.tests-glob }}
         shell: bash
         run: |
           set -euo pipefail
-          impl=false
+          # Empty diff → no impl content.
           if [ "$(jq 'length' "$PR_FILES")" -eq 0 ]; then
             echo "impl=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # If no tests glob is detected, every changed file is impl.
-          if [ -z "$TESTS_GLOB" ]; then
-            impl=true
+          # Use the canonical classify-changes script's default test-
+          # pattern set as the source of truth (tests/, *_test.*,
+          # *.test.*, *.spec.*, etc.). The previous implementation
+          # depended on a non-existent `tests-glob` output from
+          # repo-shape; classify-changes already encodes the canonical
+          # pattern list and is the right primitive.
+          base_sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.base.sha')
+          head_sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha')
+          # Make sure both refs are local before invoking the classifier.
+          git fetch --no-tags origin "$base_sha" "$head_sha" 2>/dev/null || true
+          out=$(bash .github/scripts/classify-changes.sh \
+            --pr "${base_sha}...${head_sha}")
+          tests_only=$(grep '^tests-only=' <<<"$out" | cut -d= -f2)
+          if [ "$tests_only" = "true" ]; then
+            echo "impl=false" >> "$GITHUB_OUTPUT"
           else
-            # Walk cached file list; classify each path via shell glob
-            # match against the repo's tests glob. Any non-test path
-            # makes the PR have impl content.
-            while IFS= read -r path; do
-              # shellcheck disable=SC2254
-              eval "case \"\$path\" in $TESTS_GLOB) test=true ;; *) test=false ;; esac"
-              if [ "$test" != "true" ]; then impl=true; break; fi
-            done < <(jq -r '.[].filename' "$PR_FILES")
+            echo "impl=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "impl=$impl" >> "$GITHUB_OUTPUT"
 
       - name: Compute brand state via JS module (computeBrandState)
         id: brand-state

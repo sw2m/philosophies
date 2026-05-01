@@ -16,8 +16,11 @@ function computeBrandState({ whitelist, impl, marker }) {
 
 function hasMarkerToken(body) {
   if (typeof body !== 'string' || body.length === 0) return false;
+  // Tolerate CRLF: split on \n, trim trailing \r per line before
+  // strict-equal-to-token comparison. The token itself contains no
+  // whitespace, so trim() is safe.
   for (const line of body.split('\n')) {
-    if (line === MARKER_TOKEN) return true;
+    if (line.trim() === MARKER_TOKEN) return true;
   }
   return false;
 }
