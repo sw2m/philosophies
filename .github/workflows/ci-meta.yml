@@ -667,20 +667,20 @@ jobs:
           # which on non-PR events (workflow_call from push, etc.) is
           # the org-member trigger and will succeed there. Hard-failing
           # here would discard already-completed reviewer work.
-          is_member() {
+          member() {
             local login="$1"
             [ -n "$login" ] && gh api "orgs/$ORG/members/$login" >/dev/null 2>&1
           }
           OWNER=""
           # `.[]?.login` tolerates null assignees (non-PR contexts).
           for login in $(jq -r '.[]?.login' <<<"$ASSIGNEES_JSON"); do
-            if is_member "$login"; then
+            if member "$login"; then
               OWNER="$login"
               echo "Owner: $login (assignee, org member)"
               break
             fi
           done
-          if [ -z "$OWNER" ] && is_member "$AUTHOR"; then
+          if [ -z "$OWNER" ] && member "$AUTHOR"; then
             OWNER="$AUTHOR"
             echo "Owner: $AUTHOR (PR author, org member)"
           fi
