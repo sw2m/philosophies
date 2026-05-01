@@ -5,16 +5,16 @@
 
 const MARKER_TOKEN = '<!-- vsdd-red-gate-cleared -->';
 
-function isUnderDotGithub(path) {
+function isDotGithub(path) {
   if (typeof path !== 'string' || path.length === 0) return false;
   return path.startsWith('.github/');
 }
 
-function computeBrandState({ whitelist, impl, marker }) {
+function computeBrand({ whitelist, impl, marker }) {
   return Boolean(whitelist || (impl && !marker));
 }
 
-function hasMarkerToken(body) {
+function hasMarker(body) {
   if (typeof body !== 'string' || body.length === 0) return false;
   for (const line of body.split('\n')) {
     if (line === MARKER_TOKEN) return true;
@@ -24,7 +24,7 @@ function hasMarkerToken(body) {
 
 module.exports = {
   MARKER_TOKEN,
-  isUnderDotGithub,
-  computeBrandState,
-  hasMarkerToken,
+  isDotGithub,
+  computeBrand,
+  hasMarker,
 };

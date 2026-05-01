@@ -113,7 +113,7 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Fetched $count file entries for PR #${PR}."
 
-      - name: Compute whitelist via JS module (isUnderDotGithub)
+      - name: Compute whitelist via JS module (isDotGithub)
         id: whitelist
         env:
           PR_FILES: pr-files.json
@@ -121,16 +121,16 @@ jobs:
         run: |
           set -euo pipefail
           # Route the path-prefix check through vsdd-brand.js's
-          # isUnderDotGithub so the workflow and the pure module use the
+          # isDotGithub so the workflow and the pure module use the
           # same predicate (no double-implementation in bash).
           out=$(node -e '
             const fs = require("fs");
-            const {isUnderDotGithub} = require("./.github/scripts/vsdd-brand.js");
+            const {isDotGithub} = require("./.github/scripts/vsdd-brand.js");
             const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
             if (arr.length === 0) { console.log("false"); process.exit(0); }
             for (const f of arr) {
-              if (!isUnderDotGithub(f.filename)) { console.log("false"); return; }
-              if (f.previous_filename && !isUnderDotGithub(f.previous_filename)) {
+              if (!isDotGithub(f.filename)) { console.log("false"); return; }
+              if (f.previous_filename && !isDotGithub(f.previous_filename)) {
                 console.log("false"); return;
               }
             }
@@ -172,7 +172,7 @@ jobs:
           fi
           echo "impl=$impl" >> "$GITHUB_OUTPUT"
 
-      - name: Compute brand state via JS module (computeBrandState)
+      - name: Compute brand state via JS module (computeBrand)
         id: brand-state
         env:
           WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
@@ -183,8 +183,8 @@ jobs:
           set -euo pipefail
           # Brand iff (whitelist OR (impl AND no marker)).
           node -e '
-            const {computeBrandState} = require("./.github/scripts/vsdd-brand.js");
-            const out = computeBrandState({
+            const {computeBrand} = require("./.github/scripts/vsdd-brand.js");
+            const out = computeBrand({
               whitelist: process.env.WHITELIST === "true",
               impl:      process.env.IMPL      === "true",
               marker:    process.env.MARKER    === "true",
