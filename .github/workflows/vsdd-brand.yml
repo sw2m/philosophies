@@ -218,19 +218,32 @@ jobs:
           # token `<!-- vsdd-opt-out-brand -->`. Bot identity is the
           # only spoof-resistant signal: external collaborators can flip
           # labels but cannot post under github-actions[bot]'s identity.
-          # Idempotent: post once when state is brand=true and no prior
-          # bot brand comment exists; delete the prior comment when
-          # state is brand=false.
-          existing_id=$(gh api --paginate \
+          #
+          # Normalize toward 0-or-1 brand comments per state:
+          #  - brand=true,  0 prior  → post one.
+          #  - brand=true,  1 prior  → leave as-is.
+          #  - brand=true, ≥2 prior  → keep the first, delete duplicates
+          #                            (a prior buggy run can post twice;
+          #                            collapse on the next event so the
+          #                            thread doesn't accumulate noise).
+          #  - brand=false, 0 prior  → nothing.
+          #  - brand=false, ≥1 prior → delete all of them.
+          mapfile -t existing_ids < <(gh api --paginate \
             "repos/${REPO}/issues/${PR}/comments" \
-            --jq '[.[]
-                   | select(.user.login == "github-actions[bot]")
-                   | select(.body | contains("<!-- vsdd-opt-out-brand -->"))]
-                  | .[0].id // empty')
+            --jq '.[]
+                  | select(.user.login == "github-actions[bot]")
+                  | select(.body | contains("<!-- vsdd-opt-out-brand -->"))
+                  | .id')
+          count=${#existing_ids[@]}
+          echo "Found $count existing bot brand comment(s) on PR #${PR}."
+
+          delete_id() {
+            gh api --method DELETE "repos/${REPO}/issues/comments/$1" \
+              && echo "  - deleted comment id=$1"
+          }
+
           if [ "$BRAND" = "true" ]; then
-            if [ -n "$existing_id" ]; then
-              echo "Brand comment already present (id=$existing_id); leaving in place."
-            else
+            if [ "$count" -eq 0 ]; then
               gh pr comment "$PR" --body-file - <<'BRAND_EOF'
 <!-- vsdd-opt-out-brand -->
 
@@ -239,12 +252,17 @@ jobs:
 The brand is informational; it does not block merge. It records, in a tamper-resistant location authored by the bot, that the PR is out-of-process under VSDD discipline.
 BRAND_EOF
               echo "Posted vsdd:opt-out brand comment."
+            elif [ "$count" -eq 1 ]; then
+              echo "Brand comment already present (id=${existing_ids[0]}); leaving in place."
+            else
+              echo "Found $count brand comments; collapsing to 1 (keep id=${existing_ids[0]}, delete rest)."
+              for id in "${existing_ids[@]:1}"; do delete_id "$id"; done
             fi
           else
-            if [ -n "$existing_id" ]; then
-              gh api --method DELETE "repos/${REPO}/issues/comments/${existing_id}"
-              echo "Removed vsdd:opt-out brand comment (id=$existing_id)."
+            if [ "$count" -eq 0 ]; then
+              echo "Brand absent and no prior brand comments; nothing to do."
             else
-              echo "Brand absent and no prior brand comment; nothing to do."
+              echo "Brand absent; deleting all $count prior brand comment(s)."
+              for id in "${existing_ids[@]}"; do delete_id "$id"; done
             fi
           fi
