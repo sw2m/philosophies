@@ -643,6 +643,45 @@ jobs:
           print(f"dedup-input.txt: {os.path.getsize('dedup-input.txt')} bytes")
           PY
 
+      - name: Resolve org-member owner for dedup actor-override
+        id: resolve-owner
+        if: steps.prep-dedup.outputs.dedup-needed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORG: sw2m
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          ASSIGNEES_JSON: ${{ toJSON(github.event.pull_request.assignees) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same shape as promote.yml's ownership job: walk assignees first,
+          # take first org-member, fall back to author. Previously this step
+          # naively used pull_request.user.login as actor-override, which
+          # broke on bot-authored PRs from the promote-tech-to-pr pipeline
+          # (the bot is not a public org member, so the gemini composite
+          # action's org gate refused to run).
+          check_member() {
+            local login="$1"
+            [ -n "$login" ] && gh api "orgs/$ORG/members/$login" >/dev/null 2>&1
+          }
+          OWNER=""
+          for login in $(jq -r '.[].login' <<<"$ASSIGNEES_JSON"); do
+            if check_member "$login"; then
+              OWNER="$login"
+              echo "Owner: $login (assignee, org member)"
+              break
+            fi
+          done
+          if [ -z "$OWNER" ] && check_member "$AUTHOR"; then
+            OWNER="$AUTHOR"
+            echo "Owner: $AUTHOR (PR author, org member)"
+          fi
+          if [ -z "$OWNER" ]; then
+            echo "::error::No org-member assignee or author found on this PR. Dedup step cannot run; the gemini composite action requires an org-member actor. Assign yourself (or another org member) to the PR and re-run."
+            exit 1
+          fi
+          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
+
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
         uses: sw2m/philosophies/.github/actions/gemini@main
@@ -650,11 +689,7 @@ jobs:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: dedup-input.txt
           output-file: dedup-output.md
-          # PR author is who triggered the meta-review; for self-eval the
-          # author is always an org member. Threading actor-override here
-          # is defensive in case a `synchronize` event lands with a
-          # different sender on a fork-PR.
-          actor-override: ${{ github.event.pull_request.user.login }}
+          actor-override: ${{ steps.resolve-owner.outputs.owner }}
 
       - name: Open non-duplicate gap issues
         env:
