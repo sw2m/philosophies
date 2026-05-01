@@ -130,14 +130,17 @@ jobs:
             const fs = require("fs");
             const {isUnderDotGithub} = require("./.github/scripts/vsdd-brand.js");
             const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
-            if (arr.length === 0) { console.log("false"); process.exit(0); }
-            for (const f of arr) {
-              if (!isUnderDotGithub(f.filename)) { console.log("false"); return; }
-              if (f.previous_filename && !isUnderDotGithub(f.previous_filename)) {
-                console.log("false"); return;
+            const compute = () => {
+              if (arr.length === 0) return "false";
+              for (const f of arr) {
+                if (!isUnderDotGithub(f.filename)) return "false";
+                if (f.previous_filename && !isUnderDotGithub(f.previous_filename)) {
+                  return "false";
+                }
               }
-            }
-            console.log("true");
+              return "true";
+            };
+            console.log(compute());
           ')
           echo "whitelist=$out" >> "$GITHUB_OUTPUT"
 
