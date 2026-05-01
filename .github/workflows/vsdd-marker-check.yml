@@ -30,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Scan via gh api --paginate + JS hasMarker (SIGPIPE short-circuit)
+      - name: Scan via gh api --paginate + JS hasMarkerToken (SIGPIPE short-circuit)
         id: scan
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -41,7 +41,7 @@ jobs:
           set -uo pipefail
           # Per #129: paginated comment fetch with first-match short-
           # circuit, routing token-detection through vsdd-brand.js's
-          # `hasMarker` so the workflow and the pure module stay in
+          # `hasMarkerToken` so the workflow and the pure module stay in
           # step. On rate-limit (HTTP 403 + x-ratelimit-remaining: 0
           # detected via gh's stderr): one 30s backoff and retry, then
           # fail-closed.
@@ -54,14 +54,14 @@ jobs:
               gh api --paginate "repos/${REPO}/issues/${PR}/comments" \
                   --jq '.[] | {login: .user.login, body: .body}' 2>"$err" \
                 | node -e '
-                  const {hasMarker} = require("./.github/scripts/vsdd-brand.js");
+                  const {hasMarkerToken} = require("./.github/scripts/vsdd-brand.js");
                   const rl = require("readline").createInterface({input: process.stdin});
                   let answered = false;
                   rl.on("line", (line) => {
                     if (answered || !line) return;
                     try {
                       const c = JSON.parse(line);
-                      if (c.login === "github-actions[bot]" && hasMarker(c.body)) {
+                      if (c.login === "github-actions[bot]" && hasMarkerToken(c.body)) {
                         answered = true;
                         process.stdout.write("found");
                         process.exit(0);
@@ -94,17 +94,17 @@ jobs:
 
           result=$(scan); rc=$?
           if [ "$rc" = "2" ]; then
-            echo "::warning::API rate-limited; retrying once after 30s backoff."
+            echo "::notice::API rate-limited; retrying once after 30s backoff."
             sleep 30
             result=$(scan); rc=$?
             if [ "$rc" = "2" ]; then
-              echo "::warning::Rate-limited twice; failing-closed (marker-present=false)."
+              echo "::notice::Rate-limited twice; failing-closed (marker-present=false)."
               echo "marker-present=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
           if [ "$rc" != "0" ]; then
-            echo "::warning::Comment scan pipeline failed non-rate-limit ($rc); failing-closed (marker-present=false)."
+            echo "::notice::Comment scan pipeline failed non-rate-limit ($rc); failing-closed (marker-present=false)."
             echo "marker-present=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

@@ -151,5 +151,12 @@ jobs:
             echo "Marker already posted on this PR; skipping (one-way diode)."
             exit 0
           fi
-          gh pr comment "$PR" --body "$(printf '<!-- vsdd-red-gate-cleared -->\n\n_Phase 2 conditions met. This marker latches; the bot will not revoke it._\n')"
+          # Per #129: spec mandates the trailing `\n` at end of body.
+          # Command substitution `$(printf ...)` would strip trailing
+          # newlines; use `--body-file -` with a heredoc instead.
+          gh pr comment "$PR" --body-file - <<'MARKER_EOF'
+<!-- vsdd-red-gate-cleared -->
+
+_Phase 2 conditions met. This marker latches; the bot will not revoke it._
+MARKER_EOF
           echo "Posted Red-gate-cleared marker (token-only)."
