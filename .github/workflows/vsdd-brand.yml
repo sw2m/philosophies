@@ -1,13 +1,19 @@
 name: VSDD opt-out brand
 
-# Per #129: maintains the `vsdd:opt-out` label on PRs. The label is the
-# visible "out-of-process" brand. Brand state is computed from three
-# inputs: whitelist-match (path-based, all changed files under .github/),
-# impl-content presence (PR's diff against base touches non-test files),
-# and earned-marker presence (Red-gate-cleared token comment by the bot).
+# Per #129: maintains an "opt-out / out-of-process" brand on PRs as a
+# tamper-resistant comment by `github-actions[bot]`. Brand state is
+# computed from three inputs: whitelist-match (path-based, all changed
+# files under .github/), impl-content presence (PR's diff against base
+# touches non-test files), and earned-marker presence (Red-gate-cleared
+# token comment by the bot).
 #
 # Brand applied iff: whitelist-match OR (no marker AND has impl-content).
-# The brand is informational; it does not block merge.
+# The brand is informational; it does not block merge. It is a bot-
+# authored comment containing the token `<!-- vsdd-opt-out-brand -->`
+# (deliberately separate from the Red-gate-cleared token, and distinct
+# from labels because labels can be toggled by anyone with PR write
+# access; only github-actions[bot] can author comments under its own
+# identity, making the comment-marker the only spoof-resistant signal).
 
 on:
   pull_request:
@@ -199,20 +205,46 @@ jobs:
             require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "brand=" + out + "\n");
           '
 
-      - name: Apply or remove vsdd:opt-out label
+      - name: Post or delete vsdd:opt-out brand comment
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ needs.resolve-pr.outputs.pr-number }}
+          REPO: ${{ github.repository }}
           BRAND: ${{ steps.brand-state.outputs.brand }}
         shell: bash
         run: |
           set -euo pipefail
-          # Idempotent. Label `vsdd:opt-out` is declared in
-          # `.github/labels.yml` and synced by `labels.yml`.
+          # The brand is a github-actions[bot] comment containing the
+          # token `<!-- vsdd-opt-out-brand -->`. Bot identity is the
+          # only spoof-resistant signal: external collaborators can flip
+          # labels but cannot post under github-actions[bot]'s identity.
+          # Idempotent: post once when state is brand=true and no prior
+          # bot brand comment exists; delete the prior comment when
+          # state is brand=false.
+          existing_id=$(gh api --paginate \
+            "repos/${REPO}/issues/${PR}/comments" \
+            --jq '[.[]
+                   | select(.user.login == "github-actions[bot]")
+                   | select(.body | contains("<!-- vsdd-opt-out-brand -->"))]
+                  | .[0].id // empty')
           if [ "$BRAND" = "true" ]; then
-            gh pr edit "$PR" --add-label "vsdd:opt-out" || true
-            echo "Applied vsdd:opt-out to PR #${PR}."
+            if [ -n "$existing_id" ]; then
+              echo "Brand comment already present (id=$existing_id); leaving in place."
+            else
+              gh pr comment "$PR" --body-file - <<'BRAND_EOF'
+<!-- vsdd-opt-out-brand -->
+
+**VSDD opt-out / out-of-process** — this PR has been branded `vsdd:opt-out` by `github-actions[bot]`. Either every changed file is under `.github/` (whitelist-match, no test-discipline expected) OR the PR has impl content without an earned `Red-gate-cleared` marker (divergence from VSDD best-effort).
+
+The brand is informational; it does not block merge. It records, in a tamper-resistant location authored by the bot, that the PR is out-of-process under VSDD discipline.
+BRAND_EOF
+              echo "Posted vsdd:opt-out brand comment."
+            fi
           else
-            gh pr edit "$PR" --remove-label "vsdd:opt-out" || true
-            echo "Removed vsdd:opt-out from PR #${PR} (if present)."
+            if [ -n "$existing_id" ]; then
+              gh api --method DELETE "repos/${REPO}/issues/comments/${existing_id}"
+              echo "Removed vsdd:opt-out brand comment (id=$existing_id)."
+            else
+              echo "Brand absent and no prior brand comment; nothing to do."
+            fi
           fi

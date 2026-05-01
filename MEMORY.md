@@ -350,17 +350,19 @@ The marker is a **one-way diode**: once `red-conditions-gate.yml` posts it, no w
 
 `vsdd-marker-check.yml` is a reusable workflow that scans a PR's comments via paginated API for the token and exposes `marker-present: true|false`. It always exits 0 — purely informational, never gates merge.
 
-### Opt-out brand — `vsdd:opt-out` label (#129)
+### Opt-out brand — bot comment (#129)
 
-The `vsdd-brand.yml` workflow maintains a `vsdd:opt-out` label on PRs as a visible "out-of-process" brand. The brand is computed from three properties:
+The `vsdd-brand.yml` workflow maintains an "out-of-process" brand on PRs as a comment authored by `github-actions[bot]` containing the token `<!-- vsdd-opt-out-brand -->`. The bot-as-author convention is the only spoof-resistant marker: labels and other PR metadata can be flipped by anyone with PR write access, but only `github-actions[bot]` can author comments under its own identity.
+
+Brand state is computed from three properties:
 
 - **Whitelist match** — the PR's diff against base is non-empty AND every changed-file path (added, modified, deleted, copied, rename source, rename destination) lies under `.github/` by raw `startsWith('.github/')` prefix match. No symlink resolution.
-- **Has impl content** — the PR's diff against base modifies at least one non-test file (test files identified by `repo-shape`'s detected test glob).
+- **Has impl content** — the PR's diff against base modifies at least one non-test file (test files classified by `.github/scripts/classify-changes.sh`'s default pattern set).
 - **Marker present** — earned marker exists on the thread (per the diode definition above).
 
-Brand applied iff `whitelist OR (hasImpl AND !markerPresent)`. The label is informational; it does not block merge. It records the consequence of choosing impl-first (or being a `.github/`-only meta-PR for which TDD discipline is exempt).
+Brand applied iff `whitelist OR (hasImpl AND !markerPresent)`. When applied, the bot posts a brand comment if none exists; when un-applied, the bot deletes the brand comment if one exists. The brand is informational; it does not block merge. It records the consequence of choosing impl-first (or being a `.github/`-only meta-PR for which TDD discipline is exempt).
 
-Manual deletion of the marker comment by a human moves the PR back to no-marker state; the bot does not re-post (no comment-deletion handler exists; absence of the handler IS the mechanism). The brand workflow re-evaluates state on every PR event and on `issue_comment.deleted` (resolved to PR via `github.event.issue.pull_request`).
+Manual deletion of the Red-gate-cleared marker comment by a human moves the PR back to no-marker state; the bot does not re-post (no comment-deletion handler exists; absence of the handler IS the mechanism). The brand workflow re-evaluates state on every PR event and on `issue_comment.deleted` (resolved to PR via `github.event.issue.pull_request`).
 
 ### Reusing the workflows
 

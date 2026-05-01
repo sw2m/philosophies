@@ -23,7 +23,3 @@
 - name: "ci-meta"
   color: "5319e7"  # purple
   description: "Issue opened by VSDD CI meta-review consensus. Tracks a CI gap against MEMORY.md."
-
-- name: "vsdd:opt-out"
-  color: "BFD4F2"  # light blue
-  description: "Informational brand: PR is out of VSDD process (whitelist or divergence). Per #129."
