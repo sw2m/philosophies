@@ -26,36 +26,57 @@ permissions:
 
 jobs:
   resolve-pr:
-    # Both event types collapse to a PR number we can act on. For
-    # `pull_request`, it's the PR itself. For `issue_comment.deleted` on a
-    # PR's thread, the issue number IS the PR number — but issue_comment
-    # can also fire on plain issues (skip those).
-    name: Resolve PR number
+    # Both event types collapse to a PR number. For `pull_request`, it's
+    # the PR itself. For `issue_comment.deleted` on a PR's thread, the
+    # issue number IS the PR number — but issue_comment can also fire on
+    # plain issues (skip those).
+    name: Resolve PR number + head SHA
     runs-on: ubuntu-latest
     outputs:
       pr-number: ${{ steps.resolve.outputs.pr-number }}
-      proceed: ${{ steps.resolve.outputs.proceed }}
+      head-sha:  ${{ steps.resolve.outputs.head-sha }}
+      proceed:   ${{ steps.resolve.outputs.proceed }}
     steps:
-      - id: resolve
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUM: ${{ github.event.pull_request.number }}
-          ISSUE_NUM: ${{ github.event.issue.number }}
-          IS_PR: ${{ github.event.issue.pull_request != null }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            echo "pr-number=$PR_NUM" >> "$GITHUB_OUTPUT"
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          elif [ "$EVENT_NAME" = "issue_comment" ] && [ "$IS_PR" = "true" ]; then
-            echo "pr-number=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::issue_comment.deleted on a non-PR issue; nothing to brand."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Resolve via actions/github-script (per #129 spec)
+        id: resolve
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const event = context.eventName;
+            const setOutput = (k, v) => core.setOutput(k, v);
+
+            if (event === 'pull_request') {
+              const pr = context.payload.pull_request;
+              setOutput('pr-number', String(pr.number));
+              setOutput('head-sha',  pr.head.sha);
+              setOutput('proceed',   'true');
+              core.info(`pull_request #${pr.number} head=${pr.head.sha}`);
+              return;
+            }
+
+            if (event === 'issue_comment') {
+              const issue = context.payload.issue;
+              if (!issue || !issue.pull_request) {
+                core.notice('issue_comment.deleted on a non-PR issue; nothing to brand.');
+                setOutput('proceed', 'false');
+                return;
+              }
+              // Fetch PR head/base via API since issue_comment payload
+              // doesn't carry it. Per spec: actions/github-script call.
+              const {data: pr} = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                pull_number: issue.number,
+              });
+              setOutput('pr-number', String(pr.number));
+              setOutput('head-sha',  pr.head.sha);
+              setOutput('proceed',   'true');
+              core.info(`issue_comment.deleted → PR #${pr.number} head=${pr.head.sha}`);
+              return;
+            }
+
+            core.notice(`Unhandled event: ${event}; skipping.`);
+            setOutput('proceed', 'false');
 
   marker:
     name: Marker presence
@@ -71,134 +92,102 @@ jobs:
     if: needs.resolve-pr.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve PR head SHA
-        id: head-sha
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR: ${{ needs.resolve-pr.outputs.pr-number }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # On pull_request events the head SHA is in the payload; on
-          # issue_comment.deleted events it is not, so fetch via API. The
-          # subsequent checkout step uses this so repo-shape and any
-          # tree-dependent logic analyze the PR's content, not main.
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            sha="$PR_HEAD_SHA"
-          else
-            sha=$(gh api "repos/${{ github.repository }}/pulls/${PR}" --jq '.head.sha')
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Resolved PR head SHA: $sha"
-
       - uses: actions/checkout@v6
         with:
-          ref: ${{ steps.head-sha.outputs.sha }}
+          ref: ${{ needs.resolve-pr.outputs.head-sha }}
 
-      - name: Compute whitelist-match and impl-content
-        id: shape
+      - name: Fetch PR file list (single call; reused below)
+        id: files
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ needs.resolve-pr.outputs.pr-number }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          # Fetch full file list (paginated). Statuses: A, M, D, R, C — the
-          # whitelist requires every changed-file path under .github/ by
-          # raw string prefix (no symlink resolution).
-          tmp=$(mktemp)
-          gh api --paginate "repos/${{ github.repository }}/pulls/${PR}/files" \
-            --jq '.[] | {path: .filename, prev: .previous_filename, status: .status}' > "$tmp"
+          # `gh api --paginate` for an array endpoint returns one merged
+          # JSON array. Cached on disk for the whitelist + impl steps so
+          # we don't fetch twice.
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files" > pr-files.json
+          count=$(jq 'length' pr-files.json)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Fetched $count file entries for PR #${PR}."
 
-          if [ ! -s "$tmp" ]; then
-            # Empty diff. Per #129: non-empty changed-file set is required
-            # for whitelist; empty diff is non-whitelist, no impl content.
-            echo "whitelist=false" >> "$GITHUB_OUTPUT"
-            echo "has-impl=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Whitelist check + impl-content check happen in one pass.
-          # impl-content: any file outside the test-glob is impl. We use
-          # repo-shape's tests-glob output as the source of truth.
-          all_dotgithub=true
-          has_impl=false
-          while IFS= read -r line; do
-            path=$(jq -rn --argjson o "$line" '$o.path')
-            prev=$(jq -rn --argjson o "$line" '$o.prev // empty')
-            if [ -n "$path" ]; then
-              case "$path" in
-                .github/*) ;;
-                *) all_dotgithub=false ;;
-              esac
-            fi
-            if [ -n "$prev" ]; then
-              case "$prev" in
-                .github/*) ;;
-                *) all_dotgithub=false ;;
-              esac
-            fi
-          done < "$tmp"
-
-          if [ "$all_dotgithub" = "true" ]; then
-            echo "whitelist=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "whitelist=false" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Compute whitelist via JS module (isUnderDotGithub)
+        id: whitelist
+        env:
+          PR_FILES: pr-files.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Route the path-prefix check through vsdd-brand.js's
+          # isUnderDotGithub so the workflow and the pure module use the
+          # same predicate (no double-implementation in bash).
+          out=$(node -e '
+            const fs = require("fs");
+            const {isUnderDotGithub} = require("./.github/scripts/vsdd-brand.js");
+            const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
+            if (arr.length === 0) { console.log("false"); process.exit(0); }
+            for (const f of arr) {
+              if (!isUnderDotGithub(f.filename)) { console.log("false"); return; }
+              if (f.previous_filename && !isUnderDotGithub(f.previous_filename)) {
+                console.log("false"); return;
+              }
+            }
+            console.log("true");
+          ')
+          echo "whitelist=$out" >> "$GITHUB_OUTPUT"
 
       - name: Detect repo shape (tests glob)
-        id: shape-detect
-        if: steps.shape.outputs.whitelist != 'true'
+        id: shape
+        if: steps.whitelist.outputs.whitelist != 'true'
         uses: ./.github/actions/repo-shape
 
-      - name: Compute impl-content
+      - name: Compute impl-content from cached file list
         id: impl
-        if: steps.shape.outputs.whitelist != 'true'
+        if: steps.whitelist.outputs.whitelist != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ needs.resolve-pr.outputs.pr-number }}
-          TESTS_GLOB: ${{ steps.shape-detect.outputs.tests-glob }}
+          PR_FILES: pr-files.json
+          TESTS_GLOB: ${{ steps.shape.outputs.tests-glob }}
         shell: bash
         run: |
           set -euo pipefail
           impl=false
+          if [ "$(jq 'length' "$PR_FILES")" -eq 0 ]; then
+            echo "impl=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # If no tests glob is detected, every changed file is impl.
           if [ -z "$TESTS_GLOB" ]; then
-            count=$(gh api --paginate "repos/${{ github.repository }}/pulls/${PR}/files" --jq 'length')
-            if [ "${count:-0}" -gt 0 ]; then impl=true; fi
+            impl=true
           else
-            # Match each path against the tests glob; non-matching → impl.
+            # Walk cached file list; classify each path via shell glob
+            # match against the repo's tests glob. Any non-test path
+            # makes the PR have impl content.
             while IFS= read -r path; do
-              # shell glob match using `case` against the literal pattern.
-              # The pattern syntax of repo-shape is shell-glob, so case is
-              # the right primitive.
               # shellcheck disable=SC2254
               eval "case \"\$path\" in $TESTS_GLOB) test=true ;; *) test=false ;; esac"
               if [ "$test" != "true" ]; then impl=true; break; fi
-            done < <(gh api --paginate "repos/${{ github.repository }}/pulls/${PR}/files" --jq '.[].filename')
+            done < <(jq -r '.[].filename' "$PR_FILES")
           fi
           echo "impl=$impl" >> "$GITHUB_OUTPUT"
 
-      - name: Compute brand state
+      - name: Compute brand state via JS module (computeBrandState)
         id: brand-state
         env:
-          WHITELIST: ${{ steps.shape.outputs.whitelist }}
+          WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
           IMPL: ${{ steps.impl.outputs.impl }}
           MARKER: ${{ needs.marker.outputs.marker-present }}
         shell: bash
         run: |
           set -euo pipefail
           # Brand iff (whitelist OR (impl AND no marker)).
-          # `node` is preinstalled on ubuntu-latest; reuse the pure helper
-          # so the workflow logic and the module stay in step.
           node -e '
-            const { computeBrandState } = require("./.github/scripts/vsdd-brand.js");
+            const {computeBrandState} = require("./.github/scripts/vsdd-brand.js");
             const out = computeBrandState({
               whitelist: process.env.WHITELIST === "true",
-              impl: process.env.IMPL === "true",
-              marker: process.env.MARKER === "true",
+              impl:      process.env.IMPL      === "true",
+              marker:    process.env.MARKER    === "true",
             });
             require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "brand=" + out + "\n");
           '
@@ -211,8 +200,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Idempotent label apply/remove. The label `vsdd:opt-out` should
-          # exist in the repo's label set (one-time creation, see PR notes).
+          # Idempotent. Label `vsdd:opt-out` is declared in
+          # `.github/labels.yml` and synced by `labels.yml`.
           if [ "$BRAND" = "true" ]; then
             gh pr edit "$PR" --add-label "vsdd:opt-out" || true
             echo "Applied vsdd:opt-out to PR #${PR}."

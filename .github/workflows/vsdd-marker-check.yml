@@ -28,7 +28,9 @@ jobs:
     outputs:
       marker-present: ${{ steps.scan.outputs.marker-present }}
     steps:
-      - name: Scan
+      - uses: actions/checkout@v6
+
+      - name: Scan via gh api --paginate + JS hasMarkerToken (SIGPIPE short-circuit)
         id: scan
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -37,77 +39,47 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          # Per #129: paginated comment fetch with short-circuit on first
-          # match. Filter: author == github-actions[bot] AND body contains
-          # the token literal. On true rate-limit (HTTP 403 +
-          # x-ratelimit-remaining: 0): retry once with 30s backoff, then
-          # fail-closed (marker-present=false). On other errors: fail-
-          # closed immediately rather than burning the retry budget.
-          #
-          # Short-circuit is implemented page-by-page: we drive the
-          # paginator manually via per_page + Link header, exit as soon
-          # as we see any match on a page, and never aggregate the full
-          # comment list in memory.
-          scan_once() {
-            local url="https://api.github.com/repos/${REPO}/issues/${PR}/comments?per_page=100"
-            local page=1
-            while [ -n "$url" ]; do
-              local hdr_file body_file
-              hdr_file=$(mktemp)
-              body_file=$(mktemp)
-              local code
-              code=$(gh api --include "$url" --silent > "$body_file" 2> "$hdr_file"; echo $?)
-              if [ "$code" != "0" ]; then
-                # Distinguish rate-limit from other failures.
-                if grep -qE '^HTTP/[12](\.[0-9])? 403' "$hdr_file" \
-                   && grep -qiE '^x-ratelimit-remaining:\s*0' "$hdr_file"; then
-                  rm -f "$hdr_file" "$body_file"
-                  return 2
-                fi
-                rm -f "$hdr_file" "$body_file"
-                return 1
-              fi
-              # `gh api --include` prints headers then body. The body is
-              # the JSON array; pipe through jq to short-circuit on first
-              # match.
-              if jq -e '
-                .[]
-                | select(.user.login == "github-actions[bot]")
-                | select(.body | contains("<!-- vsdd-red-gate-cleared -->"))
-              ' < "$body_file" >/dev/null 2>&1; then
-                rm -f "$hdr_file" "$body_file"
-                echo "found"
-                return 0
-              fi
-              # Parse Link: header for the next page; absence ends pagination.
-              url=$(grep -i '^link:' "$hdr_file" \
-                    | grep -oE '<[^>]+>; rel="next"' \
-                    | sed -E 's/^<([^>]+)>.*$/\1/' \
-                    | head -1)
-              page=$((page + 1))
-              rm -f "$hdr_file" "$body_file"
-            done
-            echo "absent"
-            return 0
-          }
-
-          result=$(scan_once); rc=$?
-          if [ "$rc" = "2" ]; then
-            echo "::warning::API rate-limited (HTTP 403 + x-ratelimit-remaining: 0); retrying after 30s."
-            sleep 30
-            result=$(scan_once); rc=$?
-            if [ "$rc" = "2" ]; then
-              echo "::warning::Rate-limited twice; failing-closed (marker-present=false)."
-              echo "marker-present=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-          if [ "$rc" != "0" ]; then
-            echo "::warning::API call failed for non-rate-limit reason; failing-closed (marker-present=false)."
+          # Per #129: paginated comment fetch with first-match short-
+          # circuit, routing token-detection through vsdd-brand.js's
+          # `hasMarkerToken` so the workflow and the pure module stay
+          # in step. `gh api --paginate --jq '.[] | {...}'` streams
+          # one comment-summary JSON per line; node reads line-by-line,
+          # calls `hasMarkerToken`, exits on first match — process exit
+          # closes stdin upstream, SIGPIPE-ing `gh api`, which stops
+          # paginating subsequent pages.
+          set +e
+          result=$(
+            gh api --paginate "repos/${REPO}/issues/${PR}/comments" \
+                --jq '.[] | {login: .user.login, body: .body}' 2>/dev/null \
+              | node -e '
+                const {hasMarkerToken} = require("./.github/scripts/vsdd-brand.js");
+                const rl = require("readline").createInterface({input: process.stdin});
+                let answered = false;
+                rl.on("line", (line) => {
+                  if (answered || !line) return;
+                  try {
+                    const c = JSON.parse(line);
+                    if (c.login === "github-actions[bot]" && hasMarkerToken(c.body)) {
+                      answered = true;
+                      process.stdout.write("found");
+                      process.exit(0);
+                    }
+                  } catch {}
+                });
+                rl.on("close", () => {
+                  if (!answered) process.stdout.write("absent");
+                });
+              '
+          )
+          rc=$?
+          set -e
+          # Treat any non-zero from the pipeline (other than the
+          # intentional SIGPIPE-on-match) as "fail closed".
+          if [ "$rc" != "0" ] && [ "$result" != "found" ]; then
+            echo "::warning::comment scan pipeline exited non-zero ($rc); failing-closed (marker-present=false)."
             echo "marker-present=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           if [ "$result" = "found" ]; then
             echo "marker-present=true" >> "$GITHUB_OUTPUT"
             echo "Marker present on PR #${PR}."
