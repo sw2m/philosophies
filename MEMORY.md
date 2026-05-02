@@ -358,7 +358,7 @@ The `vsdd-brand.yml` workflow maintains an "out-of-process" brand on PRs as a co
 
 Brand state is computed from three properties:
 
-- **Whitelist match** — the PR's diff against base is non-empty AND every changed-file path (added, modified, deleted, copied, rename source, rename destination) lies under `.github/` by raw `startsWith('.github/')` prefix match. No symlink resolution.
+- **Whitelist match** — the PR's diff against base is non-empty AND every changed-file path (added, modified, deleted, copied, rename source, rename destination) is non-impl by the `isWhitelistPath` predicate in `.github/scripts/vsdd-brand.js`. The predicate matches: paths under `.github/`, files ending in `.md` (markdown documentation), and recognized root-level repo-metadata files (`.gitignore`, `.gitattributes`, `LICENSE`, `LICENSE.*`, `CODEOWNERS`). No symlink resolution.
 - **Has impl content** — the PR's diff against base modifies at least one non-test file (test files classified by `.github/scripts/classify-changes.sh`'s default pattern set).
 - **Marker present** — earned marker exists on the thread (per the diode definition above).
 
