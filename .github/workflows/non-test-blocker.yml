@@ -1,13 +1,22 @@
 name: VSDD Non-test-blocker (ancestry enforcement)
 
-# Per #129/#126: this workflow is decommissioned as a merge gate. The
-# Red-gate-cleared marker is now a one-way diode comment with a fixed
-# token (no SHA payload), and the divergence/whitelist signal lives in
-# the `vsdd:opt-out` brand label maintained by `vsdd-brand.yml`. The
-# job below runs purely to keep the named required check on main's
-# branch protection green while the protection rule is updated to drop
-# this check from its list. It always exits 0; consumers should look
-# at the brand label or `vsdd-marker-check.yml`'s output instead.
+# Per #129 (revised): blocks merge on PRs that have impl content but
+# no Red-gate-cleared marker, EXCEPT for whitelist-matched PRs (all
+# changed files under .github/) which are exempt regardless.
+#
+# Pass iff:
+#   - PR is whitelist-matched (all changed files under .github/), OR
+#   - PR has no impl content (test-only diff), OR
+#   - PR has an earned Red-gate-cleared marker comment.
+#
+# Fail iff:
+#   - PR is non-whitelist AND has impl content AND no earned marker.
+#
+# The marker is the comment containing `<!-- vsdd-red-gate-cleared -->`
+# authored by github-actions[bot]. Per #129 it's a one-way diode for
+# the bot (the bot never revokes), but its ABSENCE still blocks merge —
+# the diode property is about persistence after earning, not about
+# whether earning is required.
 
 on:
   pull_request:
@@ -17,36 +26,137 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  issues: read
 
 jobs:
+  resolve:
+    name: Resolve PR head SHA
+    if: github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    outputs:
+      head-sha: ${{ steps.h.outputs.sha }}
+    steps:
+      - id: h
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: echo "sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+  marker:
+    name: Marker presence
+    needs: [resolve]
+    if: github.event.pull_request.draft != true
+    uses: ./.github/workflows/vsdd-marker-check.yml
+    with:
+      pr-number: ${{ github.event.pull_request.number }}
+
   blocker:
     name: Non-test-commit ancestry enforcement
+    needs: [resolve, marker]
     if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
-      - name: Decommissioned — always success
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.head-sha }}
+          fetch-depth: 0
+
+      - name: Fetch PR file list
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          # Per #129: detect marker presence by author + token, no SHA
-          # extraction, no commit-shape walk. Result is informational —
-          # we always exit 0 regardless.
-          marker_present=false
-          if gh api --paginate "repos/${{ github.repository }}/issues/${PR}/comments" \
-              --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- vsdd-red-gate-cleared -->"))' \
-              2>/dev/null \
-              | head -c1 | grep -q .; then
-            marker_present=true
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files" > pr-files.json
+          echo "files: $(jq 'length' pr-files.json)"
+
+      - name: Compute whitelist via JS module
+        id: whitelist
+        env:
+          PR_FILES: pr-files.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=$(node -e '
+            const fs = require("fs");
+            const {isUnderDotGithub} = require("./.github/scripts/vsdd-brand.js");
+            const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
+            const compute = () => {
+              if (arr.length === 0) return "false";
+              for (const f of arr) {
+                if (!isUnderDotGithub(f.filename)) return "false";
+                if (f.previous_filename && !isUnderDotGithub(f.previous_filename)) {
+                  return "false";
+                }
+              }
+              return "true";
+            };
+            console.log(compute());
+          ')
+          echo "whitelist=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Compute impl-content via classify-changes.sh
+        id: impl
+        if: steps.whitelist.outputs.whitelist != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(jq 'length' pr-files.json)" -eq 0 ]; then
+            echo "impl=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          base_sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.base.sha')
+          head_sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha')
+          git fetch --no-tags origin "$base_sha" "$head_sha" 2>/dev/null || true
+          out=$(bash .github/scripts/classify-changes.sh \
+            --pr "${base_sha}...${head_sha}")
+          tests_only=$(grep '^tests-only=' <<<"$out" | cut -d= -f2)
+          if [ "$tests_only" = "true" ]; then
+            echo "impl=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "impl=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide
+        env:
+          WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
+          IMPL: ${{ steps.impl.outputs.impl }}
+          MARKER: ${{ needs.marker.outputs.marker-present }}
+        shell: bash
+        run: |
+          set -euo pipefail
           {
-            echo "## VSDD Non-test-blocker (decommissioned)"
+            echo "## Non-test-blocker decision"
             echo ""
-            echo "- This check no longer enforces commit-shape rules."
-            echo "- Marker present on PR: \`$marker_present\`"
-            echo "- VSDD opt-out signal: see the \`vsdd:opt-out\` label (maintained by \`vsdd-brand.yml\`)."
-            echo "- Per #129: marker is a fixed token, one-way diode, no SHA payload, no ancestry walk."
+            echo "- whitelist-match: \`$WHITELIST\`"
+            echo "- has-impl: \`${IMPL:-n/a}\`"
+            echo "- marker-present: \`$MARKER\`"
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "Non-test-blocker decommissioned per #129. marker_present=$marker_present. Exiting 0."
+
+          # Pass on any of: whitelist-match, no impl, marker present.
+          if [ "$WHITELIST" = "true" ]; then
+            echo "✓ Whitelist-matched (.github/-only PR); marker not required."
+            exit 0
+          fi
+          if [ "$IMPL" != "true" ]; then
+            echo "✓ No impl content (test-only or empty diff); marker not required yet."
+            exit 0
+          fi
+          if [ "$MARKER" = "true" ]; then
+            echo "✓ Earned Red-gate-cleared marker present; impl content permitted."
+            exit 0
+          fi
+          echo "::error::PR has impl content but no Red-gate-cleared marker."
+          echo "::error::Either land test-only commits first to earn the marker, OR"
+          echo "::error::keep the diff to .github/-only to qualify for the whitelist."
+          {
+            echo ""
+            echo "**Result: BLOCK.** Non-whitelist PR with impl content and no earned marker."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
