@@ -96,10 +96,24 @@ jobs:
           ref: main
           path: .vsdd-philosophies
 
+      - name: Detect spec:goal label
+        id: label-check
+        env:
+          LABELS_JSON: ${{ toJSON(github.event.issue.labels) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `is-goal-spec=true` only when the issue carries the spec:goal
+          # label. Per #128: the cardinality counting directive is injected
+          # only for goal-specs; tech-spec reviews are unaffected.
+          is_goal=$(jq -r 'any(.name == "spec:goal")' <<<"$LABELS_JSON")
+          echo "is-goal-spec=$is_goal" >> "$GITHUB_OUTPUT"
+
       - name: Build prompt
         env:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
+          IS_GOAL_SPEC: ${{ steps.label-check.outputs.is-goal-spec }}
         run: |
           cat > stdin.txt <<'PROMPT_EOF'
           You are Sarcasmotron, the adversarial reviewer described in MEMORY.md
@@ -153,6 +167,39 @@ jobs:
             cat MEMORY.md >> stdin.txt
           else
             cat .vsdd-philosophies/MEMORY.md >> stdin.txt
+          fi
+          # Per #128: append cardinality count-reporting directive only
+          # when reviewing a spec:goal issue. Tech-spec reviews are
+          # unaffected.
+          if [ "$IS_GOAL_SPEC" = "true" ]; then
+            cat >> stdin.txt <<'CARDINALITY_EOF'
+
+          --- CARDINALITY DIRECTIVE (goal-specs only) ---
+
+          In addition to the bullet-list output above, you MUST report your
+          parsed cardinality counts at the very END of your output, on two
+          lines of their own (no other content), in this exact format:
+
+              subjects: <integer>
+              outcomes: <integer>
+
+          Where:
+            - `subjects` = count of discrete noun phrases the goal text
+              names as targets of change.
+            - `outcomes` = count of discrete verb phrases the goal text
+              names in its acceptance criteria.
+
+          Both counts MUST be integers ≥ 1. A count of 0 indicates the
+          goal text is malformed (missing subjects or acceptance criteria);
+          report 0 if that is genuinely the case. Negative numbers,
+          decimals, or non-numeric tokens are treated as 0.
+
+          The counts are read by an orchestrator step that compares yours
+          to the other reviewer's. If the two reviewers disagree on
+          classification (`min(subjects, outcomes) == 1` vs `min ≥ 2`),
+          the orchestrator posts a blocking concern requiring goal-text
+          clarification.
+          CARDINALITY_EOF
           fi
           {
             printf '\n--- ISSUE TITLE ---\n%s\n' "$ISSUE_TITLE"
@@ -217,10 +264,32 @@ jobs:
               round,
               budget: budgetN,
             });
+            // Per #128: extract subjects/outcomes counts from the LLM
+            // output for goal-specs and add them to the frontmatter so
+            // the orchestrator step can read them.
+            const cardinality = require(path.join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/phase-1c-cardinality.js',
+            ));
+            const issueLabels = (context.payload.issue?.labels || [])
+              .map((l) => (typeof l === 'string' ? l : l.name));
+            const isGoalSpec = issueLabels.includes('spec:goal');
+            let countLines = '';
+            if (isGoalSpec) {
+              const tuple = cardinality.parseCountTuple(reviewBody);
+              if (tuple) {
+                countLines =
+                  `subjects: ${tuple.subjects}\n` +
+                  `outcomes: ${tuple.outcomes}\n`;
+              } else {
+                countLines = `subjects: 0\noutcomes: 0\n`;
+              }
+            }
             const frontmatter =
               `<!-- vsdd-phase-1c\n` +
               `reviewer: ${REVIEWER}\n` +
               `verdict: ${result.verdict}\n` +
+              countLines +
               `-->\n\n`;
             const header = `**VSDD Phase 1c — Gemini**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
@@ -281,10 +350,32 @@ jobs:
               round,
               budget: budgetN,
             });
+            // Per #128: extract subjects/outcomes counts from the LLM
+            // output for goal-specs and add them to the frontmatter so
+            // the orchestrator step can read them.
+            const cardinality = require(path.join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/phase-1c-cardinality.js',
+            ));
+            const issueLabels = (context.payload.issue?.labels || [])
+              .map((l) => (typeof l === 'string' ? l : l.name));
+            const isGoalSpec = issueLabels.includes('spec:goal');
+            let countLines = '';
+            if (isGoalSpec) {
+              const tuple = cardinality.parseCountTuple(reviewBody);
+              if (tuple) {
+                countLines =
+                  `subjects: ${tuple.subjects}\n` +
+                  `outcomes: ${tuple.outcomes}\n`;
+              } else {
+                countLines = `subjects: 0\noutcomes: 0\n`;
+              }
+            }
             const frontmatter =
               `<!-- vsdd-phase-1c\n` +
               `reviewer: ${REVIEWER}\n` +
               `verdict: ${result.verdict}\n` +
+              countLines +
               `-->\n\n`;
             const header = `**VSDD Phase 1c — Claude**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
@@ -293,4 +384,105 @@ jobs:
               repo: context.repo.repo,
               issue_number: context.issue.number,
               body: frontmatter + header + result.body + footer,
+            });
+
+  orchestrator:
+    name: Cardinality orchestrator (goal-specs)
+    needs: [ownership, gemini-review, claude-review]
+    # Only run when the issue is a spec:goal AND ownership succeeded.
+    # No-op for tech-specs and any other issue type — absent count
+    # frontmatter on tech-spec reviews never triggers validation.
+    if: ${{ needs.ownership.outputs.owned == 'true' && contains(toJSON(github.event.issue.labels), 'spec:goal') }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read tuples + post orchestrator verdict
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const path = require('path');
+            const cardinality = require(path.join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/phase-1c-cardinality.js',
+            ));
+
+            const allComments = await github.paginate(
+              github.rest.issues.listComments,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                per_page: 100,
+              },
+            );
+
+            const tuples = cardinality.extractReviewerTuples(allComments);
+            const concerns = [];
+            let canonical = null;
+
+            // Validation: zero/missing counts on either reviewer.
+            if (!tuples.gemini) {
+              concerns.push(
+                "(blocking) Gemini's most-recent review is missing or has " +
+                "invalid `subjects`/`outcomes` counts (treated as 0). The " +
+                "goal text may be missing subjects or acceptance criteria; " +
+                "edit the goal body and re-run Phase 1c.",
+              );
+            }
+            if (!tuples.claude) {
+              concerns.push(
+                "(blocking) Claude's most-recent review is missing or has " +
+                "invalid `subjects`/`outcomes` counts (treated as 0). The " +
+                "goal text may be missing subjects or acceptance criteria; " +
+                "edit the goal body and re-run Phase 1c.",
+              );
+            }
+
+            if (tuples.gemini && tuples.claude) {
+              const gMin = cardinality.computeClassification(tuples.gemini);
+              const cMin = cardinality.computeClassification(tuples.claude);
+              if (gMin.isSingleTechSpec !== cMin.isSingleTechSpec) {
+                concerns.push(
+                  `(blocking) Reviewers disagree on classification: ` +
+                  `gemini reports ${JSON.stringify(tuples.gemini)} ` +
+                  `(min=${gMin.min}, ` +
+                  `${gMin.isSingleTechSpec ? 'atomic' : 'decomposable'}); ` +
+                  `claude reports ${JSON.stringify(tuples.claude)} ` +
+                  `(min=${cMin.min}, ` +
+                  `${cMin.isSingleTechSpec ? 'atomic' : 'decomposable'}). ` +
+                  `Edit the goal body to clarify until both reviewers ` +
+                  `read the same shape.`,
+                );
+              } else {
+                // Agreement on classification — compute canonical tuple
+                // (per-axis MIN; preserves agreed classification).
+                canonical = cardinality.perAxisMin(tuples.gemini, tuples.claude);
+              }
+            }
+
+            const verdict = concerns.length === 0 ? 'pass' : 'fail';
+            const fm = cardinality.buildOrchestratorFrontmatter({
+              verdict,
+              ...(canonical || {}),
+            });
+            const header = `**VSDD Phase 1c — Orchestrator (cardinality)**\n\n`;
+            let body;
+            if (concerns.length === 0) {
+              const tupleStr = canonical
+                ? `subjects=${canonical.subjects}, outcomes=${canonical.outcomes}, min=${Math.min(canonical.subjects, canonical.outcomes)}`
+                : '(no canonical tuple — check orchestrator state)';
+              body = `Reviewer counts agreed on classification. Canonical tuple: ${tupleStr}.`;
+            } else {
+              body = concerns.map((c) => `- ${c}`).join('\n');
+            }
+            const footer = `\n\n---\n_Per #128: cardinality orchestrator. Verdict gates promotion when fail; canonical tuple consumed by promote-goal-to-tech._`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: fm + '\n\n' + header + body + footer,
             });
