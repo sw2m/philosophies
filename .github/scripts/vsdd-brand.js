@@ -23,9 +23,6 @@ const ROOT_METADATA_FILES = new Set([
 //   - path ends in `.md` (markdown documentation; not unit-testable).
 //   - path is one of the recognized root-level repo-metadata files
 //     (`.gitignore`, `LICENSE`, `CODEOWNERS`, etc.).
-//
-// `isUnderDotGithub` is preserved as a back-compat alias of the
-// `.github/`-only check; new callers should use `isWhitelistPath`.
 function isWhitelistPath(path) {
   if (typeof path !== 'string' || path.length === 0) return false;
   if (path.startsWith('.github/')) return true;
@@ -33,11 +30,6 @@ function isWhitelistPath(path) {
   if (ROOT_METADATA_FILES.has(path)) return true;
   if (/^LICENSE(\..+)?$/.test(path)) return true;
   return false;
-}
-
-function isUnderDotGithub(path) {
-  if (typeof path !== 'string' || path.length === 0) return false;
-  return path.startsWith('.github/');
 }
 
 function computeBrandState({ whitelist, impl, marker }) {
@@ -58,7 +50,6 @@ function hasMarkerToken(body) {
 module.exports = {
   MARKER_TOKEN,
   isWhitelistPath,
-  isUnderDotGithub,
   computeBrandState,
   hasMarkerToken,
 };
