@@ -1,0 +1,268 @@
+name: VSDD opt-out brand
+
+# Per #129: maintains an "opt-out / out-of-process" brand on PRs as a
+# tamper-resistant comment by `github-actions[bot]`. Brand state is
+# computed from three inputs: whitelist-match (path-based, all changed
+# files under .github/), impl-content presence (PR's diff against base
+# touches non-test files), and earned-marker presence (Red-gate-cleared
+# token comment by the bot).
+#
+# Brand applied iff: whitelist-match OR (no marker AND has impl-content).
+# The brand is informational; it does not block merge. It is a bot-
+# authored comment containing the token `<!-- vsdd-opt-out-brand -->`
+# (deliberately separate from the Red-gate-cleared token, and distinct
+# from labels because labels can be toggled by anyone with PR write
+# access; only github-actions[bot] can author comments under its own
+# identity, making the comment-marker the only spoof-resistant signal).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [deleted]
+
+concurrency:
+  group: vsdd-brand-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: write
+  issues: write
+  contents: read
+
+jobs:
+  resolve-pr:
+    # Both event types collapse to a PR number. For `pull_request`, it's
+    # the PR itself. For `issue_comment.deleted` on a PR's thread, the
+    # issue number IS the PR number — but issue_comment can also fire on
+    # plain issues (skip those).
+    name: Resolve PR number + head SHA
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.resolve.outputs.pr-number }}
+      head-sha:  ${{ steps.resolve.outputs.head-sha }}
+      proceed:   ${{ steps.resolve.outputs.proceed }}
+    steps:
+      - name: Resolve via actions/github-script (per #129 spec)
+        id: resolve
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const event = context.eventName;
+            const setOutput = (k, v) => core.setOutput(k, v);
+
+            if (event === 'pull_request') {
+              const pr = context.payload.pull_request;
+              setOutput('pr-number', String(pr.number));
+              setOutput('head-sha',  pr.head.sha);
+              setOutput('proceed',   'true');
+              core.info(`pull_request #${pr.number} head=${pr.head.sha}`);
+              return;
+            }
+
+            if (event === 'issue_comment') {
+              const issue = context.payload.issue;
+              if (!issue || !issue.pull_request) {
+                core.notice('issue_comment.deleted on a non-PR issue; nothing to brand.');
+                setOutput('proceed', 'false');
+                return;
+              }
+              // Fetch PR head/base via API since issue_comment payload
+              // doesn't carry it. Per spec: actions/github-script call.
+              const {data: pr} = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                pull_number: issue.number,
+              });
+              setOutput('pr-number', String(pr.number));
+              setOutput('head-sha',  pr.head.sha);
+              setOutput('proceed',   'true');
+              core.info(`issue_comment.deleted → PR #${pr.number} head=${pr.head.sha}`);
+              return;
+            }
+
+            core.notice(`Unhandled event: ${event}; skipping.`);
+            setOutput('proceed', 'false');
+
+  marker:
+    name: Marker presence
+    needs: [resolve-pr]
+    if: needs.resolve-pr.outputs.proceed == 'true'
+    uses: ./.github/workflows/vsdd-marker-check.yml
+    with:
+      pr-number: ${{ fromJSON(needs.resolve-pr.outputs.pr-number) }}
+
+  brand:
+    name: Apply or remove vsdd:opt-out
+    needs: [resolve-pr, marker]
+    if: needs.resolve-pr.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve-pr.outputs.head-sha }}
+          # `fetch-depth: 0` so classify-changes.sh's `--pr base...head`
+          # has both refs locally for the git-diff walk.
+          fetch-depth: 0
+
+      - name: Fetch PR file list (single call; reused below)
+        id: files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ needs.resolve-pr.outputs.pr-number }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `gh api --paginate` for an array endpoint returns one merged
+          # JSON array. Cached on disk for the whitelist + impl steps so
+          # we don't fetch twice.
+          gh api --paginate "repos/${REPO}/pulls/${PR}/files" > pr-files.json
+          count=$(jq 'length' pr-files.json)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Fetched $count file entries for PR #${PR}."
+
+      - name: Compute whitelist via JS module (isUnderDotGithub)
+        id: whitelist
+        env:
+          PR_FILES: pr-files.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Route the path-prefix check through vsdd-brand.js's
+          # isUnderDotGithub so the workflow and the pure module use the
+          # same predicate (no double-implementation in bash).
+          out=$(node -e '
+            const fs = require("fs");
+            const {isUnderDotGithub} = require("./.github/scripts/vsdd-brand.js");
+            const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
+            const compute = () => {
+              if (arr.length === 0) return "false";
+              for (const f of arr) {
+                if (!isUnderDotGithub(f.filename)) return "false";
+                if (f.previous_filename && !isUnderDotGithub(f.previous_filename)) {
+                  return "false";
+                }
+              }
+              return "true";
+            };
+            console.log(compute());
+          ')
+          echo "whitelist=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Compute impl-content via classify-changes.sh
+        id: impl
+        if: steps.whitelist.outputs.whitelist != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ needs.resolve-pr.outputs.pr-number }}
+          REPO: ${{ github.repository }}
+          PR_FILES: pr-files.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Empty diff → no impl content.
+          if [ "$(jq 'length' "$PR_FILES")" -eq 0 ]; then
+            echo "impl=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Use the canonical classify-changes script's default test-
+          # pattern set as the source of truth (tests/, *_test.*,
+          # *.test.*, *.spec.*, etc.). The previous implementation
+          # depended on a non-existent `tests-glob` output from
+          # repo-shape; classify-changes already encodes the canonical
+          # pattern list and is the right primitive.
+          base_sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.base.sha')
+          head_sha=$(gh api "repos/${REPO}/pulls/${PR}" --jq '.head.sha')
+          # Make sure both refs are local before invoking the classifier.
+          git fetch --no-tags origin "$base_sha" "$head_sha" 2>/dev/null || true
+          out=$(bash .github/scripts/classify-changes.sh \
+            --pr "${base_sha}...${head_sha}")
+          tests_only=$(grep '^tests-only=' <<<"$out" | cut -d= -f2)
+          if [ "$tests_only" = "true" ]; then
+            echo "impl=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "impl=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute brand state via JS module (computeBrandState)
+        id: brand-state
+        env:
+          WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
+          IMPL: ${{ steps.impl.outputs.impl }}
+          MARKER: ${{ needs.marker.outputs.marker-present }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Brand iff (whitelist OR (impl AND no marker)).
+          node -e '
+            const {computeBrandState} = require("./.github/scripts/vsdd-brand.js");
+            const out = computeBrandState({
+              whitelist: process.env.WHITELIST === "true",
+              impl:      process.env.IMPL      === "true",
+              marker:    process.env.MARKER    === "true",
+            });
+            require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "brand=" + out + "\n");
+          '
+
+      - name: Post or delete vsdd:opt-out brand comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ needs.resolve-pr.outputs.pr-number }}
+          REPO: ${{ github.repository }}
+          BRAND: ${{ steps.brand-state.outputs.brand }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The brand is a github-actions[bot] comment containing the
+          # token `<!-- vsdd-opt-out-brand -->`. Bot identity is the
+          # only spoof-resistant signal: external collaborators can flip
+          # labels but cannot post under github-actions[bot]'s identity.
+          #
+          # Normalize toward 0-or-1 brand comments per state:
+          #  - brand=true,  0 prior  → post one.
+          #  - brand=true,  1 prior  → leave as-is.
+          #  - brand=true, ≥2 prior  → keep the first, delete duplicates
+          #                            (a prior buggy run can post twice;
+          #                            collapse on the next event so the
+          #                            thread doesn't accumulate noise).
+          #  - brand=false, 0 prior  → nothing.
+          #  - brand=false, ≥1 prior → delete all of them.
+          mapfile -t existing_ids < <(gh api --paginate \
+            "repos/${REPO}/issues/${PR}/comments" \
+            --jq '.[]
+                  | select(.user.login == "github-actions[bot]")
+                  | select(.body | contains("<!-- vsdd-opt-out-brand -->"))
+                  | .id')
+          count=${#existing_ids[@]}
+          echo "Found $count existing bot brand comment(s) on PR #${PR}."
+
+          delete_id() {
+            gh api --method DELETE "repos/${REPO}/issues/comments/$1" \
+              && echo "  - deleted comment id=$1"
+          }
+
+          if [ "$BRAND" = "true" ]; then
+            if [ "$count" -eq 0 ]; then
+              gh pr comment "$PR" --body-file - <<'BRAND_EOF'
+<!-- vsdd-opt-out-brand -->
+
+**VSDD opt-out / out-of-process** — this PR has been branded `vsdd:opt-out` by `github-actions[bot]`. Either every changed file is under `.github/` (whitelist-match, no test-discipline expected) OR the PR has impl content without an earned `Red-gate-cleared` marker (divergence from VSDD best-effort).
+
+The brand is informational; it does not block merge. It records, in a tamper-resistant location authored by the bot, that the PR is out-of-process under VSDD discipline.
+BRAND_EOF
+              echo "Posted vsdd:opt-out brand comment."
+            elif [ "$count" -eq 1 ]; then
+              echo "Brand comment already present (id=${existing_ids[0]}); leaving in place."
+            else
+              echo "Found $count brand comments; collapsing to 1 (keep id=${existing_ids[0]}, delete rest)."
+              for id in "${existing_ids[@]:1}"; do delete_id "$id"; done
+            fi
+          else
+            if [ "$count" -eq 0 ]; then
+              echo "Brand absent and no prior brand comments; nothing to do."
+            else
+              echo "Brand absent; deleting all $count prior brand comment(s)."
+              for id in "${existing_ids[@]}"; do delete_id "$id"; done
+            fi
+          fi
