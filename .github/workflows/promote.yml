@@ -129,7 +129,7 @@ jobs:
                 }
               }
             }' \
-            -F owner="$OWNER" -F name="$NAME" -F num="$ISSUE" \
+            -f owner="$OWNER" -f name="$NAME" -F num="$ISSUE" \
             --jq '.data.repository.issue.lastEditedAt // .data.repository.issue.createdAt')
           if [ -z "$REF_AT" ] || [ "$REF_AT" = "null" ]; then
             echo "::error::Could not resolve body-edit timestamp for issue #${ISSUE}; refusing to evaluate verdict freshness."
