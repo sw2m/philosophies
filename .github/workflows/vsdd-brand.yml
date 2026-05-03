@@ -244,13 +244,13 @@ jobs:
 
           if [ "$BRAND" = "true" ]; then
             if [ "$count" -eq 0 ]; then
-              gh pr comment "$PR" --body-file - <<'BRAND_EOF'
-<!-- vsdd-opt-out-brand -->
-
-**VSDD opt-out / out-of-process** — this PR has been branded `vsdd:opt-out` by `github-actions[bot]`. Either every changed file is under `.github/` (whitelist-match, no test-discipline expected) OR the PR has impl content without an earned `Red-gate-cleared` marker (divergence from VSDD best-effort).
-
-The brand is informational; it does not block merge. It records, in a tamper-resistant location authored by the bot, that the PR is out-of-process under VSDD discipline.
-BRAND_EOF
+              {
+                printf '%s\n' '<!-- vsdd-opt-out-brand -->'
+                printf '\n'
+                printf '%s\n' '**VSDD opt-out / out-of-process** — this PR has been branded `vsdd:opt-out` by `github-actions[bot]`. Either every changed file is under `.github/` (whitelist-match, no test-discipline expected) OR the PR has impl content without an earned `Red-gate-cleared` marker (divergence from VSDD best-effort).'
+                printf '\n'
+                printf '%s\n' 'The brand is informational; it does not block merge. It records, in a tamper-resistant location authored by the bot, that the PR is out-of-process under VSDD discipline.'
+              } | gh pr comment "$PR" --body-file -
               echo "Posted vsdd:opt-out brand comment."
             elif [ "$count" -eq 1 ]; then
               echo "Brand comment already present (id=${existing_ids[0]}); leaving in place."
