@@ -500,6 +500,10 @@ jobs:
           # the *PR owner*, not the workflow trigger sender (which on a
           # fork-PR `synchronize` event can be the external pusher).
           actor-override: ${{ needs.ownership.outputs.owner }}
+          # Per #112/#116 — opt in to bot trust ONLY when the PR's head
+          # branch is in this repo (not a fork). Fork PRs evaluate to
+          # 'false' and fall through to the existing org-member check.
+          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v9
@@ -573,6 +577,8 @@ jobs:
           # is the correct shape (stdin-file only).
           stdin-file: gemini-stdin.txt
           actor-override: ${{ needs.ownership.outputs.owner }}
+          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
+          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: actions/github-script@v9
