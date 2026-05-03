@@ -1,0 +1,6 @@
+# Python bytecode caches — anywhere in the repo, not just consensus.py's
+# location. Future scripts/actions/tools that import Python modules will
+# generate __pycache__/ alongside their .py files; one rule covers them.
+__pycache__/
+*.py[cod]
+*$py.class

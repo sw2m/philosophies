@@ -848,10 +848,18 @@ jobs:
 
           opened_count = sum(1 for u in opened if u)
           skipped_count = len(duplicate_map)
-          if fail:
-              print(f"\nFAIL: {opened_count} gap issue(s) opened, {skipped_count} skipped as duplicates.")
-              sys.exit(1)
-          print(f"\nPASS: {opened_count} opened, {skipped_count} skipped as duplicates.")
+          # Per #100: exit non-zero only when verdict is fail OR a NEW gap was
+          # filed this run. Duplicate-only runs (every gap matched an existing
+          # tracked issue → opened_count == 0) pass cleanly even when the
+          # underlying consensus is fail — the dedup signal IS the "already
+          # known" signal.
+          sys.path.insert(0, os.path.join(os.environ.get('GITHUB_WORKSPACE', '.'), '.github', 'scripts'))
+          from consensus import decide_exit_code
+          verdict_str = 'fail' if fail else 'pass'
+          rc = decide_exit_code(verdict_str, opened_count)
+          status = 'FAIL' if rc != 0 else 'PASS'
+          print(f"\n{status}: {opened_count} gap issue(s) opened, {skipped_count} skipped as duplicates.")
+          sys.exit(rc)
           PY
 
       - name: Submit consensus PR review (APPROVE / REQUEST_CHANGES)
