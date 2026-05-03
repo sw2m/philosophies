@@ -103,17 +103,47 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ISSUE: ${{ github.event.issue.number }}
-          ISSUE_UPDATED: ${{ github.event.issue.updated_at }}
         shell: bash
         run: |
           set -euo pipefail
-          # Find the latest verdict marker per reviewer that github-actions[bot]
-          # posted AFTER the issue's last update. Both reviewers (gemini, claude)
-          # must be present and PASS.
+          # Per #93: gate verdict freshness against the issue's BODY-EDIT
+          # timestamp (`lastEditedAt`), not its `updated_at`. `updated_at`
+          # bumps on every field change — assignments, label changes,
+          # comment additions — including the very `assigned` event that
+          # fires this workflow. That made fresh verdicts always read as
+          # stale at validation time (since the assign timestamp post-
+          # dates them by definition), producing a structural race that
+          # made promotion impossible without admin override. Body edits
+          # are the ONLY change that can invalidate Phase 1c verdicts
+          # (the verdicts judge body content); gating on `lastEditedAt`
+          # gives the right reference. Falls back to `createdAt` when
+          # the body has never been edited since the issue opened.
+          OWNER="${REPO%/*}"
+          NAME="${REPO#*/}"
+          REF_AT=$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $num: Int!) {
+              repository(owner: $owner, name: $name) {
+                issue(number: $num) {
+                  lastEditedAt
+                  createdAt
+                }
+              }
+            }' \
+            -F owner="$OWNER" -F name="$NAME" -F num="$ISSUE" \
+            --jq '.data.repository.issue.lastEditedAt // .data.repository.issue.createdAt')
+          if [ -z "$REF_AT" ] || [ "$REF_AT" = "null" ]; then
+            echo "::error::Could not resolve body-edit timestamp for issue #${ISSUE}; refusing to evaluate verdict freshness."
+            echo "cleared=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          updated_epoch=$(date -d "$REF_AT" +%s)
+          echo "Phase 1c verdict-freshness reference: $REF_AT (epoch $updated_epoch); per #93 this is the body-edit timestamp, not updated_at."
+
+          # Find the latest verdict marker per reviewer that
+          # github-actions[bot] posted AFTER the issue's last body edit.
+          # Both reviewers (gemini, claude) must be present and PASS.
           comments=$(gh api -H "Accept: application/vnd.github+json" \
             "repos/${REPO}/issues/${ISSUE}/comments?per_page=100")
-
-          updated_epoch=$(date -d "$ISSUE_UPDATED" +%s)
 
           for reviewer in gemini claude; do
             # Each Phase 1c reviewer comment carries an HTML-comment-
@@ -151,7 +181,7 @@ jobs:
             created_at=$(jq -r '.created_at' <<<"$latest")
             created_epoch=$(date -d "$created_at" +%s)
             if [ "$created_epoch" -lt "$updated_epoch" ]; then
-              echo "::error::Phase 1c ${reviewer} verdict (${verdict}) is stale — posted at ${created_at}, issue updated at ${ISSUE_UPDATED}. Edit the issue body to re-trigger Phase 1c."
+              echo "::error::Phase 1c ${reviewer} verdict (${verdict}) is stale — posted at ${created_at}, issue body last edited at ${REF_AT}. Edit the issue body to re-trigger Phase 1c."
               echo "cleared=false" >> "$GITHUB_OUTPUT"
               exit 1
             fi
@@ -182,7 +212,7 @@ jobs:
             orch_created=$(jq -r '.created_at' <<<"$orch_latest")
             orch_epoch=$(date -d "$orch_created" +%s)
             # Only enforce when the orchestrator comment is fresh (not
-            # stale relative to the issue's last update).
+            # stale relative to the issue's last body edit, per #93).
             if [ "$orch_epoch" -ge "$updated_epoch" ] && [ "$orch_verdict" = "fail" ]; then
               echo "::error::Phase 1c orchestrator verdict is 'fail' at ${orch_created}. See the orchestrator comment for blocking concerns."
               echo "cleared=false" >> "$GITHUB_OUTPUT"
