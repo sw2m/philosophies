@@ -122,7 +122,7 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Fetched $count file entries for PR #${PR}."
 
-      - name: Compute whitelist via JS module (isUnderDotGithub)
+      - name: Compute whitelist via JS module (isWhitelistPath)
         id: whitelist
         env:
           PR_FILES: pr-files.json
@@ -130,17 +130,17 @@ jobs:
         run: |
           set -euo pipefail
           # Route the path-prefix check through vsdd-brand.js's
-          # isUnderDotGithub so the workflow and the pure module use the
+          # isWhitelistPath so the workflow and the pure module use the
           # same predicate (no double-implementation in bash).
           out=$(node -e '
             const fs = require("fs");
-            const {isUnderDotGithub} = require("./.github/scripts/vsdd-brand.js");
+            const {isWhitelistPath} = require("./.github/scripts/vsdd-brand.js");
             const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
             const compute = () => {
               if (arr.length === 0) return "false";
               for (const f of arr) {
-                if (!isUnderDotGithub(f.filename)) return "false";
-                if (f.previous_filename && !isUnderDotGithub(f.previous_filename)) {
+                if (!isWhitelistPath(f.filename)) return "false";
+                if (f.previous_filename && !isWhitelistPath(f.previous_filename)) {
                   return "false";
                 }
               }
