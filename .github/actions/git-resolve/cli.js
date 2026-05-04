@@ -38,18 +38,49 @@ function gh(args, opts = {}) {
   return opts.binary ? result.stdout : result.stdout;
 }
 
-// Try a local git command. Returns stdout (trimmed) on success, null on
-// any failure. Non-throwing — caller decides whether to fall back.
+// Try a local git command. Returns stdout (raw, untrimmed) on success,
+// null on any failure. Non-throwing — caller decides whether to fall
+// back. Runs in GITHUB_WORKSPACE (the consumer's checkout) rather
+// than the action's own directory; `cwd` defaults are wrong for
+// composite actions which `cd $GITHUB_ACTION_PATH` for the script
+// invocation. Stdout is NOT trimmed: `git diff` output may end with
+// a context line consisting of a single space, which `.trim()` would
+// strip and corrupt the patch format.
 function gitLocal(args) {
   try {
     const result = spawnSync('git', args, {
       encoding: 'utf8',
       maxBuffer: 50 * 1024 * 1024,
+      cwd: process.env.GITHUB_WORKSPACE || process.cwd(),
     });
     if (result.error || result.status !== 0) return null;
-    return result.stdout.trim();
+    return result.stdout;
   } catch (e) {
     return null;
+  }
+}
+
+// Preemptive rate-limit check: queries `gh api rate_limit` (cheap,
+// doesn't count against the budget) and bails with the spec-mandated
+// structured failure if the core remaining budget is dangerously
+// low. Called at the start of resolve and before each large fetch
+// loop. Non-fatal on its own failure (we don't want a flaky
+// rate_limit endpoint to break the action).
+function checkRateLimit(threshold) {
+  try {
+    const raw = gh(['api', 'rate_limit']);
+    const data = JSON.parse(raw);
+    const core = (data && data.resources && data.resources.core) || null;
+    if (!core || typeof core.remaining !== 'number') return;
+    if (core.remaining < (threshold || 10)) {
+      const resetIso = core.reset ? new Date(core.reset * 1000).toISOString() : 'unknown';
+      console.error(`::error::GitHub API rate limit nearly exhausted (${core.remaining} core remaining); resets at ${resetIso}`);
+      process.exit(1);
+    }
+  } catch (e) {
+    // Don't break the action on a flaky rate_limit endpoint;
+    // the post-failure stderr scan in gh() catches in-flight
+    // exhaustion as a backstop.
   }
 }
 
@@ -107,6 +138,11 @@ if (cmd === 'resolve') {
   const outputFormat = process.argv[5] || 'directory';
   const prShorthandBase = process.argv[6] || process.env.GITHUB_REPOSITORY || '';
   const outputDir = process.argv[7] || path.join(process.env.RUNNER_TEMP || '/tmp', 'git-resolve');
+
+  // Preemptive rate-limit check at the start of resolve; the
+  // in-flight gh() wrapper's stderr scan catches mid-resolve
+  // exhaustion as a fallback.
+  checkRateLimit(10);
 
   const parsed = lib.parseRefLike(refInput);
   if (parsed.kind === 'error') {
@@ -292,7 +328,12 @@ if (cmd === 'resolve') {
       } else if (entry.type === 'blob') {
         if (entry.mode === '120000') {
           const content = gh(['api', `repos/${repo}/git/blobs/${entry.sha}`, '-H', 'Accept: application/vnd.github.raw']);
-          const target = content.trim();
+          // Symlink target is the blob content verbatim. Don't trim
+          // arbitrary whitespace — only strip the trailing newline
+          // that the API may append (per #165 Phase 3 r3: a
+          // legitimate symlink target with trailing spaces would be
+          // corrupted by a naive .trim()).
+          const target = content.replace(/\n$/, '');
           const validation = lib.validateSymlinkTarget(target, entry.path, treeDir);
           if (!validation.ok) {
             fail(validation.error);
@@ -348,8 +389,11 @@ function resolveExactRefObject(repo, namespace, name) {
 function resolveRef(ref, repo) {
   // Try local git first (per spec acceptance #9 + Phase 3 review on
   // PR #165): a local clone may already have the object. Avoids an
-  // API call when the consumer's checkout is sufficient.
-  const local = gitLocal(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+  // API call when the consumer's checkout is sufficient. Trim the
+  // raw output here — gitLocal preserves stdout verbatim for diff
+  // patch fidelity, but `git rev-parse` output is just a SHA + \n.
+  const localRaw = gitLocal(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+  const local = localRaw === null ? null : localRaw.trim();
   if (local && /^[a-f0-9]{40}$/i.test(local)) {
     return local;
   }
@@ -365,11 +409,16 @@ function resolveRef(ref, repo) {
   }
 
   if (/^[a-f0-9]{7,39}$/i.test(ref)) {
+    // Try as a commit SHA prefix; if not a commit, fall through to
+    // tag/branch resolution (a hex-only string can legitimately be
+    // a branch or tag name — `decafbad`, `cafe`, etc.). Per #165
+    // Phase 3 r3: don't hard-fail on commits-API 404; let the
+    // ref-name fallback below run.
     try {
       const commitInfo = JSON.parse(gh(['api', `repos/${repo}/git/commits/${ref}`]));
       return commitInfo.sha;
     } catch (e) {
-      fail(`ref not found: ${ref}`);
+      // Fall through to tag/branch resolution below.
     }
   }
 
