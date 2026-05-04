@@ -27,9 +27,30 @@ function gh(args, opts = {}) {
   }
   if (result.status !== 0) {
     const stderr = opts.binary ? result.stderr.toString() : result.stderr;
+    if (/rate limit|API rate limit exceeded|secondary rate limit/i.test(stderr)) {
+      const resetMatch = stderr.match(/reset[s]?\s+at\s+(\S+)/i);
+      const resetInfo = resetMatch ? `; resets at ${resetMatch[1]}` : '';
+      console.error(`::error::GitHub API rate limit exhausted${resetInfo}`);
+      process.exit(1);
+    }
     throw new Error(`gh exited ${result.status}: ${stderr}`);
   }
   return opts.binary ? result.stdout : result.stdout;
+}
+
+// Try a local git command. Returns stdout (trimmed) on success, null on
+// any failure. Non-throwing — caller decides whether to fall back.
+function gitLocal(args) {
+  try {
+    const result = spawnSync('git', args, {
+      encoding: 'utf8',
+      maxBuffer: 50 * 1024 * 1024,
+    });
+    if (result.error || result.status !== 0) return null;
+    return result.stdout.trim();
+  } catch (e) {
+    return null;
+  }
 }
 
 function writeOutput(key, value) {
@@ -103,7 +124,10 @@ if (cmd === 'resolve') {
       fail('repository has no default branch');
     }
     const branch = repoInfo.default_branch;
-    const refInfo = JSON.parse(gh(['api', `repos/${repo}/git/ref/heads/${branch}`]));
+    const refInfo = resolveExactRefObject(repo, 'heads', branch);
+    if (!refInfo) {
+      fail(`default branch ref not found: refs/heads/${branch}`);
+    }
     headSha = refInfo.object.sha;
     resolvedRef = headSha;
     refKind = 'single';
@@ -144,7 +168,7 @@ if (cmd === 'resolve') {
     resolvedRef = `${baseSha}...${headSha}`;
   }
 
-  const validation = lib.validateOutputFormat(outputFormat, refKind);
+  const validation = lib.validateOutputFormat(outputFormat, refKind, refInput || resolvedRef);
   if (!validation.ok) {
     fail(validation.error);
   }
@@ -179,14 +203,34 @@ if (cmd === 'resolve') {
       }
     }
 
-    const diffText = gh(['api', `repos/${repo}/compare/${baseSha}...${headSha}`, '-H', 'Accept: application/vnd.github.diff']);
+    // Filter via JSON metadata, not regex on diff text. The compare
+    // API's files[] gives unambiguous filename + previous_filename
+    // (handles renames + paths with spaces correctly); the text-diff
+    // sections are then filtered by intersection with the post-
+    // whitelist filename set. Per #165 Phase 3 review on PR — the
+    // prior regex-based path extraction broke on quoted paths and
+    // mis-parsed paths containing ` b/`.
+    const matchedEntries = compareData.files.filter((e) => lib.entryMatchesWhitelist(e, matcher));
+    const matchedFilenames = new Set();
+    for (const e of matchedEntries) {
+      if (e.filename) matchedFilenames.add(e.filename);
+      if (e.previous_filename) matchedFilenames.add(e.previous_filename);
+    }
+
+    // Local git first for the diff text (per spec acceptance #9 +
+    // Phase 3 review). Falls back to compare API when local can't
+    // produce the diff (shallow checkout, missing objects, etc.).
+    let diffText = gitLocal(['diff', `${baseSha}...${headSha}`]);
+    if (!diffText) {
+      diffText = gh(['api', `repos/${repo}/compare/${baseSha}...${headSha}`, '-H', 'Accept: application/vnd.github.diff']);
+    }
 
     const sections = lib.splitDiffByFile(diffText);
-    const filtered = lib.filterDiffSections(sections, matcher);
+    const filtered = lib.filterDiffSections(sections, matchedFilenames);
     const output = lib.joinDiffSections(filtered);
 
     fs.writeFileSync(outputPath, output);
-    fileCount = filtered.length;
+    fileCount = matchedEntries.length;
 
   } else {
     const treeDir = path.join(outputDir, 'git-resolve-out');
@@ -265,9 +309,41 @@ if (cmd === 'resolve') {
   process.exit(0);
 }
 
+// `gh api repos/.../git/ref/<heads|tags>/<name>` returns an OBJECT for
+// an exact match and an ARRAY for a prefix match (e.g., `v1` matching
+// `v1.0`, `v1.1`, ...). The array form is treated as "ref not found"
+// for this action's purposes — we want exact-name lookups only.
+function resolveExactRefObject(repo, namespace, name) {
+  let raw;
+  try {
+    raw = gh(['api', `repos/${repo}/git/ref/${namespace}/${name}`]);
+  } catch (e) {
+    return null;
+  }
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (e) { return null; }
+  if (Array.isArray(parsed)) return null;
+  if (!parsed || !parsed.object) return null;
+  return parsed;
+}
+
 function resolveRef(ref, repo) {
+  // Try local git first (per spec acceptance #9 + Phase 3 review on
+  // PR #165): a local clone may already have the object. Avoids an
+  // API call when the consumer's checkout is sufficient.
+  const local = gitLocal(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+  if (local && /^[a-f0-9]{40}$/i.test(local)) {
+    return local;
+  }
+
   if (/^[a-f0-9]{40}$/i.test(ref)) {
-    return ref;
+    // Bare full SHA. Local git didn't have it; verify via API.
+    try {
+      const commitInfo = JSON.parse(gh(['api', `repos/${repo}/git/commits/${ref}`]));
+      return commitInfo.sha;
+    } catch (e) {
+      fail(`ref not found: ${ref}`);
+    }
   }
 
   if (/^[a-f0-9]{7,39}$/i.test(ref)) {
@@ -281,43 +357,36 @@ function resolveRef(ref, repo) {
 
   if (ref.startsWith('refs/heads/')) {
     const branch = ref.slice('refs/heads/'.length);
-    try {
-      const refInfo = JSON.parse(gh(['api', `repos/${repo}/git/ref/heads/${branch}`]));
-      return refInfo.object.sha;
-    } catch (e) {
-      fail(`ref not found: ${ref}`);
-    }
+    const refInfo = resolveExactRefObject(repo, 'heads', branch);
+    if (!refInfo) fail(`ref not found: ${ref}`);
+    return refInfo.object.sha;
   }
 
   if (ref.startsWith('refs/tags/')) {
     const tag = ref.slice('refs/tags/'.length);
-    try {
-      const refInfo = JSON.parse(gh(['api', `repos/${repo}/git/ref/tags/${tag}`]));
-      if (refInfo.object.type === 'tag') {
-        const tagObj = JSON.parse(gh(['api', `repos/${repo}/git/tags/${refInfo.object.sha}`]));
-        return tagObj.object.sha;
-      }
-      return refInfo.object.sha;
-    } catch (e) {
-      fail(`ref not found: ${ref}`);
-    }
-  }
-
-  try {
-    const refInfo = JSON.parse(gh(['api', `repos/${repo}/git/ref/tags/${ref}`]));
+    const refInfo = resolveExactRefObject(repo, 'tags', tag);
+    if (!refInfo) fail(`ref not found: ${ref}`);
     if (refInfo.object.type === 'tag') {
       const tagObj = JSON.parse(gh(['api', `repos/${repo}/git/tags/${refInfo.object.sha}`]));
       return tagObj.object.sha;
     }
     return refInfo.object.sha;
-  } catch (e) {
-    try {
-      const refInfo = JSON.parse(gh(['api', `repos/${repo}/git/ref/heads/${ref}`]));
-      return refInfo.object.sha;
-    } catch (e2) {
-      fail(`ref not found: ${ref}`);
-    }
   }
+
+  // Bare name — try tags first (precedence rule, matches `git
+  // rev-parse`'s default annotated-tag preference), then heads.
+  const tagRef = resolveExactRefObject(repo, 'tags', ref);
+  if (tagRef) {
+    if (tagRef.object.type === 'tag') {
+      const tagObj = JSON.parse(gh(['api', `repos/${repo}/git/tags/${tagRef.object.sha}`]));
+      return tagObj.object.sha;
+    }
+    return tagRef.object.sha;
+  }
+  const headRef = resolveExactRefObject(repo, 'heads', ref);
+  if (headRef) return headRef.object.sha;
+
+  fail(`ref not found: ${ref}`);
 }
 
 console.error(`Unknown command: ${cmd}`);

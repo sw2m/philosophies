@@ -107,13 +107,14 @@ function entryMatchesWhitelist(entry, matcher) {
   return false;
 }
 
-function validateOutputFormat(format, refKind) {
+function validateOutputFormat(format, refKind, refLike) {
   const valid = ['diff', 'directory', 'tarball'];
   if (!valid.includes(format)) {
     return { ok: false, error: `invalid output-format: ${format}; must be one of: ${valid.join(', ')}` };
   }
   if (format === 'diff' && refKind !== 'range') {
-    return { ok: false, error: `diff format requires a range ref-like; got single-ref` };
+    const refSuffix = refLike ? ` ${refLike}` : '';
+    return { ok: false, error: `diff format requires a range ref-like; got single-ref${refSuffix}` };
   }
   return { ok: true };
 }
@@ -233,6 +234,47 @@ function countDiffFiles(files) {
   return files.length;
 }
 
+// Parse a `diff --git ...` header line, handling git's C-style
+// quoting for paths containing spaces or special chars (paths are
+// quoted as JSON-compatible strings prefixed with a/ or b/, or appear
+// unquoted with a/<path> b/<path> when no escaping needed).
+// Returns { oldPath, newPath } with the a/ or b/ prefix stripped, or
+// null if the line doesn't parse.
+function parseGitDiffHeader(line) {
+  const prefix = 'diff --git ';
+  if (!line.startsWith(prefix)) return null;
+  let rest = line.slice(prefix.length);
+
+  function takeOne(s) {
+    // Returns { value, rest } where value is the path with a/ or b/
+    // stripped, rest is the remaining string (with leading space removed).
+    if (s[0] === '"') {
+      let i = 1;
+      while (i < s.length) {
+        if (s[i] === '\\') { i += 2; continue; }
+        if (s[i] === '"') break;
+        i++;
+      }
+      if (i >= s.length) return null;
+      const quoted = s.slice(0, i + 1);
+      let decoded;
+      try { decoded = JSON.parse(quoted); } catch (e) { return null; }
+      const stripped = decoded.replace(/^[ab]\//, '');
+      return { value: stripped, rest: s.slice(i + 2) };
+    }
+    const spaceIdx = s.indexOf(' ');
+    const part = spaceIdx < 0 ? s : s.slice(0, spaceIdx);
+    const stripped = part.replace(/^[ab]\//, '');
+    return { value: stripped, rest: spaceIdx < 0 ? '' : s.slice(spaceIdx + 1) };
+  }
+
+  const left = takeOne(rest);
+  if (!left) return null;
+  const right = takeOne(left.rest);
+  if (!right) return null;
+  return { oldPath: left.value, newPath: right.value };
+}
+
 function splitDiffByFile(diffText) {
   const sections = [];
   const lines = diffText.split('\n');
@@ -243,12 +285,12 @@ function splitDiffByFile(diffText) {
       if (current) {
         sections.push(current);
       }
-      const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+      const parsed = parseGitDiffHeader(line);
       current = {
         header: line,
         lines: [line],
-        oldPath: match ? match[1] : null,
-        newPath: match ? match[2] : null,
+        oldPath: parsed ? parsed.oldPath : null,
+        newPath: parsed ? parsed.newPath : null,
       };
     } else if (current) {
       current.lines.push(line);
@@ -262,10 +304,15 @@ function splitDiffByFile(diffText) {
   return sections;
 }
 
-function filterDiffSections(sections, matcher) {
+// Filter diff sections by intersection with a set of filenames that
+// passed entryMatchesWhitelist on the JSON metadata. Replaces the
+// prior `(path) => boolean` matcher pattern (which was vulnerable to
+// quoted-path / regex parsing bugs); the JSON metadata is the source
+// of truth for which files survived the whitelist.
+function filterDiffSections(sections, matchedFilenames) {
   return sections.filter((section) => {
-    if (section.oldPath && matcher(section.oldPath)) return true;
-    if (section.newPath && matcher(section.newPath)) return true;
+    if (section.oldPath && matchedFilenames.has(section.oldPath)) return true;
+    if (section.newPath && matchedFilenames.has(section.newPath)) return true;
     return false;
   });
 }
@@ -289,6 +336,7 @@ module.exports = {
   validateSymlinkTarget,
   countLeafEntries,
   countDiffFiles,
+  parseGitDiffHeader,
   splitDiffByFile,
   filterDiffSections,
   joinDiffSections,
