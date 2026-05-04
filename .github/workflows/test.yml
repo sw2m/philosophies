@@ -118,7 +118,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - id: shape
-        uses: sw2m/philosophies/.github/actions/repo-shape@main
+        uses: sw2m/philosophies/.github/actions/git/repo-shape@main
       - name: Detect runner + emit install/test commands
         id: runner
         env:

@@ -230,7 +230,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Run promote-goal-to-tech (composite; org gate inside)
-        uses: sw2m/philosophies/.github/actions/promote-goal-to-tech@main
+        uses: sw2m/philosophies/.github/actions/promote/promote-goal-to-tech@main
         with:
           issue-number: ${{ github.event.issue.number }}
           owner-login: ${{ needs.ownership.outputs.owner }}
@@ -255,7 +255,7 @@ jobs:
           fetch-depth: 0
 
       - name: Run promote-tech-to-pr (composite; org gate inside)
-        uses: sw2m/philosophies/.github/actions/promote-tech-to-pr@main
+        uses: sw2m/philosophies/.github/actions/promote/promote-tech-to-pr@main
         with:
           issue-number: ${{ github.event.issue.number }}
           owner-login: ${{ needs.ownership.outputs.owner }}

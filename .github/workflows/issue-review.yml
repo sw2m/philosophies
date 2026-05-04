@@ -227,7 +227,7 @@ jobs:
           path: ./
 
       - name: Run Gemini (composite action; org-member gate enforced inside)
-        uses: sw2m/philosophies/.github/actions/gemini@main
+        uses: sw2m/philosophies/.github/actions/agents/gemini@main
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: stdin.txt
@@ -315,7 +315,7 @@ jobs:
           path: ./
 
       - name: Run Claude (composite action; org-member gate enforced inside)
-        uses: sw2m/philosophies/.github/actions/claude@main
+        uses: sw2m/philosophies/.github/actions/agents/claude@main
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           stdin-file: stdin.txt

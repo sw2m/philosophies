@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   # No top-level membership-gate job here — the org-member check lives inside
-  # `.github/actions/gemini` and `.github/actions/claude` so it is impossible
+  # `.github/actions/agents/gemini` and `.github/actions/agents/claude` so it is impossible
   # to invoke an agent without going through it.
 
   repo-shape:
@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: shape
-        uses: sw2m/philosophies/.github/actions/repo-shape@main
+        uses: sw2m/philosophies/.github/actions/git/repo-shape@main
       - name: Print VSDD §VIII applicability to job summary
         shell: bash
         env:
@@ -112,7 +112,7 @@ jobs:
               cat "$f"
               echo "</workflow>"
             done
-            for f in .github/actions/*/action.yml; do
+            for f in .github/actions/*/*/action.yml; do
               [ -f "$f" ] || continue
               echo "<action path=\"$f\">"
               cat "$f"
@@ -142,7 +142,7 @@ jobs:
           path: ./
 
       - name: Run Gemini
-        uses: sw2m/philosophies/.github/actions/gemini@main
+        uses: sw2m/philosophies/.github/actions/agents/gemini@main
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: eval-input.txt
@@ -156,7 +156,7 @@ jobs:
             Read each CI workflow file inside <workflow path="..."> tags.
             Read each composite action file inside <action path="..."> tags.
 
-            Repo-shape context (detected by `.github/actions/repo-shape`, which
+            Repo-shape context (detected by `.github/actions/git/repo-shape`, which
             looks for package.json / deno.json / Cargo.toml / go.mod /
             pyproject.toml / tsconfig.json / a `tests/` or `test/` directory):
 
@@ -277,7 +277,7 @@ jobs:
           path: ./
 
       - name: Run Claude
-        uses: sw2m/philosophies/.github/actions/claude@main
+        uses: sw2m/philosophies/.github/actions/agents/claude@main
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           output-file: claude-eval.md
@@ -323,7 +323,7 @@ jobs:
             <action path="..."> tags. Do NOT look for files on disk; only
             cite content that is present in the embedded text.
 
-            Repo-shape context (detected by `.github/actions/repo-shape`,
+            Repo-shape context (detected by `.github/actions/git/repo-shape`,
             which looks for package.json / deno.json / Cargo.toml / go.mod
             / pyproject.toml / tsconfig.json / a `tests/` or `test/`
             directory):
@@ -695,7 +695,7 @@ jobs:
 
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
-        uses: sw2m/philosophies/.github/actions/gemini@main
+        uses: sw2m/philosophies/.github/actions/agents/gemini@main
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: dedup-input.txt
