@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: s
-        uses: sw2m/philosophies/.github/actions/repo-shape@main
+        uses: ./.github/actions/git/repo-shape
 
   red-conditions:
     name: Red-conditions gate (3-clause)

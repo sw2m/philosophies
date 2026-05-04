@@ -176,7 +176,7 @@ runs:
         echo "stdin.txt bytes: $(wc -c < stdin.txt)"
 
     - name: Run Claude (org-member gate inside)
-      uses: sw2m/philosophies/.github/actions/claude@main
+      uses: ./.github/actions/agents/claude
       with:
         api-key: ${{ inputs.anthropic-api-key }}
         actor-override: ${{ inputs.owner-login }}
