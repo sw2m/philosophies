@@ -40,6 +40,10 @@ inputs:
     description: "Max retries per gate (Red, Green). 3 = up to 4 attempts each."
     required: false
     default: "3"
+  agent-timeout-seconds:
+    description: "Wall-clock timeout for each Claude Code CLI invocation. Hard cap that prevents indefinite hangs (e.g. an in-flight API call that never returns); on timeout the primary call is treated as failed and the fallback model retries. 900s = 15 min."
+    required: false
+    default: "900"
 
 runs:
   using: "composite"
@@ -192,26 +196,40 @@ runs:
         PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
         DEFAULT_TEST_CMD: ${{ steps.runner.outputs.default-cmd }}
         MAX_RETRIES: ${{ inputs.max-retries }}
+        AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
       run: |
         set -euo pipefail
 
+        # `timeout` exit code 124 means the wall-clock budget elapsed before
+        # the CLI returned — treat identically to a non-zero exit (engage
+        # fallback). Without this wrapper a stalled API call hangs the whole
+        # job for hours (observed in run 25299341730 → #175).
         invoke_claude() {
           local input="$1" output="$2"
           local primary="claude-opus-4-5" fallback="claude-sonnet-4-5"
           set +e
-          claude --print --model "$primary" \
+          timeout --signal=TERM --kill-after=30s "${AGENT_TIMEOUT_SECONDS}s" \
+            claude --print --model "$primary" \
             --allowed-tools "Bash Edit Write Read Glob Grep" \
             --permission-mode bypassPermissions \
             < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
           local rc=$?
-          if [ $rc -ne 0 ]; then
+          if [ $rc -eq 124 ]; then
+            echo "::warning::Phase agent: primary $primary timed out after ${AGENT_TIMEOUT_SECONDS}s; falling back to $fallback"
+          elif [ $rc -ne 0 ]; then
             echo "::warning::Phase agent: primary $primary exited $rc; falling back to $fallback"
             tail -50 ${RUNNER_TEMP}/claude-err.log
-            claude --print --model "$fallback" \
+          fi
+          if [ $rc -ne 0 ]; then
+            timeout --signal=TERM --kill-after=30s "${AGENT_TIMEOUT_SECONDS}s" \
+              claude --print --model "$fallback" \
               --allowed-tools "Bash Edit Write Read Glob Grep" \
               --permission-mode bypassPermissions \
               < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
             rc=$?
+            if [ $rc -eq 124 ]; then
+              echo "::warning::Phase agent: fallback $fallback also timed out after ${AGENT_TIMEOUT_SECONDS}s"
+            fi
           fi
           set -e
           return $rc
@@ -425,6 +443,7 @@ runs:
         PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
         NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
         MAX_RETRIES: ${{ inputs.max-retries }}
+        AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
       run: |
         set -euo pipefail
 
@@ -432,19 +451,28 @@ runs:
           local input="$1" output="$2"
           local primary="claude-opus-4-5" fallback="claude-sonnet-4-5"
           set +e
-          claude --print --model "$primary" \
+          timeout --signal=TERM --kill-after=30s "${AGENT_TIMEOUT_SECONDS}s" \
+            claude --print --model "$primary" \
             --allowed-tools "Bash Edit Write Read Glob Grep" \
             --permission-mode bypassPermissions \
             < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
           local rc=$?
-          if [ $rc -ne 0 ]; then
+          if [ $rc -eq 124 ]; then
+            echo "::warning::Phase agent: primary $primary timed out after ${AGENT_TIMEOUT_SECONDS}s; falling back to $fallback"
+          elif [ $rc -ne 0 ]; then
             echo "::warning::Phase agent: primary $primary exited $rc; falling back to $fallback"
             tail -50 ${RUNNER_TEMP}/claude-err.log
-            claude --print --model "$fallback" \
+          fi
+          if [ $rc -ne 0 ]; then
+            timeout --signal=TERM --kill-after=30s "${AGENT_TIMEOUT_SECONDS}s" \
+              claude --print --model "$fallback" \
               --allowed-tools "Bash Edit Write Read Glob Grep" \
               --permission-mode bypassPermissions \
               < "$input" > "$output" 2>${RUNNER_TEMP}/claude-err.log
             rc=$?
+            if [ $rc -eq 124 ]; then
+              echo "::warning::Phase agent: fallback $fallback also timed out after ${AGENT_TIMEOUT_SECONDS}s"
+            fi
           fi
           set -e
           return $rc
