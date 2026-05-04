@@ -234,12 +234,72 @@ function countDiffFiles(files) {
   return files.length;
 }
 
+// Decode a git-quoted C-style path (the contents inside the
+// surrounding double quotes). Git emits paths with non-ASCII or
+// special characters in C-string-quoted form per `core.quotePath`,
+// using octal escapes for high-byte UTF-8 sequences (e.g. `\303\244`
+// for `ä`) — JSON.parse cannot decode these. This decoder handles:
+//   - `\\` → backslash
+//   - `\"` → double-quote
+//   - `\a \b \f \n \r \t \v` → corresponding control chars
+//   - `\nnn` (one to three octal digits) → byte value, accumulated
+//     into a Buffer and decoded as UTF-8
+// Returns the decoded string, or null on a malformed escape.
+function decodeGitQuotedPath(quoted) {
+  if (typeof quoted !== 'string' || quoted.length < 2) return null;
+  if (quoted[0] !== '"' || quoted[quoted.length - 1] !== '"') return null;
+  const inner = quoted.slice(1, -1);
+  const bytes = [];
+  let i = 0;
+  while (i < inner.length) {
+    const ch = inner[i];
+    if (ch !== '\\') {
+      const cp = inner.charCodeAt(i);
+      if (cp < 0x80) {
+        bytes.push(cp);
+      } else {
+        const buf = Buffer.from(inner[i], 'utf8');
+        for (const b of buf) bytes.push(b);
+      }
+      i++;
+      continue;
+    }
+    if (i + 1 >= inner.length) return null;
+    const next = inner[i + 1];
+    if (next >= '0' && next <= '7') {
+      let j = i + 1;
+      let octal = '';
+      while (j < inner.length && octal.length < 3 && inner[j] >= '0' && inner[j] <= '7') {
+        octal += inner[j];
+        j++;
+      }
+      const byte = parseInt(octal, 8);
+      if (byte > 0xff) return null;
+      bytes.push(byte);
+      i = j;
+      continue;
+    }
+    const escapes = { '\\': 0x5c, '"': 0x22, 'a': 0x07, 'b': 0x08, 'f': 0x0c, 'n': 0x0a, 'r': 0x0d, 't': 0x09, 'v': 0x0b };
+    if (next in escapes) {
+      bytes.push(escapes[next]);
+      i += 2;
+      continue;
+    }
+    return null;
+  }
+  try {
+    return Buffer.from(bytes).toString('utf8');
+  } catch (e) {
+    return null;
+  }
+}
+
 // Parse a `diff --git ...` header line, handling git's C-style
-// quoting for paths containing spaces or special chars (paths are
-// quoted as JSON-compatible strings prefixed with a/ or b/, or appear
-// unquoted with a/<path> b/<path> when no escaping needed).
-// Returns { oldPath, newPath } with the a/ or b/ prefix stripped, or
-// null if the line doesn't parse.
+// quoting for paths containing spaces, octal-escaped non-ASCII bytes,
+// or other special chars. Paths are quoted as C-style strings
+// prefixed with a/ or b/, or appear unquoted with a/<path> b/<path>
+// when no escaping needed. Returns { oldPath, newPath } with the a/
+// or b/ prefix stripped, or null if the line doesn't parse.
 function parseGitDiffHeader(line) {
   const prefix = 'diff --git ';
   if (!line.startsWith(prefix)) return null;
@@ -257,8 +317,8 @@ function parseGitDiffHeader(line) {
       }
       if (i >= s.length) return null;
       const quoted = s.slice(0, i + 1);
-      let decoded;
-      try { decoded = JSON.parse(quoted); } catch (e) { return null; }
+      const decoded = decodeGitQuotedPath(quoted);
+      if (decoded === null) return null;
       const stripped = decoded.replace(/^[ab]\//, '');
       return { value: stripped, rest: s.slice(i + 2) };
     }
@@ -336,6 +396,7 @@ module.exports = {
   validateSymlinkTarget,
   countLeafEntries,
   countDiffFiles,
+  decodeGitQuotedPath,
   parseGitDiffHeader,
   splitDiffByFile,
   filterDiffSections,

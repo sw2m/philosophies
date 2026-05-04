@@ -53,6 +53,20 @@ function gitLocal(args) {
   }
 }
 
+// Resolve PR-shorthand `#N` against `prShorthandBase`. Wraps the gh
+// call in try/catch and emits structured `::error::ref not found:
+// #N` instead of letting an exception bubble (per #165 Phase 3 r2
+// review on PR — the PR-API call could throw on 404, bypassing the
+// spec's structured-failure convention).
+function resolvePrShorthand(prShorthandBase, prNum, refLabel) {
+  try {
+    const raw = gh(['api', `repos/${prShorthandBase}/pulls/${prNum}`]);
+    return JSON.parse(raw);
+  } catch (e) {
+    fail(`ref not found: ${refLabel}`);
+  }
+}
+
 function writeOutput(key, value) {
   const file = process.env.GITHUB_OUTPUT;
   if (file) {
@@ -135,7 +149,7 @@ if (cmd === 'resolve') {
     const side = parsed.sides[0];
     if (lib.isPrShorthand(side)) {
       const prNum = lib.extractPrNumber(side);
-      const prInfo = JSON.parse(gh(['api', `repos/${prShorthandBase}/pulls/${prNum}`]));
+      const prInfo = resolvePrShorthand(prShorthandBase, prNum, side);
       const prData = lib.parsePullsApiResponse(prInfo);
       baseSha = prData.baseSha;
       headSha = prData.headSha;
@@ -151,7 +165,7 @@ if (cmd === 'resolve') {
 
     if (lib.isPrShorthand(leftSide)) {
       const prNum = lib.extractPrNumber(leftSide);
-      const prInfo = JSON.parse(gh(['api', `repos/${prShorthandBase}/pulls/${prNum}`]));
+      const prInfo = resolvePrShorthand(prShorthandBase, prNum, leftSide);
       baseSha = lib.parsePullsApiResponse(prInfo).headSha;
     } else {
       baseSha = resolveRef(leftSide, repo);
@@ -159,7 +173,7 @@ if (cmd === 'resolve') {
 
     if (lib.isPrShorthand(rightSide)) {
       const prNum = lib.extractPrNumber(rightSide);
-      const prInfo = JSON.parse(gh(['api', `repos/${prShorthandBase}/pulls/${prNum}`]));
+      const prInfo = resolvePrShorthand(prShorthandBase, prNum, rightSide);
       headSha = lib.parsePullsApiResponse(prInfo).headSha;
     } else {
       headSha = resolveRef(rightSide, repo);
@@ -220,8 +234,12 @@ if (cmd === 'resolve') {
     // Local git first for the diff text (per spec acceptance #9 +
     // Phase 3 review). Falls back to compare API when local can't
     // produce the diff (shallow checkout, missing objects, etc.).
+    // Note: gitLocal returns null on failure and an empty string when
+    // the diff is genuinely empty (e.g., A...A self-range); falsy-
+    // check would mis-trigger the API fallback on legitimate empty
+    // diffs, so check explicitly against null.
     let diffText = gitLocal(['diff', `${baseSha}...${headSha}`]);
-    if (!diffText) {
+    if (diffText === null) {
       diffText = gh(['api', `repos/${repo}/compare/${baseSha}...${headSha}`, '-H', 'Accept: application/vnd.github.diff']);
     }
 
