@@ -373,9 +373,17 @@ if (cmd === 'resolve') {
 // `v1.0`, `v1.1`, ...). The array form is treated as "ref not found"
 // for this action's purposes — we want exact-name lookups only.
 function resolveExactRefObject(repo, namespace, name) {
+  // URL-encode the ref name so chars like `#` (which Go's URL parser
+  // — used by `gh api` — treats as a fragment separator) don't
+  // truncate the request path. Without encoding, a fully-qualified
+  // ref like `refs/heads/#42` becomes a request to
+  // `repos/.../git/ref/heads/` which returns the array of all heads
+  // (false-positive "not found" via Array.isArray). Per #165 Phase 3
+  // r3 review.
+  const encodedName = encodeURIComponent(name).replace(/%2F/g, '/');
   let raw;
   try {
-    raw = gh(['api', `repos/${repo}/git/ref/${namespace}/${name}`]);
+    raw = gh(['api', `repos/${repo}/git/ref/${namespace}/${encodedName}`]);
   } catch (e) {
     return null;
   }
