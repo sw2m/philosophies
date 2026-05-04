@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - id: shape
-        uses: sw2m/philosophies/.github/actions/git/repo-shape@main
+        uses: ./.github/actions/git/repo-shape
       - name: Print VSDD §VIII applicability to job summary
         shell: bash
         env:
@@ -142,7 +142,7 @@ jobs:
           path: ./
 
       - name: Run Gemini
-        uses: sw2m/philosophies/.github/actions/agents/gemini@main
+        uses: ./.github/actions/agents/gemini
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: eval-input.txt
@@ -277,7 +277,7 @@ jobs:
           path: ./
 
       - name: Run Claude
-        uses: sw2m/philosophies/.github/actions/agents/claude@main
+        uses: ./.github/actions/agents/claude
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           output-file: claude-eval.md
@@ -695,7 +695,7 @@ jobs:
 
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
-        uses: sw2m/philosophies/.github/actions/agents/gemini@main
+        uses: ./.github/actions/agents/gemini
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: dedup-input.txt

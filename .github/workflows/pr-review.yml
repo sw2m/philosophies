@@ -514,7 +514,7 @@ jobs:
           path: .vsdd-philosophies
 
       - name: Run Gemini (composite; org-member gate inside)
-        uses: sw2m/philosophies/.github/actions/agents/gemini@main
+        uses: ./.github/actions/agents/gemini
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: gemini-stdin.txt
@@ -588,7 +588,7 @@ jobs:
           path: .vsdd-philosophies
 
       - name: Run Claude (composite; org-member gate inside)
-        uses: sw2m/philosophies/.github/actions/agents/claude@main
+        uses: ./.github/actions/agents/claude
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           output-file: review.md
