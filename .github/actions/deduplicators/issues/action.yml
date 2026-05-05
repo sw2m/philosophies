@@ -6,8 +6,8 @@ description: |
   title-exact fallback.
 
   Extracted from ci-meta.yml's `consensus` job per #172. See
-  sw2m/philosophies#174 for the full tech-spec and #173 for refinement
-  follow-ons.
+  sw2m/philosophies#174 for the full tech-spec, #173 for refinement
+  follow-ons, and #169 for the Deno-runtime convention.
 
 inputs:
   proposed-items-json:
@@ -58,18 +58,10 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Set up Node
-      uses: actions/setup-node@v6
+    - name: Set up Deno
+      uses: denoland/setup-deno@v2
       with:
-        node-version: "20"
-
-    - name: Install yaml
-      shell: bash
-      working-directory: ${{ github.action_path }}
-      run: |
-        if [ ! -d node_modules/yaml ]; then
-          npm install --no-save yaml
-        fi
+        deno-version: v2.x
 
     - name: Build combined input
       id: combine
@@ -89,6 +81,7 @@ runs:
         echo "input-file=${RUNNER_TEMP}/dedup-input.json" >> "$GITHUB_OUTPUT"
 
     # Step 0 — empty-input bypass + canonical JSON-parse.
+    # Permissions: none required (stdin/stdout only).
     - name: Detect empty-input bypass
       id: bypass
       shell: bash
@@ -97,13 +90,14 @@ runs:
         INPUT_FILE: ${{ steps.combine.outputs.input-file }}
       run: |
         set -euo pipefail
-        node ./is-empty.mjs < "$INPUT_FILE" > "${RUNNER_TEMP}/bypass-result.json"
+        deno run ./is-empty.ts < "$INPUT_FILE" > "${RUNNER_TEMP}/bypass-result.json"
         BYPASS=$(jq -r '.bypass' < "${RUNNER_TEMP}/bypass-result.json")
         echo "bypass=$BYPASS" >> "$GITHUB_OUTPUT"
-        echo "result-file=${RUNNER_TEMP}/bypass-result.json" >> "$GITHUB_OUTPUT"
         echo "bypass=$BYPASS"
 
     # Step 1 — render the prompt. Skipped on empty-input bypass.
+    # Permissions: --allow-env=MAX_BYTES (size ceiling),
+    #              --allow-write (rendered prompt path).
     - name: Render agent prompt
       if: steps.bypass.outputs.bypass != 'true'
       shell: bash
@@ -113,7 +107,10 @@ runs:
         MAX_BYTES: ${{ inputs.max-bytes }}
       run: |
         set -euo pipefail
-        node ./render-input.mjs "${RUNNER_TEMP}/dedup-prompt.txt" < "$INPUT_FILE"
+        deno run \
+          --allow-env=MAX_BYTES \
+          --allow-write="${RUNNER_TEMP}" \
+          ./render-input.ts "${RUNNER_TEMP}/dedup-prompt.txt" < "$INPUT_FILE"
 
     # Step 2 — invoke the agent. continue-on-error so a failed agent call
     # doesn't halt the action; Step 3/4 read this step's outcome to decide
@@ -132,6 +129,7 @@ runs:
     # Step 3 — parse the agent's frontmatter. Skipped on empty-input bypass
     # OR agent failure. Writes a {ok, ...} envelope; never exits non-zero
     # on parse failure (Step 4 routes off the `ok` field).
+    # Permissions: --allow-read (input + agent output), --allow-write (result file).
     - name: Parse agent output
       id: parse
       if: steps.bypass.outputs.bypass != 'true' && steps.agent.outcome == 'success'
@@ -141,15 +139,19 @@ runs:
         INPUT_FILE: ${{ steps.combine.outputs.input-file }}
       run: |
         set -euo pipefail
-        node ./parse-output.mjs \
-          "${RUNNER_TEMP}/dedup-output.md" \
-          "$INPUT_FILE" \
-          "${RUNNER_TEMP}/parse-result.json"
+        deno run \
+          --allow-read="${RUNNER_TEMP}" \
+          --allow-write="${RUNNER_TEMP}" \
+          ./parse-output.ts \
+            "${RUNNER_TEMP}/dedup-output.md" \
+            "$INPUT_FILE" \
+            "${RUNNER_TEMP}/parse-result.json"
         OK=$(jq -r '.ok' < "${RUNNER_TEMP}/parse-result.json")
         echo "ok=$OK" >> "$GITHUB_OUTPUT"
-        echo "result-file=${RUNNER_TEMP}/parse-result.json" >> "$GITHUB_OUTPUT"
 
     # Step 4 — title-exact fallback. Engages on agent-failure OR parse-not-ok.
+    # Permissions: --allow-read (input file), --allow-write (result file),
+    #              --allow-run=gh, --allow-env=GH_TOKEN.
     - name: Title-exact fallback
       id: fallback
       if: steps.bypass.outputs.bypass != 'true' && (steps.agent.outcome != 'success' || steps.parse.outputs.ok != 'true')
@@ -160,12 +162,20 @@ runs:
         INPUT_FILE: ${{ steps.combine.outputs.input-file }}
       run: |
         set -euo pipefail
-        node ./fallback-search.mjs \
-          "$INPUT_FILE" \
-          "${RUNNER_TEMP}/fallback-result.json"
+        deno run \
+          --allow-read="${RUNNER_TEMP}" \
+          --allow-write="${RUNNER_TEMP}" \
+          --allow-run=gh \
+          --allow-env=GH_TOKEN \
+          ./fallback-search.ts \
+            "$INPUT_FILE" \
+            "${RUNNER_TEMP}/fallback-result.json"
 
     # Step 5 — compose the final outputs. Always runs (even on agent
     # failure) so consumer always sees the action's verdicts-json.
+    # Permissions: --allow-read (upstream result files),
+    #              --allow-write (append to $GITHUB_OUTPUT),
+    #              --allow-env=GITHUB_OUTPUT.
     - name: Emit outputs
       id: emit
       if: always() && (steps.bypass.outputs.bypass == 'true' || steps.parse.outputs.ok == 'true' || steps.fallback.outcome == 'success')
@@ -173,7 +183,11 @@ runs:
       working-directory: ${{ github.action_path }}
       run: |
         set -euo pipefail
-        node ./emit-outputs.mjs \
-          "${RUNNER_TEMP}/bypass-result.json" \
-          "${RUNNER_TEMP}/parse-result.json" \
-          "${RUNNER_TEMP}/fallback-result.json"
+        deno run \
+          --allow-read="${RUNNER_TEMP}" \
+          --allow-write="$GITHUB_OUTPUT" \
+          --allow-env=GITHUB_OUTPUT \
+          ./emit-outputs.ts \
+            "${RUNNER_TEMP}/bypass-result.json" \
+            "${RUNNER_TEMP}/parse-result.json" \
+            "${RUNNER_TEMP}/fallback-result.json"
