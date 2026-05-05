@@ -86,7 +86,9 @@ runs:
         set -euo pipefail
         # Write the user's script to a tempfile rather than passing it via CLI
         # args — keeps shell quoting from mangling embedded quotes/newlines/backticks.
-        SCRIPT_FILE="$RUNNER_TEMP/github-deno-input.txt"
+        # mktemp gives a unique path per invocation so parallel uses of the
+        # action within a single job (rare but legal) cannot race on the file.
+        SCRIPT_FILE=$(mktemp "$RUNNER_TEMP/github-deno-input.XXXXXX.ts")
         printf '%s' "$INPUT_SCRIPT" > "$SCRIPT_FILE"
 
         # `args` input is the Deno run flag string (defaults to --allow-all

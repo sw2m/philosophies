@@ -9,7 +9,7 @@
 // npm — same packages actions/github-script uses internally, so behaviour
 // matches without a separate Octokit-for-Deno port.
 
-import { context, getOctokit as getOctokitRaw } from "npm:@actions/github@^6";
+import { context, getOctokit as raw } from "npm:@actions/github@^6";
 import * as core from "npm:@actions/core@^1";
 import * as exec from "npm:@actions/exec@^1";
 import * as glob from "npm:@actions/glob@^0.5";
@@ -28,13 +28,13 @@ globalThis.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => 
 
 const path = Deno.args[0];
 if (!path) {
-  console.error("usage: runner.ts <script-file>");
+  core.setFailed("usage: runner.ts <script-file>");
   Deno.exit(2);
 }
 
 const token = Deno.env.get("INPUT_GITHUB_TOKEN") || Deno.env.get("GITHUB_TOKEN");
 if (!token) {
-  console.error("github-token (or GITHUB_TOKEN) is required.");
+  core.setFailed("github-token (or GITHUB_TOKEN) is required.");
   Deno.exit(2);
 }
 
@@ -50,7 +50,7 @@ const doNotRetry = (Deno.env.get("INPUT_RETRY_EXEMPT_STATUS_CODES") || "")
 const encoding = Deno.env.get("INPUT_RESULT_ENCODING") || "json";
 
 if (encoding !== "json" && encoding !== "string") {
-  console.error('"result-encoding" must be either "string" or "json"');
+  core.setFailed('"result-encoding" must be either "string" or "json"');
   Deno.exit(2);
 }
 
@@ -84,15 +84,15 @@ if (retries > 0) {
 // Plugins are passed as variadic trailing args to getOctokit per
 // @actions/github's signature. retry adds @octokit/plugin-retry's behavior;
 // requestLog enables verbose request logging when `debug=true`.
-const github = getOctokitRaw(token, opts, retry, requestLog);
+const github = raw(token, opts, retry, requestLog);
 
 // Wrapped factory so user scripts that need additional Octokit clients
 // inherit the same retry / user-agent / base-url config. Aliased to
 // `getOctokit` inside the user script (the imported raw version is renamed
 // at import).
-function getOctokit(authToken: string, additional: Partial<OctokitOpts> = {}) {
-  return getOctokitRaw(
-    authToken,
+function getOctokit(token: string, additional: Partial<OctokitOpts> = {}) {
+  return raw(
+    token,
     {
       ...opts,
       ...additional,
