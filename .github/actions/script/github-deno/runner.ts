@@ -1,0 +1,160 @@
+// Deno entrypoint for the github-deno composable action.
+//
+// Reads a user-supplied script from argv[0], evaluates it with the same set
+// of injected globals actions/github-script provides (github, octokit,
+// getOctokit, context, core, exec, glob, io, require), then writes the
+// script's return value to the action's `result` output per `result-encoding`.
+//
+// The npm: specifier pulls @actions/* and @octokit/plugin-* directly from
+// npm — same packages actions/github-script uses internally, so behaviour
+// matches without a separate Octokit-for-Deno port.
+
+import { context, getOctokit } from "npm:@actions/github@^6";
+import * as core from "npm:@actions/core@^1";
+import * as exec from "npm:@actions/exec@^1";
+import * as glob from "npm:@actions/glob@^0.5";
+import * as io from "npm:@actions/io@^1";
+import { retry } from "npm:@octokit/plugin-retry@^7";
+import { requestLog } from "npm:@octokit/plugin-request-log@^5";
+import { createRequire } from "node:module";
+import process from "node:process";
+
+// Match actions/github-script's top-level handler so async rejection inside
+// the user script doesn't crash the Deno runtime silently.
+globalThis.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
+  const err = e.reason;
+  console.error(err);
+  core.setFailed(`Unhandled error: ${err}`);
+});
+
+const scriptPath = Deno.args[0];
+if (!scriptPath) {
+  console.error("usage: runner.ts <script-file>");
+  Deno.exit(2);
+}
+
+const token = Deno.env.get("INPUT_GITHUB_TOKEN") || Deno.env.get("GITHUB_TOKEN");
+if (!token) {
+  console.error("github-token (or GITHUB_TOKEN) is required.");
+  Deno.exit(2);
+}
+
+const debug = Deno.env.get("INPUT_DEBUG") === "true";
+const userAgentInput = Deno.env.get("INPUT_USER_AGENT") || "github-deno";
+const previewsInput = Deno.env.get("INPUT_PREVIEWS") || "";
+const baseUrlInput = Deno.env.get("INPUT_BASE_URL") || "";
+const retriesInput = parseInt(Deno.env.get("INPUT_RETRIES") || "0", 10) || 0;
+const exemptStatusCodes = (Deno.env.get("INPUT_RETRY_EXEMPT_STATUS_CODES") || "")
+  .split(",")
+  .map((s) => parseInt(s.trim(), 10))
+  .filter((n) => Number.isFinite(n));
+const resultEncoding = Deno.env.get("INPUT_RESULT_ENCODING") || "json";
+
+if (resultEncoding !== "json" && resultEncoding !== "string") {
+  console.error('"result-encoding" must be either "string" or "json"');
+  Deno.exit(2);
+}
+
+// User-agent suffix mirrors actions/github-script's orchestration ID handling
+// so requests are traceable when the action runs under GitHub's orchestrator.
+function userAgentWith(base: string): string {
+  const id = Deno.env.get("ACTIONS_ORCHESTRATION_ID");
+  if (!id) return base;
+  const sanitized = id.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return `${base} actions_orchestration_id/${sanitized}`;
+}
+
+type OctokitOpts = {
+  log?: Console;
+  userAgent?: string;
+  previews?: string[];
+  baseUrl?: string;
+  request?: { retries?: number; doNotRetry?: number[] };
+};
+
+const opts: OctokitOpts = {
+  log: debug ? console : undefined,
+  userAgent: userAgentWith(userAgentInput),
+  previews: previewsInput ? previewsInput.split(",").map((s) => s.trim()) : undefined,
+};
+if (baseUrlInput) opts.baseUrl = baseUrlInput;
+if (retriesInput > 0) {
+  opts.request = { retries: retriesInput, doNotRetry: exemptStatusCodes };
+}
+
+// Plugins are passed as variadic trailing args to getOctokit per
+// @actions/github's signature. retry adds @octokit/plugin-retry's behavior;
+// requestLog enables verbose request logging when `debug=true`.
+const github = getOctokit(token, opts, retry, requestLog);
+
+// Wrapped factory so user scripts that need additional Octokit clients
+// inherit the same retry / user-agent / base-url config.
+function configuredGetOctokit(authToken: string, additional: Partial<OctokitOpts> = {}) {
+  return getOctokit(
+    authToken,
+    {
+      ...opts,
+      ...additional,
+      request: { ...(opts.request ?? {}), ...(additional.request ?? {}) },
+    },
+    retry,
+    requestLog,
+  );
+}
+
+// `require` resolved relative to runner.ts so user scripts can pull in any
+// Node module installed in the npm: cache (mirrors actions/github-script's
+// wrapped-require behaviour).
+const requireFn = createRequire(import.meta.url);
+
+const script = await Deno.readTextFile(scriptPath);
+
+// Wrap user script in an async IIFE so top-level `await` Just Works without
+// the caller writing `(async () => { ... })()` themselves — same ergonomics
+// as actions/github-script's `script:` input.
+const wrapped = `return (async () => {\n${script}\n})()`;
+const fn = new Function(
+  "github",
+  "octokit",
+  "getOctokit",
+  "context",
+  "core",
+  "exec",
+  "glob",
+  "io",
+  "require",
+  wrapped,
+);
+
+try {
+  const result = await fn(
+    github,
+    github,
+    configuredGetOctokit,
+    context,
+    core,
+    exec,
+    glob,
+    io,
+    requireFn,
+  );
+
+  // Encoding contract matches actions/github-script:
+  //   json   → JSON.stringify(result) (default; quotes strings, encodes objects)
+  //   string → String(result)
+  // setOutput is called regardless of value to preserve the empty-output
+  // contract on undefined returns.
+  let output: string | undefined;
+  if (resultEncoding === "json") {
+    output = JSON.stringify(result);
+  } else {
+    output = String(result);
+  }
+  if (output !== undefined) {
+    core.setOutput("result", output);
+  }
+} catch (err) {
+  const message = err instanceof Error ? err.message : String(err);
+  core.setFailed(message);
+  Deno.exit(1);
+}
