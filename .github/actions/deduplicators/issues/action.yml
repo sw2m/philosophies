@@ -150,26 +150,63 @@ runs:
         echo "ok=$OK" >> "$GITHUB_OUTPUT"
 
     # Step 4 — title-exact fallback. Engages on agent-failure OR parse-not-ok.
-    # Permissions: --allow-read (input file), --allow-write (result file),
-    #              --allow-run=gh, --allow-env=GH_TOKEN.
+    # Uses the github-deno composable (#196) for Octokit access — no `gh`
+    # subprocess, no `--allow-run=gh`. Single API call (issues.listForRepo,
+    # state=open, per_page=200), in-memory exact-title match. Per the
+    # tech-spec failure-mode contract: hard-fail (no graceful degrade) so a
+    # partial fallback can't silently lose the active-remediation signal.
     - name: Title-exact fallback
       id: fallback
       if: steps.bypass.outputs.bypass != 'true' && (steps.agent.outcome != 'success' || steps.parse.outputs.ok != 'true')
-      shell: bash
-      working-directory: ${{ github.action_path }}
+      uses: ./.github/actions/script/github-deno
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
         INPUT_FILE: ${{ steps.combine.outputs.input-file }}
-      run: |
-        set -euo pipefail
-        deno run \
-          --allow-read="${RUNNER_TEMP}" \
-          --allow-write="${RUNNER_TEMP}" \
-          --allow-run=gh \
-          --allow-env=GH_TOKEN \
-          ./fallback-search.ts \
-            "$INPUT_FILE" \
-            "${RUNNER_TEMP}/fallback-result.json"
+      with:
+        github-token: ${{ inputs.github-token }}
+        # Tightened sandbox vs the default --allow-all: net only to the
+        # API, file I/O scoped to RUNNER_TEMP, env limited to what we read.
+        args: --allow-net=api.github.com --allow-read=${{ runner.temp }} --allow-write=${{ runner.temp }} --allow-env=INPUT_FILE,RUNNER_TEMP
+        script: |
+          const inputFile = Deno.env.get("INPUT_FILE");
+          const runnerTemp = Deno.env.get("RUNNER_TEMP");
+          if (!inputFile || !runnerTemp) {
+            throw new Error("INPUT_FILE and RUNNER_TEMP must be set");
+          }
+          const input = JSON.parse(await Deno.readTextFile(inputFile));
+
+          const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: "open",
+            per_page: 100,
+          });
+
+          // First match wins on duplicate titles (mirrors the prior
+          // extractMatches logic preserved in lib.ts; inlined here because
+          // the github-deno script tempfile is in RUNNER_TEMP, not the
+          // action_path, so importing lib.ts would need a complex relative
+          // path.)
+          const byTitle = new Map();
+          for (const it of issues) {
+            if (it.pull_request) continue;  // listForRepo includes PRs; skip them
+            if (!byTitle.has(it.title)) byTitle.set(it.title, it.number);
+          }
+
+          const verdicts = input.proposed.map((p) => ({
+            proposed_id: String(p.id),
+            duplicate_of: byTitle.has(p.title) ? byTitle.get(p.title) : null,
+            rationale: byTitle.has(p.title)
+              ? `title-exact match against open issue #${byTitle.get(p.title)}`
+              : "(no title-exact match against currently-open issues)",
+            source: "title-exact-fallback",
+          }));
+
+          await Deno.writeTextFile(
+            `${runnerTemp}/fallback-result.json`,
+            JSON.stringify({ verdicts }),
+          );
+          const matched = verdicts.filter((v) => v.duplicate_of !== null).length;
+          core.info(`fallback-search: ${matched}/${verdicts.length} title-exact matches against ${issues.length} open issues`);
 
     # Step 5 — compose the final outputs. Always runs (even on agent
     # failure) so consumer always sees the action's verdicts-json.

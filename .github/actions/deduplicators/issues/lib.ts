@@ -274,34 +274,10 @@ export function parseAgentOutput(
   return { ok: true, verdicts };
 }
 
-// --- Step 4: extractMatches (pure projection of gh issue list) ------------
-
-export interface GhIssue {
-  number: number;
-  title: string;
-}
-
-export function extractMatches(proposed: ProposedItem[], ghJsonResponse: unknown): Verdict[] {
-  validateProposed(proposed);
-  if (!Array.isArray(ghJsonResponse)) {
-    throw new Error("ghJsonResponse must be an array of {number, title}");
-  }
-  const byTitle = new Map<string, number>();
-  for (const raw of ghJsonResponse) {
-    const item = raw as GhIssue;
-    if (item && typeof item.title === "string" && typeof item.number === "number") {
-      if (!byTitle.has(item.title)) byTitle.set(item.title, item.number);
-    }
-  }
-  return proposed.map((p): Verdict => ({
-    proposed_id: String(p.id),
-    duplicate_of: byTitle.has(p.title) ? byTitle.get(p.title)! : null,
-    rationale: byTitle.has(p.title)
-      ? `title-exact match against open issue #${byTitle.get(p.title)}`
-      : "(no title-exact match against currently-open issues)",
-    source: "title-exact-fallback",
-  }));
-}
+// Step 4 (title-exact fallback) lives inline in action.yml as a
+// github-deno script (#196) — Octokit + a small in-memory title-equality
+// match. Keeping the projection logic out of this file avoids needing the
+// inline script to import a file outside its tempfile directory.
 
 // --- Step 5: composeOutput ------------------------------------------------
 
