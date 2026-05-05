@@ -9,7 +9,7 @@
 // npm — same packages actions/github-script uses internally, so behaviour
 // matches without a separate Octokit-for-Deno port.
 
-import { context, getOctokit } from "npm:@actions/github@^6";
+import { context, getOctokit as getOctokitRaw } from "npm:@actions/github@^6";
 import * as core from "npm:@actions/core@^1";
 import * as exec from "npm:@actions/exec@^1";
 import * as glob from "npm:@actions/glob@^0.5";
@@ -17,7 +17,6 @@ import * as io from "npm:@actions/io@^1";
 import { retry } from "npm:@octokit/plugin-retry@^7";
 import { requestLog } from "npm:@octokit/plugin-request-log@^5";
 import { createRequire } from "node:module";
-import process from "node:process";
 
 // Match actions/github-script's top-level handler so async rejection inside
 // the user script doesn't crash the Deno runtime silently.
@@ -27,8 +26,8 @@ globalThis.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => 
   core.setFailed(`Unhandled error: ${err}`);
 });
 
-const scriptPath = Deno.args[0];
-if (!scriptPath) {
+const path = Deno.args[0];
+if (!path) {
   console.error("usage: runner.ts <script-file>");
   Deno.exit(2);
 }
@@ -40,24 +39,24 @@ if (!token) {
 }
 
 const debug = Deno.env.get("INPUT_DEBUG") === "true";
-const userAgentInput = Deno.env.get("INPUT_USER_AGENT") || "github-deno";
-const previewsInput = Deno.env.get("INPUT_PREVIEWS") || "";
-const baseUrlInput = Deno.env.get("INPUT_BASE_URL") || "";
-const retriesInput = parseInt(Deno.env.get("INPUT_RETRIES") || "0", 10) || 0;
-const exemptStatusCodes = (Deno.env.get("INPUT_RETRY_EXEMPT_STATUS_CODES") || "")
+const userAgent = Deno.env.get("INPUT_USER_AGENT") || "github-deno";
+const previews = Deno.env.get("INPUT_PREVIEWS") || "";
+const baseUrl = Deno.env.get("INPUT_BASE_URL") || "";
+const retries = parseInt(Deno.env.get("INPUT_RETRIES") || "0", 10) || 0;
+const doNotRetry = (Deno.env.get("INPUT_RETRY_EXEMPT_STATUS_CODES") || "")
   .split(",")
   .map((s) => parseInt(s.trim(), 10))
   .filter((n) => Number.isFinite(n));
-const resultEncoding = Deno.env.get("INPUT_RESULT_ENCODING") || "json";
+const encoding = Deno.env.get("INPUT_RESULT_ENCODING") || "json";
 
-if (resultEncoding !== "json" && resultEncoding !== "string") {
+if (encoding !== "json" && encoding !== "string") {
   console.error('"result-encoding" must be either "string" or "json"');
   Deno.exit(2);
 }
 
 // User-agent suffix mirrors actions/github-script's orchestration ID handling
 // so requests are traceable when the action runs under GitHub's orchestrator.
-function userAgentWith(base: string): string {
+function agent(base: string): string {
   const id = Deno.env.get("ACTIONS_ORCHESTRATION_ID");
   if (!id) return base;
   const sanitized = id.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -74,23 +73,25 @@ type OctokitOpts = {
 
 const opts: OctokitOpts = {
   log: debug ? console : undefined,
-  userAgent: userAgentWith(userAgentInput),
-  previews: previewsInput ? previewsInput.split(",").map((s) => s.trim()) : undefined,
+  userAgent: agent(userAgent),
+  previews: previews ? previews.split(",").map((s) => s.trim()) : undefined,
 };
-if (baseUrlInput) opts.baseUrl = baseUrlInput;
-if (retriesInput > 0) {
-  opts.request = { retries: retriesInput, doNotRetry: exemptStatusCodes };
+if (baseUrl) opts.baseUrl = baseUrl;
+if (retries > 0) {
+  opts.request = { retries, doNotRetry };
 }
 
 // Plugins are passed as variadic trailing args to getOctokit per
 // @actions/github's signature. retry adds @octokit/plugin-retry's behavior;
 // requestLog enables verbose request logging when `debug=true`.
-const github = getOctokit(token, opts, retry, requestLog);
+const github = getOctokitRaw(token, opts, retry, requestLog);
 
 // Wrapped factory so user scripts that need additional Octokit clients
-// inherit the same retry / user-agent / base-url config.
-function configuredGetOctokit(authToken: string, additional: Partial<OctokitOpts> = {}) {
-  return getOctokit(
+// inherit the same retry / user-agent / base-url config. Aliased to
+// `getOctokit` inside the user script (the imported raw version is renamed
+// at import).
+function getOctokit(authToken: string, additional: Partial<OctokitOpts> = {}) {
+  return getOctokitRaw(
     authToken,
     {
       ...opts,
@@ -105,9 +106,9 @@ function configuredGetOctokit(authToken: string, additional: Partial<OctokitOpts
 // `require` resolved relative to runner.ts so user scripts can pull in any
 // Node module installed in the npm: cache (mirrors actions/github-script's
 // wrapped-require behaviour).
-const requireFn = createRequire(import.meta.url);
+const require = createRequire(import.meta.url);
 
-const script = await Deno.readTextFile(scriptPath);
+const script = await Deno.readTextFile(path);
 
 // Wrap user script in an async IIFE so top-level `await` Just Works without
 // the caller writing `(async () => { ... })()` themselves — same ergonomics
@@ -130,27 +131,23 @@ try {
   const result = await fn(
     github,
     github,
-    configuredGetOctokit,
+    getOctokit,
     context,
     core,
     exec,
     glob,
     io,
-    requireFn,
+    require,
   );
 
   // Encoding contract matches actions/github-script:
   //   json   → JSON.stringify(result) (default; quotes strings, encodes objects)
   //   string → String(result)
-  // setOutput is called regardless of value to preserve the empty-output
-  // contract on undefined returns.
-  let output: string | undefined;
-  if (resultEncoding === "json") {
-    output = JSON.stringify(result);
-  } else {
-    output = String(result);
-  }
-  if (output !== undefined) {
+  // Skip setOutput entirely when the script returned undefined — both
+  // encodings would produce a meaningless output otherwise (JSON.stringify
+  // returns the value undefined; String() returns the string "undefined").
+  if (result !== undefined) {
+    const output = encoding === "json" ? JSON.stringify(result) : String(result);
     core.setOutput("result", output);
   }
 } catch (err) {
