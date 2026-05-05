@@ -19,11 +19,15 @@ import { requestLog } from "npm:@octokit/plugin-request-log@^5";
 import { createRequire } from "node:module";
 
 // Match actions/github-script's top-level handler so async rejection inside
-// the user script doesn't crash the Deno runtime silently.
+// the user script doesn't crash the Deno runtime silently. Explicit Deno.exit
+// mirrors the synchronous catch path on line ~158 — a fire-and-forget reject
+// that arrives after the main IIFE settled would otherwise let the process
+// terminate with code 0 even though setFailed has been recorded.
 globalThis.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
   const err = e.reason;
   console.error(err);
   core.setFailed(`Unhandled error: ${err}`);
+  Deno.exit(1);
 });
 
 const path = Deno.args[0];

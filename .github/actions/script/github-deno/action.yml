@@ -88,7 +88,11 @@ runs:
         # args — keeps shell quoting from mangling embedded quotes/newlines/backticks.
         # mktemp gives a unique path per invocation so parallel uses of the
         # action within a single job (rare but legal) cannot race on the file.
-        SCRIPT_FILE=$(mktemp "$RUNNER_TEMP/github-deno-input.XXXXXX.ts")
+        # Template's X placeholders must be at the absolute end of the path
+        # for portability with BSD mktemp (macOS runners); Deno.readTextFile
+        # is content-based and does not need a `.ts` extension to evaluate.
+        SCRIPT_FILE=$(mktemp "$RUNNER_TEMP/github-deno-input.XXXXXX")
+        trap 'rm -f "$SCRIPT_FILE"' EXIT
         printf '%s' "$INPUT_SCRIPT" > "$SCRIPT_FILE"
 
         # `args` input is the Deno run flag string (defaults to --allow-all
