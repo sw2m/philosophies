@@ -1,0 +1,104 @@
+name: 'github-deno'
+description: |
+  Deno-based equivalent of actions/github-script. Runs a TypeScript/JavaScript
+  script with the same injected globals (`github`, `octokit`, `getOctokit`,
+  `context`, `core`, `exec`, `glob`, `io`, `require`) and the same input
+  surface (`debug`, `user-agent`, `previews`, `result-encoding`, `retries`,
+  `retry-exempt-status-codes`, `base-url`). Top-level `await` is supported.
+  Prerequisite for #169 (unify .github/scripts/ to Deno).
+
+inputs:
+  script:
+    description: 'TypeScript/JavaScript code to run.'
+    required: true
+  github-token:
+    description: 'Token for the injected Octokit. Defaults to the workflow GITHUB_TOKEN.'
+    required: false
+    default: ${{ github.token }}
+  debug:
+    description: 'Whether to log Octokit request details. Default tracks the runner debug flag.'
+    required: false
+    default: ${{ runner.debug == '1' }}
+  user-agent:
+    description: 'Optional user-agent string for the Octokit client.'
+    required: false
+    default: 'github-deno'
+  previews:
+    description: 'Comma-separated list of GraphQL API previews to accept.'
+    required: false
+    default: ''
+  result-encoding:
+    description: 'Either "json" (default) or "string" — how the script return value is encoded into the action output.'
+    required: false
+    default: 'json'
+  retries:
+    description: 'Number of times to retry a failing request.'
+    required: false
+    default: '0'
+  retry-exempt-status-codes:
+    description: 'Comma-separated HTTP status codes that will NOT be retried. No effect unless `retries` is set.'
+    required: false
+    default: '400,401,403,404,422'
+  base-url:
+    description: 'Optional GitHub REST API base URL (e.g. for GitHub Enterprise Server).'
+    required: false
+    default: ''
+  deno-version:
+    description: 'Deno version to install via setup-deno.'
+    required: false
+    default: 'v2.x'
+  args:
+    description: |
+      Deno run flags (replaces the default `--allow-all`). Use this to tighten
+      the sandbox — e.g. `--allow-net=api.github.com --allow-env=GITHUB_TOKEN
+      --allow-read=$RUNNER_TEMP`. Most of Deno's value over Node lives here, so
+      callers wanting tight surface should set this explicitly. The default
+      matches actions/github-script's effective Node trust footprint.
+    required: false
+    default: '--allow-all'
+
+outputs:
+  result:
+    description: 'Return value of the user script. Encoded per `result-encoding` (default JSON.stringify; `string` calls String()). Empty when the script returns undefined.'
+    value: ${{ steps.run.outputs.result }}
+
+runs:
+  using: composite
+  steps:
+    - uses: denoland/setup-deno@v2
+      with:
+        deno-version: ${{ inputs.deno-version }}
+
+    - id: run
+      shell: bash
+      env:
+        INPUT_SCRIPT: ${{ inputs.script }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_DEBUG: ${{ inputs.debug }}
+        INPUT_USER_AGENT: ${{ inputs.user-agent }}
+        INPUT_PREVIEWS: ${{ inputs.previews }}
+        INPUT_RESULT_ENCODING: ${{ inputs.result-encoding }}
+        INPUT_RETRIES: ${{ inputs.retries }}
+        INPUT_RETRY_EXEMPT_STATUS_CODES: ${{ inputs.retry-exempt-status-codes }}
+        INPUT_BASE_URL: ${{ inputs.base-url }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        # Write the user's script to a tempfile rather than passing it via CLI
+        # args — keeps shell quoting from mangling embedded quotes/newlines/backticks.
+        # mktemp gives a unique path per invocation so parallel uses of the
+        # action within a single job (rare but legal) cannot race on the file.
+        # Template's X placeholders must be at the absolute end of the path
+        # for portability with BSD mktemp (macOS runners); Deno.readTextFile
+        # is content-based and does not need a `.ts` extension to evaluate.
+        SCRIPT_FILE=$(mktemp "$RUNNER_TEMP/github-deno-input.XXXXXX")
+        trap 'rm -f "$SCRIPT_FILE"' EXIT
+        printf '%s' "$INPUT_SCRIPT" > "$SCRIPT_FILE"
+
+        # `args` input is the Deno run flag string (defaults to --allow-all
+        # for parity with actions/github-script's effective surface). Word-
+        # split on whitespace via shell expansion is intentional — flag values
+        # with embedded spaces are not supported (rare in practice for Deno
+        # permission flags).
+        # shellcheck disable=SC2086
+        deno run $INPUT_ARGS "${{ github.action_path }}/runner.ts" "$SCRIPT_FILE"
