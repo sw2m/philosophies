@@ -1,0 +1,230 @@
+name: "Deduplicate proposed issues"
+description: |
+  Given two collections — proposed new gap-issues and pre-existing tracked
+  issues — return per-proposed-item verdicts ({duplicate_of: <number>|null,
+  rationale}) using an agent semantic-dedup pass with a deterministic
+  title-exact fallback.
+
+  Extracted from ci-meta.yml's `consensus` job per #172. See
+  sw2m/philosophies#174 for the full tech-spec, #173 for refinement
+  follow-ons, and #169 for the Deno-runtime convention.
+
+inputs:
+  proposed-items-json:
+    description: |
+      JSON-encoded array of proposed items. Each item:
+        {"id": <string>, "title": <string>, "body": <string>}
+      `id` is any consumer-chosen identifier used to correlate output
+      verdicts back to inputs.
+    required: true
+  existing-items-json:
+    description: |
+      JSON-encoded array of existing items to dedup against. Each item:
+        {"number": <int>, "title": <string>, "body": <string>,
+         "state": "OPEN"|"CLOSED", "stateReason"?: <string>,
+         "closing_prs"?: [{"number": <int>, "title": <string>, "isDraft": <bool>}]}
+      `closing_prs` carries the active-remediation signal.
+    required: true
+  # `agent-action` was specified in the tech-spec but composite-action
+  # `uses:` does not support expression interpolation — it must be a literal
+  # path. The agent reference is hard-pinned to `agents/gemini` for now;
+  # migration to a dual-agent invocation is #159's territory.
+  agent-api-key:
+    description: "Forwarded to the agent's api-key input."
+    required: true
+  github-token:
+    description: "Forwarded to the title-exact fallback's `gh` invocation as GH_TOKEN."
+    required: true
+  actor-override:
+    description: "Forwarded to the agent's actor-override input (org-member ownership check)."
+    required: false
+    default: ""
+  max-bytes:
+    description: "Maximum byte size of the rendered agent prompt. Hard-fails on overflow rather than silently truncating. Default 256 KiB."
+    required: false
+    default: "262144"
+
+outputs:
+  verdicts-json:
+    description: |
+      JSON array parallel to proposed-items-json. Each entry:
+        {"proposed_id": <id>, "duplicate_of": <int>|null,
+         "rationale": <string>, "source": "agent"|"title-exact-fallback"|"empty-input"}
+    value: ${{ steps.emit.outputs.verdicts-json }}
+  agent-source:
+    description: "One of `agent`, `title-exact-fallback`, `empty-input` — the source the verdicts came from."
+    value: ${{ steps.emit.outputs.agent-source }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Deno
+      uses: denoland/setup-deno@v2
+      with:
+        deno-version: v2.x
+
+    - name: Build combined input
+      id: combine
+      shell: bash
+      env:
+        PROPOSED: ${{ inputs.proposed-items-json }}
+        EXISTING: ${{ inputs.existing-items-json }}
+      run: |
+        set -euo pipefail
+        # Merge the two input arrays into a single JSON object on stdin so
+        # both Step 0 and Step 1 see identical bytes (per tech-spec).
+        jq -n \
+          --argjson proposed "$PROPOSED" \
+          --argjson existing "$EXISTING" \
+          '{proposed: $proposed, existing: $existing}' \
+          > "${RUNNER_TEMP}/dedup-input.json"
+        echo "input-file=${RUNNER_TEMP}/dedup-input.json" >> "$GITHUB_OUTPUT"
+
+    # Step 0 — empty-input bypass + canonical JSON-parse.
+    # Permissions: none required (stdin/stdout only).
+    - name: Detect empty-input bypass
+      id: bypass
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        INPUT_FILE: ${{ steps.combine.outputs.input-file }}
+      run: |
+        set -euo pipefail
+        deno run ./is-empty.ts < "$INPUT_FILE" > "${RUNNER_TEMP}/bypass-result.json"
+        BYPASS=$(jq -r '.bypass' < "${RUNNER_TEMP}/bypass-result.json")
+        echo "bypass=$BYPASS" >> "$GITHUB_OUTPUT"
+        echo "bypass=$BYPASS"
+
+    # Step 1 — render the prompt. Skipped on empty-input bypass.
+    # Permissions: --allow-env=MAX_BYTES (size ceiling),
+    #              --allow-write (rendered prompt path).
+    - name: Render agent prompt
+      if: steps.bypass.outputs.bypass != 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        INPUT_FILE: ${{ steps.combine.outputs.input-file }}
+        MAX_BYTES: ${{ inputs.max-bytes }}
+      run: |
+        set -euo pipefail
+        deno run \
+          --allow-env=MAX_BYTES \
+          --allow-write="${RUNNER_TEMP}" \
+          ./render-input.ts "${RUNNER_TEMP}/dedup-prompt.txt" < "$INPUT_FILE"
+
+    # Step 2 — invoke the agent. continue-on-error so a failed agent call
+    # doesn't halt the action; Step 3/4 read this step's outcome to decide
+    # whether to engage the fallback.
+    - name: Invoke agent
+      id: agent
+      if: steps.bypass.outputs.bypass != 'true'
+      continue-on-error: true
+      uses: ./.github/actions/agents/gemini
+      with:
+        api-key: ${{ inputs.agent-api-key }}
+        stdin-file: ${{ runner.temp }}/dedup-prompt.txt
+        output-file: ${{ runner.temp }}/dedup-output.md
+        actor-override: ${{ inputs.actor-override }}
+
+    # Step 3 — parse the agent's frontmatter. Skipped on empty-input bypass
+    # OR agent failure. Writes a {ok, ...} envelope; never exits non-zero
+    # on parse failure (Step 4 routes off the `ok` field).
+    # Permissions: --allow-read (input + agent output), --allow-write (result file).
+    - name: Parse agent output
+      id: parse
+      if: steps.bypass.outputs.bypass != 'true' && steps.agent.outcome == 'success'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        INPUT_FILE: ${{ steps.combine.outputs.input-file }}
+      run: |
+        set -euo pipefail
+        deno run \
+          --allow-read="${RUNNER_TEMP}" \
+          --allow-write="${RUNNER_TEMP}" \
+          ./parse-output.ts \
+            "${RUNNER_TEMP}/dedup-output.md" \
+            "$INPUT_FILE" \
+            "${RUNNER_TEMP}/parse-result.json"
+        OK=$(jq -r '.ok' < "${RUNNER_TEMP}/parse-result.json")
+        echo "ok=$OK" >> "$GITHUB_OUTPUT"
+
+    # Step 4 — title-exact fallback. Engages on agent-failure OR parse-not-ok.
+    # Uses the github-deno composable (#196) for Octokit access — no `gh`
+    # subprocess, no `--allow-run=gh`. Single API call (issues.listForRepo,
+    # state=open, per_page=200), in-memory exact-title match. Per the
+    # tech-spec failure-mode contract: hard-fail (no graceful degrade) so a
+    # partial fallback can't silently lose the active-remediation signal.
+    - name: Title-exact fallback
+      id: fallback
+      if: steps.bypass.outputs.bypass != 'true' && (steps.agent.outcome != 'success' || steps.parse.outputs.ok != 'true')
+      uses: ./.github/actions/script/github-deno
+      env:
+        INPUT_FILE: ${{ steps.combine.outputs.input-file }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        # Tightened sandbox vs the default --allow-all: net only to the
+        # API, file I/O scoped to RUNNER_TEMP, env limited to what we read.
+        args: --allow-net=api.github.com --allow-read=${{ runner.temp }} --allow-write=${{ runner.temp }} --allow-env=INPUT_FILE,RUNNER_TEMP
+        script: |
+          const inputFile = Deno.env.get("INPUT_FILE");
+          const runnerTemp = Deno.env.get("RUNNER_TEMP");
+          if (!inputFile || !runnerTemp) {
+            throw new Error("INPUT_FILE and RUNNER_TEMP must be set");
+          }
+          const input = JSON.parse(await Deno.readTextFile(inputFile));
+
+          const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: "open",
+            per_page: 100,
+          });
+
+          // First match wins on duplicate titles (mirrors the prior
+          // extractMatches logic preserved in lib.ts; inlined here because
+          // the github-deno script tempfile is in RUNNER_TEMP, not the
+          // action_path, so importing lib.ts would need a complex relative
+          // path.)
+          const byTitle = new Map();
+          for (const it of issues) {
+            if (it.pull_request) continue;  // listForRepo includes PRs; skip them
+            if (!byTitle.has(it.title)) byTitle.set(it.title, it.number);
+          }
+
+          const verdicts = input.proposed.map((p) => ({
+            proposed_id: String(p.id),
+            duplicate_of: byTitle.has(p.title) ? byTitle.get(p.title) : null,
+            rationale: byTitle.has(p.title)
+              ? `title-exact match against open issue #${byTitle.get(p.title)}`
+              : "(no title-exact match against currently-open issues)",
+            source: "title-exact-fallback",
+          }));
+
+          await Deno.writeTextFile(
+            `${runnerTemp}/fallback-result.json`,
+            JSON.stringify({ verdicts }),
+          );
+          const matched = verdicts.filter((v) => v.duplicate_of !== null).length;
+          core.info(`fallback-search: ${matched}/${verdicts.length} title-exact matches against ${issues.length} open issues`);
+
+    # Step 5 — compose the final outputs. Always runs (even on agent
+    # failure) so consumer always sees the action's verdicts-json.
+    # Permissions: --allow-read (upstream result files),
+    #              --allow-write (append to $GITHUB_OUTPUT),
+    #              --allow-env=GITHUB_OUTPUT.
+    - name: Emit outputs
+      id: emit
+      if: always() && (steps.bypass.outputs.bypass == 'true' || steps.parse.outputs.ok == 'true' || steps.fallback.outcome == 'success')
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        deno run \
+          --allow-read="${RUNNER_TEMP}" \
+          --allow-write="$GITHUB_OUTPUT" \
+          --allow-env=GITHUB_OUTPUT \
+          ./emit-outputs.ts \
+            "${RUNNER_TEMP}/bypass-result.json" \
+            "${RUNNER_TEMP}/parse-result.json" \
+            "${RUNNER_TEMP}/fallback-result.json"
