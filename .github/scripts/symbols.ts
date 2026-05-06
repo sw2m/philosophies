@@ -80,13 +80,13 @@ export interface Catalog {
 const path = new URL("../assets/symbols.yaml", import.meta.url);
 const raw = await Deno.readTextFile(path);
 const parsed = parse(raw) as Catalog;
-assertShape(parsed);
+validate(parsed);
 
 // Runtime shape assertion. Compile-time `as Catalog` only checks at the
 // type level — if the YAML drops a section or renames a key, downstream
 // access fails with cryptic undefined errors. Throw fast at module load
 // with a useful path so the operator can fix the YAML.
-function assertShape(c: unknown): asserts c is Catalog {
+function validate(c: unknown): asserts c is Catalog {
   if (!c || typeof c !== "object") {
     throw new Error("symbols.yaml: top-level value is not an object");
   }
@@ -107,9 +107,15 @@ function assertShape(c: unknown): asserts c is Catalog {
   }
   const cat = c as Catalog;
 
-  // reviewers.agents — non-empty array of strings
+  // reviewers.agents — non-empty array
   if (!Array.isArray(cat.reviewers?.agents) || cat.reviewers.agents.length === 0) {
     throw new Error("symbols.yaml: reviewers.agents must be a non-empty array");
+  }
+  // reviewers.special — required object containing all four known special slugs
+  for (const slug of ["orchestrator", "applicability", "consensus", "meta"] as const) {
+    if (!cat.reviewers?.special?.[slug]) {
+      throw new Error(`symbols.yaml: reviewers.special.${slug} required`);
+    }
   }
 
   // verdicts.phase-1c and verdicts.phase-3 — non-empty arrays
@@ -136,9 +142,19 @@ function assertShape(c: unknown): asserts c is Catalog {
     throw new Error("symbols.yaml: categories must be a non-empty object");
   }
 
-  // labels.spec.{goal,tech}
+  // labels.spec.{goal,tech} — promotion + brand contracts
   if (!cat.labels?.spec?.goal || !cat.labels?.spec?.tech) {
     throw new Error("symbols.yaml: labels.spec.{goal,tech} both required");
+  }
+  // labels.brand.opt-out — vsdd-brand.yml signal
+  if (!cat.labels?.brand?.["opt-out"]) {
+    throw new Error("symbols.yaml: labels.brand.opt-out required");
+  }
+  // labels.meta.{ci-meta,needs-human} — gap-finder + bail signals
+  for (const key of ["ci-meta", "needs-human"] as const) {
+    if (!cat.labels?.meta?.[key]) {
+      throw new Error(`symbols.yaml: labels.meta.${key} required`);
+    }
   }
 
   // frontmatter-tokens — must contain all four required keys
