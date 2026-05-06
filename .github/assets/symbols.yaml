@@ -1,0 +1,88 @@
+# Canonical CI symbol catalog. Single source of truth for cross-cutting
+# CI symbols — reviewer slugs, verdict values, Phase-3 category slugs and
+# display names, GitHub Check Runs API conclusions, label strings,
+# frontmatter tokens, phase identifiers.
+#
+# Two responsibilities (per the symbol-catalog feedback memory):
+#   1. Source of truth — TS/Deno scripts import from `.github/scripts/symbols.ts`;
+#      Python/bash/raw-Deno consumers parse this YAML directly via `yq` /
+#      `pyyaml` / `jsr:@std/yaml`.
+#   2. §IX symbol-standards-path entry point — when a section's collected
+#      entries look heterogeneous or accidental, that's a re-architecture
+#      signal worth a follow-up goal-spec. Iterative, never blocking.
+
+reviewers:
+  # LLM agents — each fires under Phase 1c (issue-review.yml), Phase 3
+  # (pr-review.yml), and ci-meta evaluation (ci-meta.yml).
+  agents:
+    - gemini
+    - claude
+
+  # Non-agent slugs that appear in the same `reviewer:` frontmatter slot.
+  # KNOWN DESIGN SMELL: heterogeneous bucket; these mechanisms aren't really
+  # one category despite all wearing the "reviewer" coat. Revisit per the
+  # symbol-standards-path workflow when a re-architecture goal-spec is filed.
+  special:
+    orchestrator: Phase 1c cardinality orchestrator (#128) — emits a fail verdict if reviewer counts disagree on classification.
+    applicability: Phase 3 inapplicable auto-pass marker (#184) — emits pass for categories with no relevant content in the diff.
+    consensus: ci-meta rollup — derived from the gemini+claude evaluators, posted as a synthetic review.
+    meta: ci-meta evaluator entry — distinct from Phase-3 reviewers, runs against workflow YAML / actions / scripts content rather than PR diffs.
+
+# Verdict literals that appear in `verdict:` frontmatter slots. Phase 1c is
+# strictly pass|fail (no operational-failure path on issue review); Phase 3
+# adds `pending` per #167 item 12 / #187 op-failure handling.
+verdicts:
+  phase-1c: [pass, fail]
+  phase-3:  [pass, fail, pending]
+
+# GitHub Check Runs API `conclusion` values used by Phase-3 status emissions
+# (#185, #186). Standard set per https://docs.github.com/en/rest/checks/runs
+conclusions:
+  - success
+  - failure
+  - action_required  # used for `pending` verdicts at the rollup
+  - cancelled        # used for terminal-stated cleanup on workflow cancel
+  - neutral
+  - skipped
+
+# VSDD pipeline phases that have first-class CI surface. Pre-Phase-1c (1a/1b)
+# and post-Phase-3 (4/5) are not yet exposed as CI checkpoints.
+phases:
+  '1c': { name: Spec Review Gate,        section: II Phase 1c }
+  '3':  { name: Adversarial Refinement,  section: II Phase 3 }
+
+# The 6 Phase-3 review categories (#167, #185). Display names are exactly
+# the GitHub Check Run names emitted by the per-category aggregate jobs.
+# Section references map back to MEMORY.md's Roman-numeral structure.
+categories:
+  multi-word-symbols: { display: Phase 3 / Multi-word symbols (§IX), section: IX }
+  error-structure:    { display: Phase 3 / Error structure (§IX),    section: IX }
+  spec-discipline:    { display: Phase 3 / Spec discipline (§VII),   section: VII }
+  security-surface:   { display: Phase 3 / Security surface (§II),   section: II Phase 3 }
+  spec-gaps:          { display: Phase 3 / Spec gaps (§II),          section: II Phase 3 }
+  purity-boundary:    { display: Phase 3 / Purity boundary (§II),    section: II Phase 5 }
+
+# The single PR-level rollup Check Run that aggregates all 6 per-category
+# aggregates (#186). Branch protection consumes this if marked required.
+aggregate-checkrun: Phase 3 / Aggregate
+
+# Label strings managed by labels.yml and consumed by promote.yml /
+# vsdd-brand.yml / non-test-blocker.yml. Kept here so adding/renaming a
+# label is a one-file change.
+labels:
+  spec:
+    goal: 'spec:goal'   # goal specs — multi-goal, no implementation detail (§VII)
+    tech: 'spec:tech'   # tech specs — one technical problem each (§VII)
+  brand:
+    opt-out: 'vsdd:opt-out'  # branded by vsdd-brand.yml when a PR is whitelist-CI-only or out-of-process
+  meta:
+    ci-meta: ci-meta            # tagged on issues opened by ci-meta gap-finder
+    needs-human: needs-human    # tagged when CI bails (e.g. promote-tech-to-pr Green Gate exhaustion)
+
+# HTML-comment frontmatter tokens that open verdict / brand / context blocks.
+# Consumers regex against these prefixes to find the structured frontmatter.
+frontmatter-tokens:
+  phase-1c:        vsdd-phase-1c       # `<!-- vsdd-phase-1c\nreviewer: ...\nverdict: ... -->` per phase-1c-budget.js
+  phase-3:         vsdd-phase-3        # `<!-- vsdd-phase-3\ncategory: ...\nreviewer: ... -->` per #182
+  opt-out-brand:   vsdd-opt-out-brand  # `<!-- vsdd-opt-out-brand -->` posted by vsdd-brand.yml
+  canonical:       vsdd-canonical      # `<vsdd-canonical>...</vsdd-canonical>` wraps embedded MEMORY.md in eval-input
