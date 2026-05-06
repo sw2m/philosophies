@@ -15,8 +15,8 @@ reviewers:
   # LLM agents — each fires under Phase 1c (issue-review.yml), Phase 3
   # (pr-review.yml), and ci-meta evaluation (ci-meta.yml).
   agents:
-    - gemini
-    - claude
+    - gemini   # Google Gemini — adversarial reviewer, "Sarcasmotron" role per MEMORY.md §I; via `.github/actions/agents/gemini`
+    - claude   # Anthropic Claude — second adversarial source per §V cognitive-diversity rule; via `.github/actions/agents/claude`
 
   # Non-agent slugs that appear in the same `reviewer:` frontmatter slot.
   # KNOWN DESIGN SMELL: heterogeneous bucket; these mechanisms aren't really
@@ -32,18 +32,23 @@ reviewers:
 # strictly pass|fail (no operational-failure path on issue review); Phase 3
 # adds `pending` per #167 item 12 / #187 op-failure handling.
 verdicts:
-  phase-1c: [pass, fail]
-  phase-3:  [pass, fail, pending]
+  phase-1c:
+    - pass     # spec is acceptable as-is, ready to advance through promotion gate
+    - fail     # spec has blocking concerns; promote.yml clearance refuses
+  phase-3:
+    - pass     # diff acceptable; APPROVE submitted by reviewer
+    - fail     # diff has blocking concerns; REQUEST_CHANGES submitted
+    - pending  # operational failure (timeout / api-error / crash / malformed) — round counter does NOT advance per #167 item 12 / #187
 
 # GitHub Check Runs API `conclusion` values used by Phase-3 status emissions
 # (#185, #186). Standard set per https://docs.github.com/en/rest/checks/runs
 conclusions:
-  - success
-  - failure
-  - action_required  # used for `pending` verdicts at the rollup
-  - cancelled        # used for terminal-stated cleanup on workflow cancel
-  - neutral
-  - skipped
+  - success           # green check; category aggregate when both reviewers pass
+  - failure           # red X; category aggregate when either reviewer fails
+  - action_required   # yellow; used for pending verdicts at the rollup (op-failure not yet retried)
+  - cancelled         # used for terminal-stated cleanup when workflow cancelled mid-run (#185)
+  - neutral           # gray; reserved for advisory or N/A categories
+  - skipped           # explicitly bypassed (e.g., applicability auto-pass before the LLM step)
 
 # VSDD pipeline phases that have first-class CI surface. Pre-Phase-1c (1a/1b)
 # and post-Phase-3 (4/5) are not yet exposed as CI checkpoints.
