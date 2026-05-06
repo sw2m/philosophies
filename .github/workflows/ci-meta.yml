@@ -121,6 +121,23 @@ jobs:
               cat "$f"
               echo "</action>"
             done
+            # Per #198: scripts/ and top-level .github docs (CLAUDE.md,
+            # labels.yml, etc.) shape the CI contract. Embed them so the
+            # reviewers can actually evaluate what the broadened trigger
+            # now fires on.
+            if [ -d .github/scripts ]; then
+              find .github/scripts -type f | sort | while read -r f; do
+                echo "<script path=\"$f\">"
+                cat "$f"
+                echo "</script>"
+              done
+            fi
+            for f in .github/*.md .github/*.yml; do
+              [ -f "$f" ] || continue
+              echo "<doc path=\"$f\">"
+              cat "$f"
+              echo "</doc>"
+            done
           } > eval-input.txt
           wc -l eval-input.txt
 
@@ -158,6 +175,11 @@ jobs:
             Read the canonical VSDD doc inside <vsdd-canonical> tags.
             Read each CI workflow file inside <workflow path="..."> tags.
             Read each composite action file inside <action path="..."> tags.
+            Read each CI helper script inside <script path="..."> tags
+            (these implement workflow logic invoked by `actions/github-script`,
+            inline `run:` blocks, or `github-deno` calls).
+            Read top-level `.github/` docs and config (CLAUDE.md, labels.yml,
+            etc.) inside <doc path="..."> tags.
 
             Repo-shape context (detected by `.github/actions/git/repo-shape`, which
             looks for package.json / deno.json / Cargo.toml / go.mod /
@@ -320,11 +342,14 @@ jobs:
 
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
-            The canonical VSDD doc, every CI workflow file, and every
-            composite action in this PR are EMBEDDED below in the same
-            message inside <vsdd-canonical>, <workflow path="...">, and
-            <action path="..."> tags. Do NOT look for files on disk; only
-            cite content that is present in the embedded text.
+            The canonical VSDD doc, every CI workflow file, every
+            composite action, every CI helper script under `.github/scripts/`,
+            and every top-level `.github/` doc/config (CLAUDE.md, labels.yml,
+            etc.) in this PR are EMBEDDED below in the same message inside
+            <vsdd-canonical>, <workflow path="...">, <action path="...">,
+            <script path="...">, and <doc path="..."> tags. Do NOT look for
+            files on disk; only cite content that is present in the embedded
+            text.
 
             Repo-shape context (detected by `.github/actions/git/repo-shape`,
             which looks for package.json / deno.json / Cargo.toml / go.mod
