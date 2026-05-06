@@ -18,8 +18,11 @@ on:
     # skipped at job level via the `if: ... draft != true` guard below.
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - ".github/workflows/**"
-      - ".github/actions/**"
+      # Broadened from explicit (workflows + actions + MEMORY.md) to all of
+      # .github/** per #198: scripts/, prompts/, CLAUDE.md, labels.yml etc.
+      # are all CI-meta-relevant — anything under .github/ shapes the CI
+      # contract and should re-trigger this review.
+      - ".github/**"
       - "MEMORY.md"
   workflow_call:
     inputs:
@@ -106,17 +109,16 @@ jobs:
             cat memory-canonical.md
             echo "</vsdd-canonical>"
             echo ""
-            for f in .github/workflows/*.yml; do
-              [ -f "$f" ] || continue
-              echo "<workflow path=\"$f\">"
+            # Per #198: trigger is .github/** and the eval payload mirrors it.
+            # Recursive so any new sub-tree under .github/ (e.g. prompts/)
+            # auto-inherits coverage — the path filter and the embed loop
+            # stay in sync without per-directory edits to this workflow.
+            # Action helpers (e.g. .github/actions/*/runner.ts) are also
+            # picked up here, not just the action.yml manifests.
+            find .github -type f | sort | while read -r f; do
+              echo "<file path=\"$f\">"
               cat "$f"
-              echo "</workflow>"
-            done
-            for f in .github/actions/*/*/action.yml; do
-              [ -f "$f" ] || continue
-              echo "<action path=\"$f\">"
-              cat "$f"
-              echo "</action>"
+              echo "</file>"
             done
           } > eval-input.txt
           wc -l eval-input.txt
@@ -153,8 +155,14 @@ jobs:
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
             Read the canonical VSDD doc inside <vsdd-canonical> tags.
-            Read each CI workflow file inside <workflow path="..."> tags.
-            Read each composite action file inside <action path="..."> tags.
+            Every file under `.github/` is embedded inside a single
+            <file path="..."> tag with its repo-relative path. Categories
+            you can expect (treat them by file path, not tag name):
+            workflows (`.github/workflows/*.yml`), composite actions
+            (`.github/actions/<category>/<name>/action.yml`) and their
+            helpers (`runner.ts`, `cli.js`, etc.), CI helper scripts
+            (`.github/scripts/`), and top-level `.github/` docs and config
+            (CLAUDE.md per #152, labels.yml, etc.).
 
             Repo-shape context (detected by `.github/actions/git/repo-shape`, which
             looks for package.json / deno.json / Cargo.toml / go.mod /
@@ -317,11 +325,14 @@ jobs:
 
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
-            The canonical VSDD doc, every CI workflow file, and every
-            composite action in this PR are EMBEDDED below in the same
-            message inside <vsdd-canonical>, <workflow path="...">, and
-            <action path="..."> tags. Do NOT look for files on disk; only
-            cite content that is present in the embedded text.
+            The canonical VSDD doc is embedded inside <vsdd-canonical>
+            tags. Every file under `.github/` is embedded inside a single
+            <file path="..."> tag with its repo-relative path — workflows,
+            composite actions and their helpers (runner.ts, cli.js, etc.),
+            CI helper scripts under `.github/scripts/`, and top-level
+            `.github/` docs/config (CLAUDE.md per #152, labels.yml, etc.).
+            Do NOT look for files on disk; only cite content that is
+            present in the embedded text.
 
             Repo-shape context (detected by `.github/actions/git/repo-shape`,
             which looks for package.json / deno.json / Cargo.toml / go.mod
