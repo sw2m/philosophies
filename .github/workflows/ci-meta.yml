@@ -18,8 +18,11 @@ on:
     # skipped at job level via the `if: ... draft != true` guard below.
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      - ".github/workflows/**"
-      - ".github/actions/**"
+      # Broadened from explicit (workflows + actions + MEMORY.md) to all of
+      # .github/** per #198: scripts/, prompts/, CLAUDE.md, labels.yml etc.
+      # are all CI-meta-relevant — anything under .github/ shapes the CI
+      # contract and should re-trigger this review.
+      - ".github/**"
       - "MEMORY.md"
   workflow_call:
     inputs:
