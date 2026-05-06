@@ -80,6 +80,39 @@ export interface Catalog {
 const path = new URL("../assets/symbols.yaml", import.meta.url);
 const raw = await Deno.readTextFile(path);
 const parsed = parse(raw) as Catalog;
+assertShape(parsed);
+
+// Runtime shape assertion. Compile-time `as Catalog` only checks at the
+// type level — if the YAML drops a section or renames a key, downstream
+// access fails with cryptic undefined errors. Throw fast at module load
+// with a useful path so the operator can fix the YAML.
+function assertShape(c: unknown): asserts c is Catalog {
+  const required: ReadonlyArray<keyof Catalog> = [
+    "reviewers",
+    "verdicts",
+    "conclusions",
+    "phases",
+    "categories",
+    "aggregate-checkrun",
+    "labels",
+    "frontmatter-tokens",
+  ];
+  if (!c || typeof c !== "object") {
+    throw new Error("symbols.yaml: top-level value is not an object");
+  }
+  for (const key of required) {
+    if (!(key in c)) {
+      throw new Error(`symbols.yaml: missing top-level key '${String(key)}'`);
+    }
+  }
+  const cat = c as Catalog;
+  if (!Array.isArray(cat.reviewers?.agents) || cat.reviewers.agents.length === 0) {
+    throw new Error("symbols.yaml: reviewers.agents must be a non-empty array");
+  }
+  if (!cat.categories || Object.keys(cat.categories).length === 0) {
+    throw new Error("symbols.yaml: categories must be a non-empty object");
+  }
+}
 
 // ─── Convenience exports ───────────────────────────────────────────────────
 // Typed views of the catalog. Consumers prefer these named exports over
