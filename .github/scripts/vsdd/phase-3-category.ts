@@ -6,8 +6,8 @@
 // review-cycle operations: per-reviewer Checks, per-category aggregate,
 // inapplicable auto-pass, two-reviewer verdict aggregation.
 
-import { SYMBOLS } from "./symbols.ts";
-import { Check, type CompleteOpts, type Conclusion } from "./check.ts";
+import { SYMBOLS } from "../symbols.ts";
+import { Check, type CompleteOpts, type Conclusion } from "../github/check.ts";
 import type { context, getOctokit } from "npm:@actions/github@^6";
 
 type Github = ReturnType<typeof getOctokit>;
