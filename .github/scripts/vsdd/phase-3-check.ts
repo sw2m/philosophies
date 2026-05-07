@@ -15,16 +15,16 @@
 import { SYMBOLS } from "../symbols.ts";
 import {
   Check as VSDDCheck,
-  type VerdictOpts as VSDDVerdictOpts,
+  type RoundClose as VSDDRoundClose,
 } from "./check.ts";
 import type { Conclusion, OctokitContext } from "../github/check.ts";
 
 /** Input for `Check.submit()` on Phase-3. Either provide a `conclusion`
  *  directly (per-reviewer flavor, parent shape), OR `gemini` + `claude`
  *  reviewer verdicts (aggregate flavor — `Check.conclude` combines them).
- *  All other fields inherit from the VSDD-layer `VerdictOpts`. */
-export type VerdictOpts =
-  & Omit<VSDDVerdictOpts, "conclusion">
+ *  All other fields inherit from the VSDD-layer `RoundClose`. */
+export type RoundClose =
+  & Omit<VSDDRoundClose, "conclusion">
   & {
     conclusion?: Conclusion;
     gemini?: string;
@@ -69,7 +69,7 @@ export class Check extends VSDDCheck {
   /** Override `submit` to accept either `{conclusion}` (per-reviewer, parent
    *  shape) or `{gemini, claude}` (aggregate, two-verdict combine). The
    *  widened input type makes this a TS-valid override of the parent's. */
-  override async submit(input: VerdictOpts): Promise<this> {
+  override async submit(input: RoundClose): Promise<this> {
     let conclusion: Conclusion;
     if (input.gemini !== undefined && input.claude !== undefined) {
       if (this.reviewerName !== undefined) {
