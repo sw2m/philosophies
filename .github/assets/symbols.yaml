@@ -71,6 +71,24 @@ categories:
 # aggregates (#186). Branch protection consumes this if marked required.
 aggregate-checkrun: Phase 3 / Aggregate
 
+# Phase-3 verdict-aggregation states (#186). These appear in the aggregate
+# Check Run's `output.summary` markdown table; consumers seeing them in the
+# rendered output should be able to discover them via this catalog.
+phase-3-states:
+  # Per-category resolved states — what each of the six categories computes
+  # to from its (gemini, claude, applicability) verdict trail.
+  category:
+    fail: Either reviewer reported fail at current HEAD, OR a prior fail still stands.
+    pending: Either reviewer is in operational-failure state, OR no verdicts have been emitted yet.
+    content-pass: Both reviewers passed at current HEAD — the category genuinely cleared this round.
+    inapplicable-pass: The applicability marker (#184) says the diff has no relevant content for this category.
+    stale-pass: Both reviewers passed at a PRIOR SHA; HEAD has moved past them — forward-only design from #167 item 15.
+  # PR-level rollup — strict AND across the six per-category states.
+  aggregate:
+    fail: At least one category fails. fail-precedence over pending.
+    pending: No fails, but at least one category is pending. pending-precedence over clear.
+    clear: All categories are content-pass, inapplicable-pass, or stale-pass.
+
 # Label strings managed by labels.yml and consumed by promote.yml /
 # vsdd-brand.yml / non-test-blocker.yml. Kept here so adding/renaming a
 # label is a one-file change.
