@@ -1,17 +1,16 @@
 // Generic HTML-comment YAML frontmatter extractor.
 //
 // Parses every well-formed HTML-comment block in a body file (delegates
-// to vsdd/frontmatter.ts for the shape rules; format-agnostic), applies
-// a jq expression PER BLOCK, and writes each non-null result to a
-// separate file in the output directory. Prints a JSON array of the
-// written file paths to stdout — callers iterate or `jq` it.
+// to vsdd/frontmatter.ts for the shape rules; format-agnostic), evaluates
+// a jsonata expression against the parsed-blocks array, and writes each
+// matching value to a separate file in the output directory. Prints a
+// JSON array of the written file paths to stdout.
 //
-// extract.ts owns the iteration: the user's `--query` runs against ONE
-// block at a time. No need to prefix `.[]`; no need to chain
-// `select(. != null)`. A query of `.foo.bar` writes one file per block
-// that has a non-null `.foo.bar`. If you need array-level operations
-// (counting blocks, cross-block joins), use jq directly — that's not
-// what this tool is for.
+// jsonata implicit-projection means the user writes a per-block
+// expression — array iteration is automatic. `vsdd.pretesting` against
+// an array of blocks yields the `vsdd.pretesting` value of each block
+// where the path resolves; undefined slots are skipped. No explicit
+// iteration prefix; no null filter.
 //
 // Multiple matches → multiple files. Filename stems are chosen by the
 // naming scheme:
@@ -22,24 +21,25 @@
 // File extension follows `--format`: `.json` (default) or `.yaml`.
 //
 // Usage:
-//   deno run --allow-read --allow-write --allow-run extract.ts \
-//     --query <jq-expr> \
+//   deno run --allow-read --allow-write extract.ts \
+//     --query <jsonata-expr> \
 //     --out-dir <dir> \
 //     [--format json|yaml] \
 //     [--naming index|sha|alpha] \
 //     <body-file>
 //
-// Sample queries (per-block, no .[] prefix):
-//   `.foo`                          — every block's `.foo` value (non-null)
-//   `.["vsdd-tech-spec"].title`     — every tech-spec marker's title
-//   `.vsdd.pretesting`              — every pretesting block (post-#214)
-//   `select(.reviewer == "gemini")` — every block where reviewer is gemini
+// Sample expressions (per-block; pure jsonata, no iteration prefix):
+//   `foo`                          — every block's `foo` value (defined)
+//   `\`vsdd-tech-spec\`.title`     — every tech-spec marker's title
+//   `vsdd.pretesting`              — every pretesting block (post-#214)
+//   `*[reviewer = 'gemini']`       — every block where reviewer is gemini
 //
 // Output: JSON array of file paths on stdout. Exit codes:
 //   - 0 — success (zero or more matches written)
+//   - 1 — jsonata evaluation failure (invalid expression, bad path)
 //   - 2 — usage error (missing flag, invalid value)
-//   - jq's exit code — when jq fails (invalid query, etc.)
 
+import jsonata from "npm:jsonata@^2";
 import { parse as parseBlocks } from "./vsdd/frontmatter.ts";
 import { stringify as toYaml } from "jsr:@std/yaml@^1";
 import { encodeHex } from "jsr:@std/encoding@^1/hex";
@@ -69,7 +69,7 @@ function args(argv: string[]): Args {
   }
   if (!a.query || !a.outDir || !a.bodyFile) {
     console.error(
-      "usage: extract.ts --query <jq-expr> --out-dir <dir> [--format json|yaml] [--naming index|sha|alpha] <body-file>",
+      "usage: extract.ts --query <jsonata-expr> --out-dir <dir> [--format json|yaml] [--naming index|sha|alpha] <body-file>",
     );
     Deno.exit(2);
   }
@@ -82,24 +82,6 @@ function args(argv: string[]): Args {
     Deno.exit(2);
   }
   return a as Args;
-}
-
-async function jq(query: string, stdin: string): Promise<string> {
-  const p = new Deno.Command("jq", {
-    args: ["-c", query],
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
-  }).spawn();
-  const w = p.stdin.getWriter();
-  await w.write(new TextEncoder().encode(stdin));
-  await w.close();
-  const { stdout, stderr, code } = await p.output();
-  if (code !== 0) {
-    Deno.stderr.writeSync(stderr);
-    Deno.exit(code);
-  }
-  return new TextDecoder().decode(stdout);
 }
 
 function alpha(i: number): string {
@@ -120,27 +102,36 @@ async function sha(content: string): Promise<string> {
   return encodeHex(hash).slice(0, 16);
 }
 
+/** Normalize a jsonata result to an always-array of matches. jsonata's
+ *  sequence semantics return: `undefined` for no matches, the single
+ *  value for one match, or an array for two-plus. extract.ts treats them
+ *  uniformly as "list of matches to write." */
+function flatten(result: unknown): unknown[] {
+  if (result === undefined) return [];
+  if (Array.isArray(result)) return result;
+  return [result];
+}
+
 if (import.meta.main) {
   const a = args(Deno.args);
 
   const raw = await Deno.readTextFile(a.bodyFile);
   const blocks = parseBlocks(raw);
 
-  // The query is evaluated per-block — extract.ts owns the iteration
-  // and null-filtering so the user's expression stays focused on "what
-  // do I want from a single block?". Without this wrapping, every
-  // caller would write `.[] | (...) | select(. != null)` and the
-  // extractor would just be jq with extra steps.
-  const wrapped = `.[] | (${a.query}) | select(. != null)`;
-  const out = await jq(wrapped, JSON.stringify(blocks));
-  // jq -c emits one JSON value per line. Trailing newline + empty filter.
-  const matches = out.split("\n").filter((l) => l.length > 0);
+  let result: unknown;
+  try {
+    result = await jsonata(a.query).evaluate(blocks);
+  } catch (e) {
+    console.error(`jsonata evaluation failed: ${(e as Error).message}`);
+    Deno.exit(1);
+  }
+  const matches = flatten(result);
 
   await Deno.mkdir(a.outDir, { recursive: true });
 
   const paths: string[] = [];
   for (let i = 0; i < matches.length; i++) {
-    const v = JSON.parse(matches[i]);
+    const v = matches[i];
     const content = a.format === "yaml" ? toYaml(v) : JSON.stringify(v, null, 2);
     let stem: string;
     if (a.naming === "index") stem = String(i);
