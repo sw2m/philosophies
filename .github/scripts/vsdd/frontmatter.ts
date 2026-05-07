@@ -36,10 +36,99 @@
 //     (b) => isMapping(b) && "vsdd-phase-3-aggregate" in b,
 //   )?.["vsdd-phase-3-aggregate"];
 
-import { parse as parseYAML } from "jsr:@std/yaml@^1";
+import { parse as yaml } from "jsr:@std/yaml@^1";
 
 const OPEN = "<!--";
 const CLOSE = "-->";
+
+/** State engine: walks `body` from left to right, pulling out each
+ *  well-formed `<!-- ... -->` block and parsing its content as YAML.
+ *  Mutable state is the cursor (`pos`) and the accumulator (`blocks`);
+ *  pure helpers (`content`, `dedent`, `leading`) live as statics. */
+class Parse {
+  private body: string;
+  private pos = 0;
+  private blocks: unknown[] = [];
+
+  constructor(body: string) {
+    this.body = body;
+  }
+
+  /** Drive the engine to exhaustion and return all parsed blocks. */
+  run(): unknown[] {
+    while (this.step()) { /* advance */ }
+    return this.blocks;
+  }
+
+  /** One step: scan from the cursor for the next `<!--...-->`, classify it,
+   *  push the parsed value if non-empty, advance the cursor. Returns
+   *  false when no further block exists. */
+  private step(): boolean {
+    const start = this.body.indexOf(OPEN, this.pos);
+    if (start === -1) return false;
+    const end = this.body.indexOf(CLOSE, start + OPEN.length);
+    if (end === -1) return false;
+    this.pos = end + CLOSE.length;
+
+    const value = Parse.content(this.body.slice(start + OPEN.length, end));
+    if (value !== null && value !== undefined) this.blocks.push(value);
+    return true;
+  }
+
+  /** Classify the raw text between `<!--` and `-->` as inline or block,
+   *  validate the wrapper-line exclusivity rule, and parse as YAML.
+   *  Returns null for malformed shapes or empty content. */
+  static content(raw: string): unknown {
+    if (!raw.includes("\n")) {
+      const trimmed = raw.trim();
+      return trimmed === "" ? null : yaml(trimmed);
+    }
+
+    const head = raw.indexOf("\n");
+    const tail = raw.lastIndexOf("\n");
+    if (head >= tail) return null;
+    if (raw.slice(0, head).trim() !== "") return null;
+    if (raw.slice(tail + 1).trim() !== "") return null;
+
+    const dedented = Parse.dedent(raw.slice(head + 1, tail));
+    return dedented === "" ? null : yaml(dedented);
+  }
+
+  /** Strip the leading indentation common to every non-blank line.
+   *  Whitespace-only lines are exempt. Throws if any non-blank line has
+   *  SHORTER indent than the first non-blank line — that indicates a
+   *  broken block, not a YAML structure the parser would silently
+   *  mishandle. */
+  static dedent(block: string): string {
+    const lines = block.split("\n");
+
+    let indent = -1;
+    for (const line of lines) {
+      if (line.trim() === "") continue;
+      indent = Parse.leading(line);
+      break;
+    }
+    if (indent === -1) return "";
+
+    return lines.map((line) => {
+      if (line.trim() === "") return "";
+      const n = Parse.leading(line);
+      if (n < indent) {
+        throw new Error(
+          `frontmatter: line "${line}" has ${n} leading whitespace chars; first non-blank line had ${indent}`,
+        );
+      }
+      return line.slice(indent);
+    }).join("\n");
+  }
+
+  /** Count leading space and tab characters on a line. */
+  static leading(line: string): number {
+    let n = 0;
+    while (n < line.length && (line[n] === " " || line[n] === "\t")) n++;
+    return n;
+  }
+}
 
 /** Parse every well-formed HTML-comment metadata block in `body`, in source
  *  order. Each block's content is parsed as YAML and pushed to the result.
@@ -50,77 +139,5 @@ const CLOSE = "-->";
  *  Discrimination between blocks (which one is "mine"?) is the caller's
  *  job — filter the returned array by whatever convention the emitter uses. */
 export function parse(body: string): unknown[] {
-  const blocks: unknown[] = [];
-  let i = 0;
-  while (i < body.length) {
-    const start = body.indexOf(OPEN, i);
-    if (start === -1) break;
-    const end = body.indexOf(CLOSE, start + OPEN.length);
-    if (end === -1) break;
-    i = end + CLOSE.length;
-
-    const value = parseContent(body.slice(start + OPEN.length, end));
-    if (value !== null && value !== undefined) blocks.push(value);
-  }
-  return blocks;
-}
-
-/** Parse the raw text between `<!--` and `-->`. Determines inline vs. block
- *  form, validates the wrapper-line exclusivity rule, and returns the parsed
- *  YAML value (or null if the shape is malformed or content is empty). */
-function parseContent(raw: string): unknown {
-  // Inline form: no newlines anywhere between wrappers.
-  if (!raw.includes("\n")) {
-    const trimmed = raw.trim();
-    return trimmed === "" ? null : parseYAML(trimmed);
-  }
-
-  // Block form: text between `<!--` and the first newline must be
-  // whitespace-only (else content is sharing a line with `<!--`); same
-  // for text between the last newline and `-->`. Need at least two
-  // newlines so there's room for a body line between them.
-  const firstNL = raw.indexOf("\n");
-  const lastNL = raw.lastIndexOf("\n");
-  if (firstNL >= lastNL) return null;
-  if (raw.slice(0, firstNL).trim() !== "") return null;
-  if (raw.slice(lastNL + 1).trim() !== "") return null;
-
-  const inner = raw.slice(firstNL + 1, lastNL);
-  const dedented = dedent(inner);
-  return dedented === "" ? null : parseYAML(dedented);
-}
-
-/** Strip the leading indentation common to every non-blank line in a block.
- *  Whitespace-only lines are exempt (they don't constrain or violate the
- *  indent). Throws if any non-blank line has SHORTER indent than the
- *  first non-blank line — that indicates a broken block, not a YAML
- *  structure the parser would silently mishandle. */
-function dedent(block: string): string {
-  const lines = block.split("\n");
-
-  let indent = -1;
-  for (const line of lines) {
-    if (line.trim() === "") continue;
-    indent = leadingWS(line);
-    break;
-  }
-  if (indent === -1) return "";
-
-  return lines.map((line) => {
-    if (line.trim() === "") return "";
-    const leading = leadingWS(line);
-    if (leading < indent) {
-      throw new Error(
-        `frontmatter: line "${line}" has ${leading} leading whitespace chars; first non-blank line had ${indent}`,
-      );
-    }
-    return line.slice(indent);
-  }).join("\n");
-}
-
-/** Count leading space and tab characters on a line. */
-function leadingWS(line: string): number {
-  let n = 0;
-  while (n < line.length && (line[n] === " " || line[n] === "\t")) n++;
-  return n;
+  return new Parse(body).run();
 }
