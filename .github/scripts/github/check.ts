@@ -21,6 +21,10 @@ type UpdateOp = Endpoints["PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}
 export type Conclusion = NonNullable<CreateOp["parameters"]["conclusion"]>;
 export type Status = NonNullable<CreateOp["parameters"]["status"]>;
 export type CheckRun = CreateOp["response"]["data"];
+/** The request-side `output` shape (title/summary/text/annotations/images). Distinct
+ *  from `CheckRun["output"]`, which is the RESPONSE shape (includes
+ *  `annotations_count`, `annotations_url`, etc., that the server adds). */
+export type CheckOutput = NonNullable<CreateOp["parameters"]["output"]>;
 
 /** What `start()` accepts — the create-endpoint params minus constructor-known
  *  fields (`owner`, `repo`, `name`, `head_sha`) and the terminal-state fields

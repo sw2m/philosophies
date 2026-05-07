@@ -3,7 +3,7 @@
 // `../github/check.ts`. Phase-3-specific concerns (the catalog, verdict
 // aggregation, slug-aware naming) live in `./phase-3-check.ts`.
 //
-// File exports use the unprefixed names (`Check`, `StartOpts`, `CheckResult`,
+// File exports use unprefixed names (`Check`, `StartOpts`, `VerdictOpts`,
 // etc.). The directory `vsdd/` is the namespace. Consumers importing
 // alongside `../github/check.ts` alias on import:
 //
@@ -12,9 +12,9 @@
 
 import {
   Check as BaseCheck,
-  type CompleteOpts as BaseCompleteOpts,
+  type CheckOutput,
+  type Conclusion,
   type StartOpts as BaseStartOpts,
-  type SubmitOpts as BaseSubmitOpts,
 } from "../github/check.ts";
 
 /** SHAs needed for the stale-annotation title/summary shape. */
@@ -28,7 +28,7 @@ export interface StaleOpts {
   head?: string;
 }
 
-/** VSDD-vocabulary fields shared across start / complete / submit inputs. */
+/** VSDD-vocabulary fields shared across start / verdict inputs. */
 export interface FormatOpts extends StaleOpts {
   round?: number;
   verdict?: string;
@@ -40,11 +40,18 @@ export interface FormatOpts extends StaleOpts {
  *  OR pass `output` directly to bypass formatting. */
 export type StartOpts = BaseStartOpts & FormatOpts;
 
-/** Input for `Check.complete()` — same pattern. `conclusion` required. */
-export type CompleteOpts = BaseCompleteOpts & FormatOpts;
-
-/** Input for `Check.submit()` — same pattern. `conclusion` required. */
-export type SubmitOpts = BaseSubmitOpts & FormatOpts;
+/** Unified input for `Check.complete()` and `Check.submit()` at the VSDD layer.
+ *  Both API paths (PATCH and POST) record a verdict — same conceptual shape.
+ *  The github-layer's PATCH-vs-POST type distinction isn't preserved here
+ *  because VSDD users don't typically use the long-tail Octokit fields
+ *  (`actions`, `started_at`, etc.); if you need those, drop down to
+ *  `BaseCheck.complete()` / `BaseCheck.submit()`. */
+export type VerdictOpts = FormatOpts & {
+  conclusion: Conclusion;
+  output?: CheckOutput;
+  details_url?: string;
+  external_id?: string;
+};
 
 /**
  * VSDD-flavored Check. Adds review-cycle output formatting — `start()`,
@@ -61,7 +68,7 @@ export class Check extends BaseCheck {
       if (!terminal || !head) {
         throw new Error("Check.title(): stale requires both `terminal` and `head` SHA inputs");
       }
-      return `terminal-stated at ${terminal.slice(0, 8)}; HEAD ${head.slice(0, 8)} not reviewed`;
+      return `Reviews ended at ${terminal.slice(0, 8)}; HEAD ${head.slice(0, 8)} not reviewed`;
     }
     return `round ${round}: ${verdict}`;
   }
@@ -73,7 +80,7 @@ export class Check extends BaseCheck {
       if (!terminal) {
         throw new Error("Check.summary(): stale requires `terminal` SHA input");
       }
-      return `Stale: this category terminal-stated at ${terminal.slice(0, 8)}; the body below is the prior review.\n\n${body}`;
+      return `Reviews ended at ${terminal.slice(0, 8)}. The body below is the prior review.\n\n${body}`;
     }
     return body;
   }
@@ -89,8 +96,8 @@ export class Check extends BaseCheck {
     });
   }
 
-  override async complete(result: CompleteOpts): Promise<this> {
-    const { round, verdict, body, stale, terminal, head, ...rest } = result;
+  override async complete(opts: VerdictOpts): Promise<this> {
+    const { round, verdict, body, stale, terminal, head, ...rest } = opts;
     return super.complete({
       ...rest,
       output: rest.output ?? {
@@ -100,8 +107,8 @@ export class Check extends BaseCheck {
     });
   }
 
-  override async submit(result: SubmitOpts): Promise<this> {
-    const { round, verdict, body, stale, terminal, head, ...rest } = result;
+  override async submit(opts: VerdictOpts): Promise<this> {
+    const { round, verdict, body, stale, terminal, head, ...rest } = opts;
     return super.submit({
       ...rest,
       output: rest.output ?? {

@@ -3,7 +3,7 @@
 // `../github/check.ts`. Adds catalog-aware naming and the two-reviewer
 // verdict aggregation specific to Phase 3.
 //
-// File exports use unprefixed names (`Check`, `SubmitInput`). Consumers
+// File exports use unprefixed names (`Check`, `VerdictOpts`). Consumers
 // alias on import:
 //
 //   import { Check as Phase3Check } from "../vsdd/phase-3-check.ts";
@@ -15,21 +15,16 @@
 import { SYMBOLS } from "../symbols.ts";
 import {
   Check as VSDDCheck,
-  type FormatOpts,
+  type VerdictOpts as VSDDVerdictOpts,
 } from "./check.ts";
-import type {
-  Conclusion,
-  OctokitContext,
-  SubmitOpts as BaseSubmitOpts,
-} from "../github/check.ts";
+import type { Conclusion, OctokitContext } from "../github/check.ts";
 
 /** Input for `Check.submit()` on Phase-3. Either provide a `conclusion`
  *  directly (per-reviewer flavor, parent shape), OR `gemini` + `claude`
  *  reviewer verdicts (aggregate flavor — `Check.conclude` combines them).
- *  VSDD formatting fields carry over via `FormatOpts`. */
-export type SubmitOpts =
-  & Omit<BaseSubmitOpts, "conclusion">
-  & FormatOpts
+ *  All other fields inherit from the VSDD-layer `VerdictOpts`. */
+export type VerdictOpts =
+  & Omit<VSDDVerdictOpts, "conclusion">
   & {
     conclusion?: Conclusion;
     gemini?: string;
@@ -74,7 +69,7 @@ export class Check extends VSDDCheck {
   /** Override `submit` to accept either `{conclusion}` (per-reviewer, parent
    *  shape) or `{gemini, claude}` (aggregate, two-verdict combine). The
    *  widened input type makes this a TS-valid override of the parent's. */
-  override async submit(input: SubmitOpts): Promise<this> {
+  override async submit(input: VerdictOpts): Promise<this> {
     let conclusion: Conclusion;
     if (input.gemini !== undefined && input.claude !== undefined) {
       if (this.reviewerName !== undefined) {
