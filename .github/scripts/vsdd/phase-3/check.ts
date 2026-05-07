@@ -10,12 +10,12 @@
 //   - reviewerName given     → per-reviewer Check ("Phase 3 / <slug> — <reviewer>")
 //   - reviewerName omitted   → per-category aggregate Check ("Phase 3 / <slug>")
 
-import { SYMBOLS } from "../symbols.ts";
+import { SYMBOLS } from "../../symbols.ts";
 import {
   Round,
   type RoundClose as VSDDRoundClose,
-} from "./round.ts";
-import type { Conclusion, OctokitContext } from "../github/check.ts";
+} from "../round.ts";
+import type { Conclusion, OctokitContext } from "../../github/check.ts";
 
 /** Input for `Check.submit()` on Phase-3. Either provide a `conclusion`
  *  directly (per-reviewer flavor, parent shape), OR `gemini` + `claude`
