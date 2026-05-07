@@ -1,26 +1,24 @@
 // VSDD-flavored Check Run. Adds review-cycle output formatting (round /
-// verdict / stale-annotation) on top of the generic `Check` primitive.
+// verdict / stale-annotation) on top of the generic Check primitive from
+// `../github/check.ts`. Phase-3-specific concerns (the catalog, verdict
+// aggregation, slug-aware naming) live in `./phase-3-check.ts`.
 //
-// VSDD's review-cycle vocabulary spans Phase 1c (issue-side) and Phase 3
-// (PR-side); the formatting helpers here are shared. Phase-3-specific
-// concerns (the catalog, verdict aggregation across reviewers, slug-aware
-// naming) live in `./phase-3-check.ts`.
+// File exports use the unprefixed names (`Check`, `StartOpts`, `CheckResult`,
+// etc.). The directory `vsdd/` is the namespace. Consumers importing
+// alongside `../github/check.ts` alias on import:
 //
-// Input types intersect Octokit's shapes (from `../github/check.ts`) with
-// VSDD-vocabulary extras. This keeps the override TS-valid (subclass params
-// are supertypes of parent params) AND lets callers drop down to the raw
-// Octokit `output` shape if they want — the auto-format logic only fires
-// when `output` is not explicitly supplied.
+//   import { Check as BaseCheck } from "../github/check.ts";
+//   import { Check as VSDDCheck } from "../vsdd/check.ts";
 
 import {
-  Check,
+  Check as BaseCheck,
   type CompleteInput,
   type StartInput,
   type SubmitInput,
 } from "../github/check.ts";
 
 /** SHAs needed for the stale-annotation title/summary shape. */
-export interface VSDDStaleOpts {
+export interface StaleOpts {
   /** Set true to render title/summary as a stale-annotation pair.
    *  Requires `terminal` (and for title, `head`) SHAs. */
   stale?: boolean;
@@ -31,23 +29,22 @@ export interface VSDDStaleOpts {
 }
 
 /** VSDD-vocabulary fields shared across start / complete / submit inputs. */
-export interface VSDDFormatOpts extends VSDDStaleOpts {
+export interface FormatOpts extends StaleOpts {
   round?: number;
   verdict?: string;
   body?: string;
 }
 
-/** Input for VSDDCheck.start() — Octokit's StartInput intersected with
- *  VSDD-format options. Callers use VSDD vocab (round/verdict/body) to
- *  auto-derive `output`, OR pass `output` directly to bypass formatting. */
-export type VSDDStartOpts = StartInput & VSDDFormatOpts;
+/** Input for `Check.start()` — Octokit's StartInput intersected with VSDD-format
+ *  options. Callers use VSDD vocab (round/verdict/body) to auto-derive `output`,
+ *  OR pass `output` directly to bypass formatting. */
+export type StartOpts = StartInput & FormatOpts;
 
-/** Input for VSDDCheck.complete() — same pattern. `conclusion` required
- *  (inherited from CompleteInput). */
-export type VSDDCheckResult = CompleteInput & VSDDFormatOpts;
+/** Input for `Check.complete()` — same pattern. `conclusion` required. */
+export type CheckResult = CompleteInput & FormatOpts;
 
-/** Input for VSDDCheck.submit() — same pattern. `conclusion` required. */
-export type VSDDSubmitResult = SubmitInput & VSDDFormatOpts;
+/** Input for `Check.submit()` — same pattern. `conclusion` required. */
+export type SubmitResult = SubmitInput & FormatOpts;
 
 /**
  * VSDD-flavored Check. Adds review-cycle output formatting — `start()`,
@@ -55,14 +52,14 @@ export type VSDDSubmitResult = SubmitInput & VSDDFormatOpts;
  * stale-annotation SHAs) and build the Octokit `output` object internally.
  * Caller can pass `output` directly to bypass the auto-format.
  */
-export class VSDDCheck extends Check {
+export class Check extends BaseCheck {
   /** Format an `output.title` string. Throws if `stale` is set without the
    *  SHAs it needs. */
-  static title(round: number, verdict: string, opts: VSDDStaleOpts = {}): string {
+  static title(round: number, verdict: string, opts: StaleOpts = {}): string {
     const { stale, terminal, head } = opts;
     if (stale) {
       if (!terminal || !head) {
-        throw new Error("VSDDCheck.title(): stale requires both `terminal` and `head` SHA inputs");
+        throw new Error("Check.title(): stale requires both `terminal` and `head` SHA inputs");
       }
       return `terminal-stated at ${terminal.slice(0, 8)}; HEAD ${head.slice(0, 8)} not reviewed`;
     }
@@ -70,46 +67,46 @@ export class VSDDCheck extends Check {
   }
 
   /** Format an `output.summary` string with optional stale-prefix annotation. */
-  static summary(body: string, opts: VSDDStaleOpts = {}): string {
+  static summary(body: string, opts: StaleOpts = {}): string {
     const { stale, terminal } = opts;
     if (stale) {
       if (!terminal) {
-        throw new Error("VSDDCheck.summary(): stale requires `terminal` SHA input");
+        throw new Error("Check.summary(): stale requires `terminal` SHA input");
       }
       return `Stale: this category terminal-stated at ${terminal.slice(0, 8)}; the body below is the prior review.\n\n${body}`;
     }
     return body;
   }
 
-  override async start(opts: VSDDStartOpts = {}): Promise<this> {
+  override async start(opts: StartOpts = {}): Promise<this> {
     const { round, verdict, body, stale, terminal, head, ...rest } = opts;
     return super.start({
       ...rest,
       output: rest.output ?? {
-        title: VSDDCheck.title(round ?? 1, verdict ?? "pending", { stale, terminal, head }),
-        summary: VSDDCheck.summary(body ?? `Check run started for ${this.name}`, { stale, terminal }),
+        title: Check.title(round ?? 1, verdict ?? "pending", { stale, terminal, head }),
+        summary: Check.summary(body ?? `Check run started for ${this.name}`, { stale, terminal }),
       },
     });
   }
 
-  override async complete(result: VSDDCheckResult): Promise<this> {
+  override async complete(result: CheckResult): Promise<this> {
     const { round, verdict, body, stale, terminal, head, ...rest } = result;
     return super.complete({
       ...rest,
       output: rest.output ?? {
-        title: VSDDCheck.title(round ?? 1, verdict ?? rest.conclusion, { stale, terminal, head }),
-        summary: VSDDCheck.summary(body ?? "", { stale, terminal }),
+        title: Check.title(round ?? 1, verdict ?? rest.conclusion, { stale, terminal, head }),
+        summary: Check.summary(body ?? "", { stale, terminal }),
       },
     });
   }
 
-  override async submit(result: VSDDSubmitResult): Promise<this> {
+  override async submit(result: SubmitResult): Promise<this> {
     const { round, verdict, body, stale, terminal, head, ...rest } = result;
     return super.submit({
       ...rest,
       output: rest.output ?? {
-        title: VSDDCheck.title(round ?? 1, verdict ?? rest.conclusion, { stale, terminal, head }),
-        summary: VSDDCheck.summary(body ?? "", { stale, terminal }),
+        title: Check.title(round ?? 1, verdict ?? rest.conclusion, { stale, terminal, head }),
+        summary: Check.summary(body ?? "", { stale, terminal }),
       },
     });
   }
