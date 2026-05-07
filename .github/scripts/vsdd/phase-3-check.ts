@@ -1,10 +1,8 @@
-// Phase-3 review Check Run. `extends` the VSDD-flavored Check from
-// `./check.ts`, which itself extends the generic Check from
-// `../github/check.ts`. Adds catalog-aware naming and the two-reviewer
-// verdict aggregation specific to Phase 3.
+// Phase-3 review Check Run. `extends` Round (`./round.ts`) — inherits
+// the review-cycle vocabulary and auto-format. Adds catalog-aware naming
+// and the two-reviewer verdict aggregation specific to Phase 3.
 //
-// File exports use unprefixed names (`Check`, `VerdictOpts`). Consumers
-// alias on import:
+// File exports use unprefixed names. Consumers alias on import:
 //
 //   import { Check as Phase3Check } from "../vsdd/phase-3-check.ts";
 //
@@ -14,15 +12,15 @@
 
 import { SYMBOLS } from "../symbols.ts";
 import {
-  Check as VSDDCheck,
+  Round,
   type RoundClose as VSDDRoundClose,
-} from "./check.ts";
+} from "./round.ts";
 import type { Conclusion, OctokitContext } from "../github/check.ts";
 
 /** Input for `Check.submit()` on Phase-3. Either provide a `conclusion`
  *  directly (per-reviewer flavor, parent shape), OR `gemini` + `claude`
  *  reviewer verdicts (aggregate flavor — `Check.conclude` combines them).
- *  All other fields inherit from the VSDD-layer `RoundClose`. */
+ *  All other fields inherit from the round-layer `RoundClose`. */
 export type RoundClose =
   & Omit<VSDDRoundClose, "conclusion">
   & {
@@ -36,7 +34,7 @@ export type RoundClose =
  * verdict aggregation. The slug + optional reviewerName carries enough
  * context — no separate "category" coordinator class needed.
  */
-export class Check extends VSDDCheck {
+export class Check extends Round {
   /** Combine two reviewer verdicts into a Check Runs `conclusion`. Strict
    *  AND for `success`; fail-precedence over pending; conservative for
    *  unknown. */
