@@ -2,9 +2,16 @@
 //
 // Parses every well-formed HTML-comment block in a body file (delegates
 // to vsdd/frontmatter.ts for the shape rules; format-agnostic), applies
-// a jq expression to the resulting parsed-blocks array, and writes each
-// match to a separate file in the output directory. Prints a JSON array
-// of the written file paths to stdout — callers iterate or `jq` it.
+// a jq expression PER BLOCK, and writes each non-null result to a
+// separate file in the output directory. Prints a JSON array of the
+// written file paths to stdout — callers iterate or `jq` it.
+//
+// extract.ts owns the iteration: the user's `--query` runs against ONE
+// block at a time. No need to prefix `.[]`; no need to chain
+// `select(. != null)`. A query of `.foo.bar` writes one file per block
+// that has a non-null `.foo.bar`. If you need array-level operations
+// (counting blocks, cross-block joins), use jq directly — that's not
+// what this tool is for.
 //
 // Multiple matches → multiple files. Filename stems are chosen by the
 // naming scheme:
@@ -21,6 +28,12 @@
 //     [--format json|yaml] \
 //     [--naming index|sha|alpha] \
 //     <body-file>
+//
+// Sample queries (per-block, no .[] prefix):
+//   `.foo`                          — every block's `.foo` value (non-null)
+//   `.["vsdd-tech-spec"].title`     — every tech-spec marker's title
+//   `.vsdd.pretesting`              — every pretesting block (post-#214)
+//   `select(.reviewer == "gemini")` — every block where reviewer is gemini
 //
 // Output: JSON array of file paths on stdout. Exit codes:
 //   - 0 — success (zero or more matches written)
@@ -113,7 +126,13 @@ if (import.meta.main) {
   const raw = await Deno.readTextFile(a.bodyFile);
   const blocks = parseBlocks(raw);
 
-  const out = await jq(a.query, JSON.stringify(blocks));
+  // The query is evaluated per-block — extract.ts owns the iteration
+  // and null-filtering so the user's expression stays focused on "what
+  // do I want from a single block?". Without this wrapping, every
+  // caller would write `.[] | (...) | select(. != null)` and the
+  // extractor would just be jq with extra steps.
+  const wrapped = `.[] | (${a.query}) | select(. != null)`;
+  const out = await jq(wrapped, JSON.stringify(blocks));
   // jq -c emits one JSON value per line. Trailing newline + empty filter.
   const matches = out.split("\n").filter((l) => l.length > 0);
 

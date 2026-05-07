@@ -1,10 +1,14 @@
 name: 'frontmatter-extract'
 description: |
   Generic HTML-comment YAML frontmatter extractor. Parses every well-formed
-  block in `body-file`, applies `query` (a jq expression) to the parsed
-  blocks array, and writes each match to a separate file in `out-dir`.
-  Returns the JSON array of written paths as the `paths` output and the
-  count as `count`.
+  block in `body-file`, applies `query` (a jq expression) PER BLOCK, and
+  writes each non-null result to a separate file in `out-dir`. Returns
+  the JSON array of written paths as the `paths` output and the count
+  as `count`.
+
+  extract.ts owns the iteration: queries are per-block. No need for
+  `.[]` prefix, no need for `select(. != null)` — a query of `.foo.bar`
+  writes one file per block where `.foo.bar` is non-null.
 
   Multiple matches → multiple files. The naming scheme is configurable:
     - `index`  — 0, 1, 2, ... (default; ordered, simple)
@@ -23,7 +27,7 @@ inputs:
     description: 'Path to the body file to scan for HTML-comment frontmatter.'
     required: true
   query:
-    description: 'jq expression applied to the parsed-blocks JSON array.'
+    description: 'jq expression applied to each parsed block. Per-block context — do not prefix `.[]`.'
     required: true
   out-dir:
     description: 'Directory to write per-match files into. Created if missing.'
