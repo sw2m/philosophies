@@ -12,7 +12,7 @@
 //
 //   import { Round } from "../vsdd/round.ts";
 
-import { Check as VSDDCheck } from "./check.ts";
+import { Check } from "./check.ts";
 import type {
   CheckOutput,
   Conclusion,
@@ -67,7 +67,7 @@ export type RoundClose = VerdictOpts & StaleOpts & {
  * Octokit `output` object internally. Caller can pass `output` directly
  * to bypass the auto-format.
  */
-export class Round extends VSDDCheck {
+export class Round extends Check {
   /** Format an `output.title` string. Throws if `stale` is set without the
    *  SHAs it needs. */
   static title(round: number, verdict: string, opts: StaleOpts = {}): string {
