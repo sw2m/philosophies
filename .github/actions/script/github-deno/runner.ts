@@ -112,29 +112,23 @@ function getOctokit(token: string, additional: Partial<OctokitOpts> = {}) {
 // wrapped-require behaviour).
 const require = createRequire(import.meta.url);
 
-const script = await Deno.readTextFile(path);
-
-// Wrap user script in an async IIFE so top-level `await` Just Works without
-// the caller writing `(async () => { ... })()` themselves — same ergonomics
-// as actions/github-script's `script:` input.
-const wrapped = `return (async () => {\n${script}\n})()`;
-const fn = new Function(
-  "github",
-  "octokit",
-  "getOctokit",
-  "context",
-  "core",
-  "exec",
-  "glob",
-  "io",
-  "require",
-  wrapped,
-);
+// Dynamic-import the user script's tempfile. Deno parses TS natively
+// (type assertions, `!` non-null, etc. all work), and relative imports
+// inside the user script resolve from the tempfile's actual location —
+// no `new Function` eval and no JS-only restriction. The action.yml
+// shim has wrapped the user's `script:` content as a default-export
+// async function whose single arg is a destructurable globals bag.
+const userMod = await import(path);
+const userFn = userMod.default;
+if (typeof userFn !== "function") {
+  core.setFailed("github-deno: user script tempfile did not default-export a function (action.yml shim should have wrapped it).");
+  Deno.exit(2);
+}
 
 try {
-  const result = await fn(
+  const result = await userFn({
     github,
-    github,
+    octokit: github,
     getOctokit,
     context,
     core,
@@ -142,7 +136,7 @@ try {
     glob,
     io,
     require,
-  );
+  });
 
   // Encoding contract matches actions/github-script:
   //   json   → JSON.stringify(result) (default; quotes strings, encodes objects)

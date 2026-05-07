@@ -84,16 +84,38 @@ runs:
         INPUT_ARGS: ${{ inputs.args }}
       run: |
         set -euo pipefail
-        # Write the user's script to a tempfile rather than passing it via CLI
-        # args — keeps shell quoting from mangling embedded quotes/newlines/backticks.
-        # mktemp gives a unique path per invocation so parallel uses of the
-        # action within a single job (rare but legal) cannot race on the file.
-        # Template's X placeholders must be at the absolute end of the path
-        # for portability with BSD mktemp (macOS runners); Deno.readTextFile
-        # is content-based and does not need a `.ts` extension to evaluate.
-        SCRIPT_FILE=$(mktemp "$RUNNER_TEMP/github-deno-input.XXXXXX")
+        # Write the user's script as a real .ts module (default-export
+        # async function) so Deno transpiles TS syntax (type assertions,
+        # `!` non-null, etc.) and so dynamic imports inside the user
+        # script resolve relative to the tempfile's location — both
+        # things `new Function` eval cannot do.
+        #
+        # Tempfile lives in $GITHUB_WORKSPACE (or RUNNER_TEMP fallback)
+        # so user-script's `./.github/scripts/...` style relative imports
+        # resolve to the consuming workflow's checkout root. Composite
+        # actions whose imports must reach into a different tree should
+        # use absolute paths (e.g. `${{ github.action_path }}/...`) and
+        # pass them via env, since the workspace root is the consumer's
+        # repo, not the composite's.
+        #
+        # mktemp X placeholders must be at the END of the path on BSD
+        # (macOS runners), so we mktemp without extension then rename.
+        TEMPDIR="${GITHUB_WORKSPACE:-$RUNNER_TEMP}"
+        SCRIPT_BASE=$(mktemp "$TEMPDIR/.gh-deno-input.XXXXXX")
+        SCRIPT_FILE="${SCRIPT_BASE}.ts"
+        mv "$SCRIPT_BASE" "$SCRIPT_FILE"
         trap 'rm -f "$SCRIPT_FILE"' EXIT
-        printf '%s' "$INPUT_SCRIPT" > "$SCRIPT_FILE"
+
+        # Wrap the user's script as a default-export async function whose
+        # single arg destructures into the injected globals. User code
+        # references `github` / `core` / etc. as bare names, same as
+        # actions/github-script.
+        {
+          printf '%s\n' 'export default async function (_globals) {'
+          printf '%s\n' '  const { github, octokit, getOctokit, context, core, exec, glob, io, require } = _globals;'
+          printf '%s' "$INPUT_SCRIPT"
+          printf '\n%s\n' '}'
+        } > "$SCRIPT_FILE"
 
         # `args` input is the Deno run flag string (defaults to --allow-all
         # for parity with actions/github-script's effective surface). Word-
