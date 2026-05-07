@@ -41,7 +41,10 @@ export interface TitleOpts {
 
 export function title(round: number, verdict: string, opts: TitleOpts = {}): string {
   const { stale, terminal, head } = opts;
-  if (stale && terminal && head) {
+  if (stale) {
+    if (!terminal || !head) {
+      throw new Error("title(): stale requires both `terminal` and `head` SHA inputs");
+    }
     return `terminal-stated at ${terminal.slice(0, 8)}; HEAD ${head.slice(0, 8)} not reviewed`;
   }
   return `round ${round}: ${verdict}`;
@@ -49,7 +52,10 @@ export function title(round: number, verdict: string, opts: TitleOpts = {}): str
 
 export function summary(body: string, opts: TitleOpts = {}): string {
   const { stale, terminal } = opts;
-  if (stale && terminal) {
+  if (stale) {
+    if (!terminal) {
+      throw new Error("summary(): stale requires `terminal` SHA input");
+    }
     return `Stale: this category terminal-stated at ${terminal.slice(0, 8)}; the body below is the prior review.\n\n${body}`;
   }
   return body;
@@ -99,6 +105,9 @@ export class CheckRun {
 
   /** POST a new Check Run in `in_progress` status (default). Returns the id. */
   async start(opts: StartOpts = {}): Promise<number> {
+    if (this.id !== undefined) {
+      throw new Error(`CheckRun ${this.displayName}: start() called twice on the same instance`);
+    }
     const { round = 1, status = "in_progress" } = opts;
     const res = await this.github.rest.checks.create({
       owner: this.context.repo.owner,
@@ -220,10 +229,15 @@ export class Phase3Category {
     await this.aggregateCheck().submit(conclusion, { ...opts, verdict });
   }
 
-  /** Mark the category inapplicable to this PR. Posts a single per-category aggregate. */
-  async markInapplicable(): Promise<void> {
+  /** Mark the category inapplicable to this PR. Posts a single per-category aggregate.
+   * `round` defaults to 1 for the typical "diff has no relevant content from the start"
+   * case; pass a higher round when the category becomes inapplicable on a later push
+   * (e.g., the implementer removed all relevant code in a follow-up commit).
+   */
+  async markInapplicable(opts: { round?: number } = {}): Promise<void> {
+    const { round = 1 } = opts;
     await this.aggregateCheck().submit("success", {
-      title: "round 1: pass (inapplicable)",
+      title: `round ${round}: pass (inapplicable)`,
       summary: "Category not applicable to this PR.",
     });
   }
