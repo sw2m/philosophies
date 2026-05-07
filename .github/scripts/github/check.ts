@@ -26,7 +26,7 @@ export type CheckRun = CreateOp["response"]["data"];
  *  fields (`owner`, `repo`, `name`, `head_sha`) and the terminal-state fields
  *  (`conclusion`, `completed_at`) that don't apply to a Check being kicked
  *  off into `in_progress`. */
-export type StartInput = Omit<
+export type StartOpts = Omit<
   CreateOp["parameters"],
   "owner" | "repo" | "name" | "head_sha" | "conclusion" | "completed_at"
 >;
@@ -34,14 +34,14 @@ export type StartInput = Omit<
 /** What `complete()` accepts — the PATCH update params minus constructor-known
  *  fields, with `conclusion` promoted to required (we're transitioning to a
  *  terminal state) and `status` omitted (always "completed" here). */
-export type CompleteInput =
+export type CompleteOpts =
   & Omit<UpdateOp["parameters"], "owner" | "repo" | "check_run_id" | "name" | "head_sha" | "status">
   & { conclusion: Conclusion };
 
 /** What `submit()` accepts — same shape as `start()` but for one-shot
  *  POST-as-completed; `status` omitted (we set "completed") and `conclusion`
  *  required. */
-export type SubmitInput =
+export type SubmitOpts =
   & Omit<CreateOp["parameters"], "owner" | "repo" | "name" | "head_sha" | "status">
   & { conclusion: Conclusion };
 
@@ -101,7 +101,7 @@ export class Check implements CheckRun {
 
   /** POST a new Check Run. Defaults `status` to `"in_progress"`; caller can
    *  override anything else the API accepts. */
-  async start(input: StartInput = {}): Promise<this> {
+  async start(input: StartOpts = {}): Promise<this> {
     if (this.created) {
       throw new Error(`Check ${this.name}: start() called twice on the same instance`);
     }
@@ -119,7 +119,7 @@ export class Check implements CheckRun {
   }
 
   /** PATCH the started Check Run to a terminal conclusion. Requires `start()`. */
-  async complete(input: CompleteInput): Promise<this> {
+  async complete(input: CompleteOpts): Promise<this> {
     if (!this.created) {
       throw new Error(`Check ${this.name}: complete() called before start()`);
     }
@@ -144,7 +144,7 @@ export class Check implements CheckRun {
   }
 
   /** One-shot: POST a Check Run already in `completed` state. */
-  async submit(input: SubmitInput): Promise<this> {
+  async submit(input: SubmitOpts): Promise<this> {
     if (this.created) {
       throw new Error(`Check ${this.name}: submit() called on an already-created Check`);
     }

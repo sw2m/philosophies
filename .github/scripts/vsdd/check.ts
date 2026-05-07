@@ -12,9 +12,9 @@
 
 import {
   Check as BaseCheck,
-  type CompleteInput,
-  type StartInput,
-  type SubmitInput,
+  type CompleteOpts as BaseCompleteOpts,
+  type StartOpts as BaseStartOpts,
+  type SubmitOpts as BaseSubmitOpts,
 } from "../github/check.ts";
 
 /** SHAs needed for the stale-annotation title/summary shape. */
@@ -35,16 +35,16 @@ export interface FormatOpts extends StaleOpts {
   body?: string;
 }
 
-/** Input for `Check.start()` — Octokit's StartInput intersected with VSDD-format
+/** Input for `Check.start()` — Octokit's StartOpts intersected with VSDD-format
  *  options. Callers use VSDD vocab (round/verdict/body) to auto-derive `output`,
  *  OR pass `output` directly to bypass formatting. */
-export type StartOpts = StartInput & FormatOpts;
+export type StartOpts = BaseStartOpts & FormatOpts;
 
 /** Input for `Check.complete()` — same pattern. `conclusion` required. */
-export type CheckResult = CompleteInput & FormatOpts;
+export type CompleteOpts = BaseCompleteOpts & FormatOpts;
 
 /** Input for `Check.submit()` — same pattern. `conclusion` required. */
-export type SubmitResult = SubmitInput & FormatOpts;
+export type SubmitOpts = BaseSubmitOpts & FormatOpts;
 
 /**
  * VSDD-flavored Check. Adds review-cycle output formatting — `start()`,
@@ -89,7 +89,7 @@ export class Check extends BaseCheck {
     });
   }
 
-  override async complete(result: CheckResult): Promise<this> {
+  override async complete(result: CompleteOpts): Promise<this> {
     const { round, verdict, body, stale, terminal, head, ...rest } = result;
     return super.complete({
       ...rest,
@@ -100,7 +100,7 @@ export class Check extends BaseCheck {
     });
   }
 
-  override async submit(result: SubmitResult): Promise<this> {
+  override async submit(result: SubmitOpts): Promise<this> {
     const { round, verdict, body, stale, terminal, head, ...rest } = result;
     return super.submit({
       ...rest,
