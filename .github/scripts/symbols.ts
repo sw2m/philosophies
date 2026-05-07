@@ -1,66 +1,39 @@
 // Typed wrapper over the canonical CI symbol catalog at
-// `.github/assets/symbols.yaml`. TS/Deno consumers import from here for
-// compile-time-checked access to reviewer slugs, verdict values, category
-// slugs, label strings, and frontmatter tokens.
+// `.github/assets/symbols.yaml`. Loads the YAML at module-load time,
+// validates the structural shape, and re-exports convenience views.
 //
-// The YAML is the source of truth; this module loads it at import time
-// (top-level await), asserts the shape against the `Catalog` interface
-// below, and re-exports typed convenience views. When a new field is added
-// to the YAML, mirror it in `Catalog` here so consumers get type-safety.
+// Single-source-of-truth design: the YAML is the ONLY place reviewer slugs,
+// verdict values, category slugs, label strings, and frontmatter tokens
+// live. This module deliberately does NOT mirror those literals as TS
+// union types — that would be drift bait (any YAML edit would silently
+// stale the TS unions). Convenience exports are typed as plain `string` /
+// `string[]` / `Record<string, ...>`; consumers that need narrower types
+// can do their own runtime check + cast at the call site.
 //
-// Python / bash / non-Deno consumers parse the YAML directly via `yq` /
-// `pyyaml` / etc. — they don't go through this wrapper.
+// Python / bash / non-Deno consumers parse the YAML directly via
+// `yq` / `pyyaml` / etc. — they don't go through this wrapper.
 
 import { parse } from "jsr:@std/yaml@^1";
 
-// ─── Type aliases ──────────────────────────────────────────────────────────
-// Hand-written to match the YAML's enumerated values. Keep in sync if the
-// YAML's enums change. TypeScript can't derive literal types from a runtime
-// YAML parse, so the literal types are duplicated here as the compile-time
-// authority; the runtime parse asserts against them on load.
-
-export type Reviewer = "gemini" | "claude";
-
-export type SpecialReviewer =
-  | "orchestrator"
-  | "applicability"
-  | "consensus"
-  | "meta";
-
-export type Verdict = "pass" | "fail" | "pending";
-
-export type Conclusion =
-  | "success"
-  | "failure"
-  | "action_required"
-  | "cancelled"
-  | "neutral"
-  | "skipped";
-
-export type PhaseSlug = "1c" | "3";
-
-export type CategorySlug =
-  | "multi-word-symbols"
-  | "error-structure"
-  | "spec-discipline"
-  | "security-surface"
-  | "spec-gaps"
-  | "purity-boundary";
-
 // ─── Catalog shape ─────────────────────────────────────────────────────────
+// Schema description: defines the required structural keys but treats their
+// values as opaque strings. The runtime `validate` function below enforces
+// presence; the YAML enforces literal correctness. Compile-time slug-typo
+// narrowing is intentionally sacrificed in exchange for a single source of
+// truth.
 
 export interface Catalog {
   reviewers: {
-    agents: Reviewer[];
-    special: Record<SpecialReviewer, string>;
+    agents: string[];
+    special: Record<string, string>;
   };
   verdicts: {
-    "phase-1c": Verdict[];
-    "phase-3": Verdict[];
+    "phase-1c": string[];
+    "phase-3": string[];
   };
-  conclusions: Conclusion[];
-  phases: Record<PhaseSlug, { name: string; section: string }>;
-  categories: Record<CategorySlug, { display: string; section: string }>;
+  conclusions: string[];
+  phases: Record<string, { name: string; section: string }>;
+  categories: Record<string, { display: string; section: string }>;
   "aggregate-checkrun": string;
   labels: {
     spec: { goal: string; tech: string };
@@ -172,14 +145,12 @@ function validate(c: unknown): asserts c is Catalog {
 
 export const SYMBOLS: Catalog = parsed;
 
-export const REVIEWERS: readonly Reviewer[] = parsed.reviewers.agents;
+export const REVIEWERS: readonly string[] = parsed.reviewers.agents;
 export const VERDICTS = parsed.verdicts;
-export const CONCLUSIONS: readonly Conclusion[] = parsed.conclusions;
+export const CONCLUSIONS: readonly string[] = parsed.conclusions;
 export const PHASES = parsed.phases;
 export const CATEGORIES = parsed.categories;
-export const CATEGORY_SLUGS: readonly CategorySlug[] = Object.keys(
-  parsed.categories,
-) as CategorySlug[];
+export const CATEGORY_SLUGS: readonly string[] = Object.keys(parsed.categories);
 export const AGGREGATE_CHECKRUN: string = parsed["aggregate-checkrun"];
 export const LABELS = parsed.labels;
 export const FRONTMATTER = parsed["frontmatter-tokens"];
