@@ -228,7 +228,7 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
 
-      # Fetch philosophies — used both for scripts (extract-verdict.js,
+      # Fetch philosophies — used both for scripts (vsdd/verdict.ts,
       # symbol-audit.sh) and for the canonical MEMORY.md that gets
       # embedded in the Phase 3 reviewer prompt. Downstream consumers
       # may not have a MEMORY.md of their own; this fallback ensures
@@ -505,7 +505,7 @@ jobs:
           name: pr-context
           path: ./
 
-      # Fetch philosophies' scripts (extract-verdict.js) for downstream
+      # Fetch philosophies' scripts (vsdd/verdict.ts) for downstream
       # callers that don't have them in their checkout.
       - name: Fetch sw2m/philosophies scripts
         uses: actions/checkout@v6
@@ -577,7 +577,7 @@ jobs:
           name: pr-context
           path: ./
 
-      # Fetch philosophies' scripts (extract-verdict.js) for downstream
+      # Fetch philosophies' scripts (vsdd/verdict.ts) for downstream
       # callers that don't have them in their checkout.
       - name: Fetch sw2m/philosophies scripts
         uses: actions/checkout@v6

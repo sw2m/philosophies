@@ -184,105 +184,103 @@ runs:
         output-file: tech-specs.md
 
     - name: Parse tech-specs and open sub-issues
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        OWNER_LOGIN: ${{ inputs.owner-login }}
-      run: |
-        set -euo pipefail
-        python3 - <<'PY'
-        import json, os, re, subprocess, sys, yaml
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          const issueNumber = ${{ inputs.issue-number }};
+          const owner = "${{ inputs.owner-login }}";
+          const [repoOwner, repoName] = "${{ github.repository }}".split("/");
 
-        issue_number = os.environ['ISSUE_NUMBER']
-        owner = os.environ['OWNER_LOGIN']
+          const raw = await Deno.readTextFile("tech-specs.md");
 
-        with open('tech-specs.md') as f:
-            raw = f.read()
+          // Find the vsdd-decompose block. The agent emits it at the top
+          // of its response; subsequent prose is summary text.
+          let payload = null;
+          let summary = raw.trim();
+          for (const block of fm.parse(raw)) {
+            if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+            const inner = (block as Record<string, unknown>)["vsdd-decompose"];
+            if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
+            payload = inner as { tech_specs?: unknown };
+            break;
+          }
+          if (!payload || !Array.isArray(payload.tech_specs)) {
+            console.error("::error::Could not extract `tech_specs` list from agent output.");
+            console.error("--- raw ---");
+            console.error(raw);
+            core.setFailed("tech_specs extraction failed");
+            return;
+          }
 
-        # Strict frontmatter at the very top.
-        m = re.match(r'^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$', raw)
-        fm = None
-        summary = raw.strip()
-        if m:
-            try:
-                fm = yaml.safe_load(m.group(1))
-                summary = m.group(2).strip()
-            except yaml.YAMLError as e:
-                print(f'WARN: invalid YAML frontmatter: {e}', file=sys.stderr)
+          // After the closing -->, summary is whatever the agent appended.
+          const closeIdx = raw.indexOf("-->");
+          if (closeIdx !== -1) summary = raw.slice(closeIdx + 3).trim();
 
-        # Fallback: scan for an embedded ---tech_specs:---block.
-        if not isinstance(fm, dict) or 'tech_specs' not in fm:
-            m2 = re.search(r'\n---\s*\n(tech_specs\s*:[\s\S]*?)\n---\s*\n', raw)
-            if m2:
-                try:
-                    fm = yaml.safe_load(m2.group(1))
-                except yaml.YAMLError:
-                    fm = None
+          const opened = [];
+          for (const spec of payload.tech_specs as Array<Record<string, unknown>>) {
+            if (typeof spec !== "object" || spec === null || !("title" in spec) || !("body" in spec)) {
+              console.log(`  skip malformed: ${JSON.stringify(spec)}`);
+              continue;
+            }
+            const title = String(spec.title).trim();
+            const body = String(spec.body).trim();
+            const footer =
+              `\n\n---\n` +
+              `_Tech-spec sub-issue of #${issueNumber} (goal). Opened by ` +
+              "`promote-goal-to-tech` after @" + owner + " self-assigned the goal._\n" +
+              "_Assign yourself to this issue to start the 5-phase tech→PR pipeline._\n";
+            let r;
+            try {
+              r = await github.rest.issues.create({
+                owner: repoOwner, repo: repoName,
+                title, body: body + footer, labels: ["spec:tech"],
+              });
+            } catch {
+              // Label may be missing on a downstream repo. Retry without.
+              r = await github.rest.issues.create({
+                owner: repoOwner, repo: repoName,
+                title, body: body + footer,
+              });
+            }
+            const url = r.data.html_url;
+            console.log(`  opened: ${url}`);
+            opened.push({ title, url });
+          }
 
-        if not isinstance(fm, dict) or not isinstance(fm.get('tech_specs'), list):
-            print('::error::Could not extract `tech_specs` list from agent output.', file=sys.stderr)
-            print('--- raw ---', file=sys.stderr); print(raw, file=sys.stderr)
-            sys.exit(1)
-
-        opened = []
-        for spec in fm['tech_specs']:
-            if not isinstance(spec, dict) or 'title' not in spec or 'body' not in spec:
-                print(f'  skip malformed: {spec!r}'); continue
-            title = str(spec['title']).strip()
-            body = str(spec['body']).strip()
-            footer = (
-                f'\n\n---\n'
-                f'_Tech-spec sub-issue of #{issue_number} (goal). Opened by '
-                f'`promote-goal-to-tech` after @{owner} self-assigned the goal._\n'
-                f'_Assign yourself to this issue to start the 5-phase tech→PR pipeline._\n'
-            )
-            r = subprocess.run(
-                ['gh', 'issue', 'create',
-                 '--title', title,
-                 '--body', body + footer,
-                 '--label', 'spec:tech'],
-                capture_output=True, text=True,
-            )
-            if r.returncode != 0:
-                # Label may be missing on a downstream repo. Retry without.
-                r = subprocess.run(
-                    ['gh', 'issue', 'create', '--title', title, '--body', body + footer],
-                    capture_output=True, text=True, check=True,
-                )
-            url = r.stdout.strip().splitlines()[-1]
-            print(f'  opened: {url}')
-            opened.append((title, url))
-
-        # Comment on the parent goal with the list of children.
-        if opened:
-            lines = [
-                f'**Goal decomposed into {len(opened)} tech-spec sub-issue(s).**',
-                f'_Triggered by @{owner} self-assigning this goal._',
-                '',
-            ]
-            for title, url in opened:
-                lines.append(f'- {url} — {title}')
-            lines += [
-                '',
-                'Each sub-issue carries `spec:tech`. Assign yourself to a '
-                'tech-spec to start the 5-phase implementation pipeline '
-                '(scaffold → tests → Red gate → implement → Green gate).',
-            ]
-        else:
-            lines = [
-                f'**No tech-specs produced.**',
-                f'_Triggered by @{owner} but the agent could not decompose this goal._',
-                '',
-                f'Free-form rationale from the agent:',
-                '',
-                f'> {summary[:1500]}',
-                '',
-                'Refine the goal-spec body and re-assign to retry, or '
-                'open tech-specs by hand and apply `spec:tech`.',
-            ]
-        subprocess.run(
-            ['gh', 'issue', 'comment', issue_number, '--body', '\n'.join(lines)],
-            check=True,
-        )
-        PY
+          // Comment on the parent goal with the list of children.
+          let bodyLines: string[];
+          if (opened.length > 0) {
+            bodyLines = [
+              `**Goal decomposed into ${opened.length} tech-spec sub-issue(s).**`,
+              `_Triggered by @${owner} self-assigning this goal._`,
+              "",
+            ];
+            for (const { title, url } of opened) {
+              bodyLines.push(`- ${url} — ${title}`);
+            }
+            bodyLines.push(
+              "",
+              "Each sub-issue carries `spec:tech`. Assign yourself to a " +
+              "tech-spec to start the 5-phase implementation pipeline " +
+              "(scaffold → tests → Red gate → implement → Green gate).",
+            );
+          } else {
+            bodyLines = [
+              `**No tech-specs produced.**`,
+              `_Triggered by @${owner} but the agent could not decompose this goal._`,
+              "",
+              `Free-form rationale from the agent:`,
+              "",
+              `> ${summary.slice(0, 1500)}`,
+              "",
+              "Refine the goal-spec body and re-assign to retry, or " +
+              "open tech-specs by hand and apply `spec:tech`.",
+            ];
+          }
+          await github.rest.issues.createComment({
+            owner: repoOwner, repo: repoName,
+            issue_number: issueNumber,
+            body: bodyLines.join("\n"),
+          });
