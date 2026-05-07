@@ -47,18 +47,31 @@ export interface VerdictOpts {
  *  not accepted: starting a check that's already stale doesn't make sense. */
 export type RoundOpen = StartOpts & VerdictOpts;
 
-/** Input for `Round.complete()` and `Round.submit()` — closes a round with a
- *  terminal-state verdict. Both API paths (PATCH and POST) record the same
- *  conceptual shape. The github-layer's PATCH-vs-POST type distinction isn't
- *  preserved here because VSDD users don't typically use the long-tail Octokit
- *  fields (`actions`, `started_at`, etc.); drop down to `BaseCheck.complete()`
- *  / `BaseCheck.submit()` if you need those. */
-export type RoundClose = VerdictOpts & StaleOpts & {
+/** Common shape for a round's terminal-state input — verdict opts + stale
+ *  opts + Octokit terminal-state passthroughs. The exported `RoundClose`
+ *  is a thin generic over this. */
+type BaseRoundClose = VerdictOpts & StaleOpts & {
   conclusion: Conclusion;
   output?: CheckOutput;
   details_url?: string;
   external_id?: string;
 };
+
+/** Input for `Round.complete()` and `Round.submit()` — closes a round with a
+ *  terminal-state verdict. Both API paths (PATCH and POST) record the same
+ *  conceptual shape. The github-layer's PATCH-vs-POST type distinction isn't
+ *  preserved here because VSDD users don't typically use the long-tail Octokit
+ *  fields (`actions`, `started_at`, etc.); drop down to `BaseCheck.complete()`
+ *  / `BaseCheck.submit()` if you need those.
+ *
+ *  Subclasses that supply a `Concluder` parameter widen the input: conclusion
+ *  becomes optional and the Concluder's fields layer in. Phase 3 uses this to
+ *  accept either `{conclusion}` (per-reviewer) or `{gemini, claude}` (aggregate).
+ *  The `[T] extends [never]` form sidesteps `never`'s distributive behavior so
+ *  the default branch resolves cleanly. */
+export type RoundClose<Concluder = never> = [Concluder] extends [never]
+  ? BaseRoundClose
+  : Omit<BaseRoundClose, "conclusion"> & { conclusion?: Conclusion } & Concluder;
 
 /**
  * Review-round Check. Adds review-cycle output formatting on top of the

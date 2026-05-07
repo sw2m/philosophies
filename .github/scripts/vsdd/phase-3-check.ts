@@ -20,14 +20,10 @@ import type { Conclusion, OctokitContext } from "../github/check.ts";
 /** Input for `Check.submit()` on Phase-3. Either provide a `conclusion`
  *  directly (per-reviewer flavor, parent shape), OR `gemini` + `claude`
  *  reviewer verdicts (aggregate flavor — `Check.conclude` combines them).
- *  All other fields inherit from the round-layer `RoundClose`. */
-export type RoundClose =
-  & Omit<VSDDRoundClose, "conclusion">
-  & {
-    conclusion?: Conclusion;
-    gemini?: string;
-    claude?: string;
-  };
+ *  Parameterizes the round-layer's `RoundClose` generic with Phase 3's
+ *  Concluder shape — conclusion becomes optional and the verdict-pair
+ *  fields layer in. */
+export type RoundClose = VSDDRoundClose<{ gemini?: string; claude?: string }>;
 
 /**
  * Phase-3 review Check Run. Knows the catalog (per-slug display names) and
