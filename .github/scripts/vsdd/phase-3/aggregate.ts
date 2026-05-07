@@ -44,26 +44,20 @@ export interface Verdict {
   retriesExhausted: boolean;
 }
 
-/** Per-category resolved state. Five values; aggregate consumes them. */
-export type CategoryState =
-  | "fail"
-  | "pending"
-  | "content-pass"
-  | "inapplicable-pass"
-  | "stale-pass";
-
+/** Per-category resolved state. Values come from `SYMBOLS["phase-3-states"].category`
+ *  in the catalog (one of: `fail`, `pending`, `content-pass`, `inapplicable-pass`,
+ *  `stale-pass`). Typed as `string` here per the catalog-over-narrow-types policy. */
 export interface ResolvedCategory {
   slug: string;
-  state: CategoryState;
+  state: string;
   /** Diagnostic note for surface-level reporting (e.g., "BUG: empty verdict"). */
   annotation?: string;
 }
 
-/** PR-level rollup state. */
-export type AggregateState = "fail" | "pending" | "clear";
-
+/** PR-level rollup state. Values come from `SYMBOLS["phase-3-states"].aggregate`
+ *  in the catalog (one of: `fail`, `pending`, `clear`). */
 export interface AggregateResult {
-  state: AggregateState;
+  state: string;
   states: ResolvedCategory[];
 }
 
@@ -179,14 +173,14 @@ export class Aggregate extends Round {
 
   /** Roll up six per-category states into one PR-level state.
    *  fail-precedence over pending-precedence over clear. */
-  static aggregate(states: ResolvedCategory[]): AggregateState {
+  static aggregate(states: ResolvedCategory[]): string {
     if (states.some((s) => s.state === "fail")) return "fail";
     if (states.some((s) => s.state === "pending")) return "pending";
     return "clear";
   }
 
   /** Map an aggregate state to its Check Run conclusion. */
-  static conclusion(state: AggregateState): Conclusion {
+  static conclusion(state: string): Conclusion {
     return state === "clear" ? "success"
       : state === "fail" ? "failure"
       : "action_required";
