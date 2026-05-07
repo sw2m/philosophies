@@ -48,11 +48,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Set up Deno (for vsdd/phase-2/frontmatter.ts)
-      uses: denoland/setup-deno@v2
-      with:
-        deno-version: v2.x
-
     - name: Verify org membership of the owner
       shell: bash
       env:
@@ -192,7 +187,7 @@ runs:
     - name: Phases 2-3 — Author tests + Red gate (with retry)
       id: red-gate
       if: ${{ steps.runner.outputs.no-runner == 'false' }}
-      shell: bash
+      uses: ./.github/actions/script/github-deno
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         GH_TOKEN: ${{ inputs.github-token }}
@@ -202,10 +197,11 @@ runs:
         DEFAULT_TEST_CMD: ${{ steps.runner.outputs.default-cmd }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
-      run: |
-        set -euo pipefail
-        deno run --allow-read --allow-write --allow-env --allow-run \
-          "${GITHUB_ACTION_PATH}/../../scripts/vsdd/promote/gates.ts" red
+        GATES_PATH: ${{ github.action_path }}/../../scripts/vsdd/promote/gates.ts
+      with:
+        script: |
+          const { redGate } = await import(Deno.env.get("GATES_PATH")!);
+          await redGate();
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
       shell: bash
@@ -242,7 +238,7 @@ runs:
     - name: Phases 4-5 — Implement + Green gate (with retry)
       id: green-gate
       if: ${{ steps.red-gate.outputs.bailed != 'true' }}
-      shell: bash
+      uses: ./.github/actions/script/github-deno
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         GH_TOKEN: ${{ inputs.github-token }}
@@ -252,10 +248,11 @@ runs:
         NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
-      run: |
-        set -euo pipefail
-        deno run --allow-read --allow-write --allow-env --allow-run \
-          "${GITHUB_ACTION_PATH}/../../scripts/vsdd/promote/gates.ts" green
+        GATES_PATH: ${{ github.action_path }}/../../scripts/vsdd/promote/gates.ts
+      with:
+        script: |
+          const { greenGate } = await import(Deno.env.get("GATES_PATH")!);
+          await greenGate();
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
       shell: bash
