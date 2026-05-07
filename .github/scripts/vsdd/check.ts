@@ -14,7 +14,7 @@ import {
   Check as BaseCheck,
   type CheckOutput,
   type Conclusion,
-  type StartOpts as BaseStartOpts,
+  type StartOpts,
 } from "../github/check.ts";
 
 /** SHAs needed for the stale-annotation title/summary shape. */
@@ -43,7 +43,7 @@ export interface VerdictOpts {
  *  `round`/`verdict`/`body` to auto-derive `output.title` / `output.summary`,
  *  or passes `output` directly to bypass the formatter. Stale options are
  *  not accepted: starting a check that's already stale doesn't make sense. */
-export type RoundOpen = BaseStartOpts & VerdictOpts;
+export type RoundOpen = StartOpts & VerdictOpts;
 
 /** Input for `Check.complete()` and `Check.submit()` — closes a round with a
  *  terminal-state verdict. Both API paths (PATCH and POST) record the same
