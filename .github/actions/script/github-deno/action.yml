@@ -43,6 +43,15 @@ inputs:
     description: 'Optional GitHub REST API base URL (e.g. for GitHub Enterprise Server).'
     required: false
     default: ''
+  workspace:
+    description: |
+      Directory the user-script tempfile is written to. Relative `await import("./...")`
+      paths in the user script resolve from this directory. Default: `$GITHUB_WORKSPACE`
+      (the consuming workflow's checkout root). Composite actions whose imports must
+      reach into a different tree should pass `${{ github.action_path }}/../..` (or
+      similar) so relative paths resolve to their action subtree.
+    required: false
+    default: ''
   deno-version:
     description: 'Deno version to install via setup-deno.'
     required: false
@@ -82,6 +91,7 @@ runs:
         INPUT_RETRY_EXEMPT_STATUS_CODES: ${{ inputs.retry-exempt-status-codes }}
         INPUT_BASE_URL: ${{ inputs.base-url }}
         INPUT_ARGS: ${{ inputs.args }}
+        INPUT_WORKSPACE: ${{ inputs.workspace }}
       run: |
         set -euo pipefail
         # Write the user's script as a real .ts module (default-export
@@ -100,7 +110,7 @@ runs:
         #
         # mktemp X placeholders must be at the END of the path on BSD
         # (macOS runners), so we mktemp without extension then rename.
-        TEMPDIR="${GITHUB_WORKSPACE:-$RUNNER_TEMP}"
+        TEMPDIR="${INPUT_WORKSPACE:-${GITHUB_WORKSPACE:-$RUNNER_TEMP}}"
         SCRIPT_BASE=$(mktemp "$TEMPDIR/.gh-deno-input.XXXXXX")
         SCRIPT_FILE="${SCRIPT_BASE}.ts"
         mv "$SCRIPT_BASE" "$SCRIPT_FILE"

@@ -197,10 +197,10 @@ runs:
         DEFAULT_TEST_CMD: ${{ steps.runner.outputs.default-cmd }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
-        GATES_PATH: ${{ github.action_path }}/../../scripts/vsdd/promote/gates.ts
       with:
+        workspace: ${{ github.action_path }}/../..
         script: |
-          const { redGate } = await import(Deno.env.get("GATES_PATH")!);
+          const { redGate } = await import("./scripts/vsdd/promote/gates.ts");
           await redGate();
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
@@ -248,10 +248,10 @@ runs:
         NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
-        GATES_PATH: ${{ github.action_path }}/../../scripts/vsdd/promote/gates.ts
       with:
+        workspace: ${{ github.action_path }}/../..
         script: |
-          const { greenGate } = await import(Deno.env.get("GATES_PATH")!);
+          const { greenGate } = await import("./scripts/vsdd/promote/gates.ts");
           await greenGate();
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
