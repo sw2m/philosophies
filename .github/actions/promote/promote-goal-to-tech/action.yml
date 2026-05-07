@@ -201,37 +201,12 @@ runs:
         github-token: ${{ inputs.github-token }}
         script: |
           const { Decompose } = await import("./.github/scripts/vsdd/promote/decompose.ts");
-          const { Spec } = await import("./.github/scripts/vsdd/promote/spec.ts");
-          const issueNumber = ${{ inputs.issue-number }};
-          const ownerLogin = "${{ inputs.owner-login }}";
           const [owner, repo] = "${{ github.repository }}".split("/");
-
-          const raw = await Deno.readTextFile("tech-specs.md");
-          const specs = Decompose.slice(raw);
-
-          // Summary = preamble before the first marker (or whole body if
-          // no markers found). Used only on the empty-decomposition path.
-          const firstOpen = raw.indexOf("<!--");
-          const summary = (firstOpen === -1 ? raw : raw.slice(0, firstOpen)).trim();
-
-          const opened: Array<{ title: string; url: string }> = [];
-          for (const { title, body } of specs) {
-            const data = { body, parent: issueNumber, owner: ownerLogin };
-            const spec = new Spec({ api: github, owner, repo });
-            try {
-              await spec.post(data, { title, labels: ["spec:tech"] });
-            } catch {
-              // Label may be missing on a downstream repo. Retry without.
-              await spec.post(data, { title });
-            }
-            console.log(`  opened: ${spec.html_url}`);
-            opened.push({ title, url: spec.html_url });
-          }
-
-          // Mustache-rendered parent-goal comment via the Decompose subclass.
-          const dc = new Decompose({ api: github, owner, repo, issue_number: issueNumber });
-          await dc.post({
-            owner: ownerLogin,
-            opened,
-            summary: summary.slice(0, 1500),
+          const dc = new Decompose({
+            api: github,
+            owner, repo,
+            issue_number: ${{ inputs.issue-number }},
+            raw: await Deno.readTextFile("tech-specs.md"),
+            actor: "${{ inputs.owner-login }}",
           });
+          await dc.run();
