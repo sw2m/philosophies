@@ -60,6 +60,26 @@ class Parse {
     return this.blocks;
   }
 
+  /** Drive the engine to exhaustion and return parsed blocks PLUS positions.
+   *  `start` points at the first char of `<!--`; `end` points at the char
+   *  AFTER the closing `-->`. Useful for callers that want to slice the
+   *  body between consecutive markers. */
+  marks(): Array<{ value: unknown; start: number; end: number }> {
+    const out: Array<{ value: unknown; start: number; end: number }> = [];
+    let i = 0;
+    while (i < this.body.length) {
+      const start = this.body.indexOf(OPEN, i);
+      if (start === -1) break;
+      const closeIdx = this.body.indexOf(CLOSE, start + OPEN.length);
+      if (closeIdx === -1) break;
+      const end = closeIdx + CLOSE.length;
+      i = end;
+      const value = Parse.content(this.body.slice(start + OPEN.length, closeIdx));
+      if (value !== null && value !== undefined) out.push({ value, start, end });
+    }
+    return out;
+  }
+
   /** One step: scan from the cursor for the next `<!--...-->`, classify it,
    *  push the parsed value if non-empty, advance the cursor. Returns
    *  false when no further block exists. */
@@ -140,4 +160,13 @@ class Parse {
  *  job — filter the returned array by whatever convention the emitter uses. */
 export function parse(body: string): unknown[] {
   return new Parse(body).run();
+}
+
+/** Parse every well-formed block AND return its position in `body`.
+ *  `{value, start, end}` triples in source order; `start` indexes the
+ *  first char of `<!--`, `end` indexes the char after the closing `-->`.
+ *  Useful for callers that section a body by markers — the slice
+ *  `body.slice(prev.end, next.start)` is the prose between two markers. */
+export function marks(body: string): Array<{ value: unknown; start: number; end: number }> {
+  return new Parse(body).marks();
 }

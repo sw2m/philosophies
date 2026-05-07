@@ -99,7 +99,7 @@ frontmatter-tokens:
   phase-2:            vsdd-phase-2            # block: `{new_test_files, new_test_command, regression_test_command}` — promote-tech-to-pr agent output
   phase-3:            vsdd-phase-3            # block: `{reviewer, verdict, category?}` — pr-review.yml per-reviewer verdict
   ci-meta:            vsdd-ci-meta            # block: `{reviewer, verdict, rationale, gaps}` — ci-meta.yml per-reviewer verdict
-  decompose:          vsdd-decompose          # block: `{tech_specs: [{title, body}, ...]}` — promote-goal-to-tech agent output
+  tech-spec:          vsdd-tech-spec          # block: `{title}` — promote-goal-to-tech agent emits one per tech-spec; body is the prose between this marker and the next
   opt-out-brand:      vsdd-opt-out-brand      # inline scalar marker — vsdd-brand.yml
   red-gate-cleared:   vsdd-red-gate-cleared   # inline scalar marker — red-conditions-gate.yml; consumed by non-test-blocker.yml + vsdd-brand.yml
   canonical:          vsdd-canonical          # `<vsdd-canonical>...</vsdd-canonical>` XML wrapper (NOT HTML-comment) for embedded MEMORY.md in eval-input

@@ -96,35 +96,47 @@ runs:
         cat > stdin.txt <<'PROMPT_EOF'
         # CRITICAL OUTPUT FORMAT (read this FIRST)
 
-        Your response MUST start with YAML frontmatter on the very first
-        line — no preamble, no leading whitespace. The frontmatter has
-        exactly one key, `tech_specs`, whose value is a list. Each entry
-        has `title` and `body`. After the closing `---` you may write a
-        free-form summary; the parser ignores it.
+        Decompose the goal into N tech-specs by interleaving inline
+        marker comments with the tech-spec prose. Each tech-spec begins
+        with an inline-form HTML-comment marker carrying ONLY the title
+        in flow YAML; the prose that follows (until the next marker, or
+        end of file) is that tech-spec's body. Free-form text BEFORE the
+        first marker is treated as a summary (only used when zero
+        tech-specs are produced).
+
+        Marker shape — the marker MUST be on its own line, exactly:
+
+            <!-- vsdd-tech-spec: { title: "[tech] short title" } -->
 
         Concrete example of an acceptable response:
 
         ```
-        ---
-        tech_specs:
-          - title: "[tech] Add ownership-gate job to pr-review.yml"
-            body: |
-              **Problem.** pr-review.yml currently runs Phase 3 review on every
-              non-draft PR regardless of who opened it. External-contributor
-              PRs consume agent budget without ownership.
+        Optional preamble — short rationale describing the decomposition.
 
-              **Done when.** A new `ownership` job runs first; downstream
-              jobs `needs: [ownership]` and skip when no org-member author
-              or assignee is present.
+        <!-- vsdd-tech-spec: { title: "[tech] Add ownership-gate job to pr-review.yml" } -->
 
-              **Section reference.** §I (Adversary), §II Phase 3.
-          - title: "[tech] ..."
-            body: |
-              ...
-        ---
+        **Problem.** pr-review.yml currently runs Phase 3 review on every
+        non-draft PR regardless of who opened it. External-contributor
+        PRs consume agent budget without ownership.
 
-        (free-form summary may follow, ignored by the parser)
+        **Done when.** A new `ownership` job runs first; downstream
+        jobs `needs: [ownership]` and skip when no org-member author
+        or assignee is present.
+
+        **Section reference.** §I (Adversary), §II Phase 3.
+
+        <!-- vsdd-tech-spec: { title: "[tech] ..." } -->
+
+        **Problem.** ...
+
+        **Done when.** ...
         ```
+
+        Parser semantics:
+        - Multiple `vsdd-tech-spec` markers are expected and required (one per spec).
+        - A marker without a `title` field is silently skipped (won't open an issue).
+        - The body for each tech-spec is the prose between this marker and the next marker (or end of file).
+        - If you decide the goal cannot be cleanly decomposed, emit ZERO markers and write your rationale as free-form prose; the workflow will surface that rationale on the goal-spec.
 
         # TASK
 
@@ -188,60 +200,35 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
-          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          const { Decompose } = await import("./.github/scripts/vsdd/promote/decompose.ts");
           const issueNumber = ${{ inputs.issue-number }};
-          const owner = "${{ inputs.owner-login }}";
-          const [repoOwner, repoName] = "${{ github.repository }}".split("/");
+          const ownerLogin = "${{ inputs.owner-login }}";
+          const [owner, repo] = "${{ github.repository }}".split("/");
 
           const raw = await Deno.readTextFile("tech-specs.md");
+          const specs = Decompose.slice(raw);
 
-          // Find the vsdd-decompose block. The agent emits it at the top
-          // of its response; subsequent prose is summary text.
-          let payload = null;
-          let summary = raw.trim();
-          for (const block of fm.parse(raw)) {
-            if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-            const inner = (block as Record<string, unknown>)["vsdd-decompose"];
-            if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
-            payload = inner as { tech_specs?: unknown };
-            break;
-          }
-          if (!payload || !Array.isArray(payload.tech_specs)) {
-            console.error("::error::Could not extract `tech_specs` list from agent output.");
-            console.error("--- raw ---");
-            console.error(raw);
-            core.setFailed("tech_specs extraction failed");
-            return;
-          }
+          // Summary = preamble before the first marker (or whole body if
+          // no markers found). Used only on the empty-decomposition path.
+          const firstOpen = raw.indexOf("<!--");
+          const summary = (firstOpen === -1 ? raw : raw.slice(0, firstOpen)).trim();
 
-          // After the closing -->, summary is whatever the agent appended.
-          const closeIdx = raw.indexOf("-->");
-          if (closeIdx !== -1) summary = raw.slice(closeIdx + 3).trim();
-
-          const opened = [];
-          for (const spec of payload.tech_specs as Array<Record<string, unknown>>) {
-            if (typeof spec !== "object" || spec === null || !("title" in spec) || !("body" in spec)) {
-              console.log(`  skip malformed: ${JSON.stringify(spec)}`);
-              continue;
-            }
-            const title = String(spec.title).trim();
-            const body = String(spec.body).trim();
+          const opened: Array<{ title: string; url: string }> = [];
+          for (const { title, body } of specs) {
             const footer =
               `\n\n---\n` +
               `_Tech-spec sub-issue of #${issueNumber} (goal). Opened by ` +
-              "`promote-goal-to-tech` after @" + owner + " self-assigned the goal._\n" +
+              "`promote-goal-to-tech` after @" + ownerLogin + " self-assigned the goal._\n" +
               "_Assign yourself to this issue to start the 5-phase tech→PR pipeline._\n";
             let r;
             try {
               r = await github.rest.issues.create({
-                owner: repoOwner, repo: repoName,
-                title, body: body + footer, labels: ["spec:tech"],
+                owner, repo, title, body: body + footer, labels: ["spec:tech"],
               });
             } catch {
               // Label may be missing on a downstream repo. Retry without.
               r = await github.rest.issues.create({
-                owner: repoOwner, repo: repoName,
-                title, body: body + footer,
+                owner, repo, title, body: body + footer,
               });
             }
             const url = r.data.html_url;
@@ -249,38 +236,10 @@ runs:
             opened.push({ title, url });
           }
 
-          // Comment on the parent goal with the list of children.
-          let bodyLines: string[];
-          if (opened.length > 0) {
-            bodyLines = [
-              `**Goal decomposed into ${opened.length} tech-spec sub-issue(s).**`,
-              `_Triggered by @${owner} self-assigning this goal._`,
-              "",
-            ];
-            for (const { title, url } of opened) {
-              bodyLines.push(`- ${url} — ${title}`);
-            }
-            bodyLines.push(
-              "",
-              "Each sub-issue carries `spec:tech`. Assign yourself to a " +
-              "tech-spec to start the 5-phase implementation pipeline " +
-              "(scaffold → tests → Red gate → implement → Green gate).",
-            );
-          } else {
-            bodyLines = [
-              `**No tech-specs produced.**`,
-              `_Triggered by @${owner} but the agent could not decompose this goal._`,
-              "",
-              `Free-form rationale from the agent:`,
-              "",
-              `> ${summary.slice(0, 1500)}`,
-              "",
-              "Refine the goal-spec body and re-assign to retry, or " +
-              "open tech-specs by hand and apply `spec:tech`.",
-            ];
-          }
-          await github.rest.issues.createComment({
-            owner: repoOwner, repo: repoName,
-            issue_number: issueNumber,
-            body: bodyLines.join("\n"),
+          // Mustache-rendered parent-goal comment via the Decompose subclass.
+          const dc = new Decompose({ api: github, owner, repo, issue_number: issueNumber });
+          await dc.post({
+            owner: ownerLogin,
+            opened,
+            summary: summary.slice(0, 1500),
           });
