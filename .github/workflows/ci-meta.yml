@@ -194,28 +194,29 @@ jobs:
 
             # OUTPUT FORMAT (strict)
 
-            Begin your output with YAML frontmatter, then prose. The frontmatter MUST be the first thing — no leading whitespace, no preamble.
+            Begin your output with an HTML-comment frontmatter block, then prose. The block MUST be the first thing — no leading whitespace, no preamble. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line).
 
-            ---
-            verdict: pass | fail
-            rationale: |
-              one paragraph summarizing the evaluation
-            gaps:
-              - title: "[ci-meta] short description (≤60 chars)"
-                body: |
-                  Goal-spec form. Describe the problem only — what's missing,
-                  what's broken, what symptom is observed, which §-reference
-                  the gap maps to. Concrete technical detail is welcome ONLY
-                  insofar as it characterizes the problem ("Phase 2a is
-                  unenforced because no workflow runs tests with new tests
-                  expected to fail").
-                  Do NOT propose a solution, fix, or implementation path.
-                  Solutions belong in tech-spec sub-issues, opened by the
-                  promotion pipeline once an org member assigns themselves.
-              - title: "..."
-                body: |
-                  ...
-            ---
+            <!--
+            vsdd-ci-meta:
+              verdict: pass | fail
+              rationale: |
+                one paragraph summarizing the evaluation
+              gaps:
+                - title: "[ci-meta] short description (≤60 chars)"
+                  body: |
+                    Goal-spec form. Describe the problem only — what's missing,
+                    what's broken, what symptom is observed, which §-reference
+                    the gap maps to. Concrete technical detail is welcome ONLY
+                    insofar as it characterizes the problem ("Phase 2a is
+                    unenforced because no workflow runs tests with new tests
+                    expected to fail").
+                    Do NOT propose a solution, fix, or implementation path.
+                    Solutions belong in tech-spec sub-issues, opened by the
+                    promotion pipeline once an org member assigns themselves.
+                - title: "..."
+                  body: |
+                    ...
+            -->
 
             (free-form summary may follow but is ignored by the parser)
 
@@ -228,43 +229,45 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
-        run: |
-          python3 - <<'PY'
-          import re, json, sys, os, yaml
-          with open('gemini-output.txt') as f:
-              raw = f.read()
-          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n?(.*)$', raw, re.DOTALL)
-          fm = None
-          summary = raw
-          if m:
-              try:
-                  fm = yaml.safe_load(m.group(1))
-                  summary = m.group(2).strip()
-              except yaml.YAMLError as e:
-                  print(f'WARN: frontmatter present but invalid YAML: {e}', file=sys.stderr)
-                  fm = None
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m2 = re.search(r'\n---\s*\n(verdict\s*:\s*(?:pass|fail).*?)\n---\s*\n', raw, re.DOTALL)
-              if m2:
-                  try:
-                      fm = yaml.safe_load(m2.group(1))
-                  except yaml.YAMLError:
-                      fm = None
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m3 = re.search(r'(?im)^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b', raw)
-              if m3:
-                  fm = {'verdict': m3.group(1).lower(), 'rationale': '(verdict extracted from prose; frontmatter missing)', 'gaps': []}
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              print('::error::Could not extract a verdict from gemini output (no frontmatter, no fallback match).', file=sys.stderr)
-              print('--- raw output ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
-          fm['reviewer'] = 'gemini'
-          fm['summary'] = summary
-          with open('gemini-eval.json', 'w') as f:
-              json.dump(fm, f, indent=2)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"verdict={fm['verdict']}\n")
-          print(f"gemini verdict: {fm['verdict']}, gaps: {len(fm.get('gaps') or [])}")
-          PY
+        uses: ./.github/actions/script/github-deno
+        with:
+          script: |
+            const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+            const raw = await Deno.readTextFile("gemini-output.txt");
+
+            // Find the vsdd-ci-meta block. Block content has
+            // {verdict, rationale, gaps}; we attach reviewer + summary
+            // and write the JSON for downstream consensus consumption.
+            let payload = null;
+            for (const block of fm.parse(raw)) {
+              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+              const inner = (block as Record<string, unknown>)["vsdd-ci-meta"];
+              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
+              const v = (inner as Record<string, unknown>).verdict;
+              if (v !== "pass" && v !== "fail") continue;
+              payload = inner as Record<string, unknown>;
+              break;
+            }
+            if (!payload) {
+              console.error("::error::Could not extract a vsdd-ci-meta verdict from gemini output.");
+              console.error("--- raw output ---");
+              console.error(raw);
+              core.setFailed("verdict extraction failed");
+              return;
+            }
+            // Summary is whatever the agent appended after the closing -->
+            const closeIdx = raw.indexOf("-->");
+            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
+
+            const out = { ...payload, reviewer: "gemini", summary };
+            await Deno.writeTextFile("gemini-eval.json", JSON.stringify(out, null, 2));
+            await Deno.writeTextFile(
+              Deno.env.get("GITHUB_OUTPUT")!,
+              `verdict=${payload.verdict}\n`,
+              { append: true },
+            );
+            const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
+            console.log(`gemini verdict: ${payload.verdict}, gaps: ${gaps.length}`);
 
       - uses: actions/upload-artifact@v7
         with:
@@ -361,26 +364,27 @@ jobs:
 
             # OUTPUT FORMAT (strict)
 
-            Write a single file at the path you were told to use as `output-file`. Begin the file with YAML frontmatter:
+            Write a single file at the path you were told to use as `output-file`. Begin the file with an HTML-comment frontmatter block. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line):
 
-            ---
-            verdict: pass | fail
-            rationale: |
-              one paragraph
-            gaps:
-              - title: "[ci-meta] short description ≤60 chars"
-                body: |
-                  Goal-spec form. Describe the problem only — what's missing,
-                  what's broken, what symptom is observed, which §-reference
-                  the gap maps to. Concrete technical detail is welcome ONLY
-                  insofar as it characterizes the problem.
-                  Do NOT propose a solution, fix, or implementation path.
-                  Solutions belong in tech-spec sub-issues, opened by the
-                  promotion pipeline once an org member assigns themselves.
-              - title: "..."
-                body: |
-                  ...
-            ---
+            <!--
+            vsdd-ci-meta:
+              verdict: pass | fail
+              rationale: |
+                one paragraph
+              gaps:
+                - title: "[ci-meta] short description ≤60 chars"
+                  body: |
+                    Goal-spec form. Describe the problem only — what's missing,
+                    what's broken, what symptom is observed, which §-reference
+                    the gap maps to. Concrete technical detail is welcome ONLY
+                    insofar as it characterizes the problem.
+                    Do NOT propose a solution, fix, or implementation path.
+                    Solutions belong in tech-spec sub-issues, opened by the
+                    promotion pipeline once an org member assigns themselves.
+                - title: "..."
+                  body: |
+                    ...
+            -->
 
             (free-form summary may follow but is ignored by the parser)
 
@@ -393,49 +397,45 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
-        run: |
-          python3 - <<'PY'
-          import re, json, sys, os, yaml
-          if not os.path.exists('claude-eval.md'):
-              print('::error::claude-eval.md not produced'); sys.exit(1)
-          with open('claude-eval.md') as f:
-              raw = f.read()
-          # Primary: strict frontmatter block at the top.
-          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n?(.*)$', raw, re.DOTALL)
-          fm = None
-          summary = raw
-          if m:
-              try:
-                  fm = yaml.safe_load(m.group(1))
-                  summary = m.group(2).strip()
-              except yaml.YAMLError as e:
-                  print(f'WARN: frontmatter present but invalid YAML: {e}', file=sys.stderr)
-                  fm = None
-          # Fallback 1: an embedded frontmatter block anywhere in the doc.
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m2 = re.search(r'\n---\s*\n(verdict\s*:\s*(?:pass|fail).*?)\n---\s*\n', raw, re.DOTALL)
-              if m2:
-                  try:
-                      fm = yaml.safe_load(m2.group(1))
-                  except yaml.YAMLError:
-                      fm = None
-          # Fallback 2: scan for a bare 'verdict: pass|fail' line.
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m3 = re.search(r'(?im)^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b', raw)
-              if m3:
-                  fm = {'verdict': m3.group(1).lower(), 'rationale': '(verdict extracted from prose; frontmatter missing)', 'gaps': []}
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              print('::error::Could not extract a verdict from claude output (no frontmatter, no fallback match).', file=sys.stderr)
-              print('--- raw output ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
-          fm['reviewer'] = 'claude'
-          fm['summary'] = summary
-          with open('claude-eval.json', 'w') as f:
-              json.dump(fm, f, indent=2)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"verdict={fm['verdict']}\n")
-          print(f"claude verdict: {fm['verdict']}, gaps: {len(fm.get('gaps') or [])}")
-          PY
+        uses: ./.github/actions/script/github-deno
+        with:
+          script: |
+            const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+            const raw = await Deno.readTextFile("claude-eval.md");
 
+            // Find the vsdd-ci-meta block. Block content has
+            // {verdict, rationale, gaps}; we attach reviewer + summary
+            // and write the JSON for downstream consensus consumption.
+            let payload = null;
+            for (const block of fm.parse(raw)) {
+              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+              const inner = (block as Record<string, unknown>)["vsdd-ci-meta"];
+              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
+              const v = (inner as Record<string, unknown>).verdict;
+              if (v !== "pass" && v !== "fail") continue;
+              payload = inner as Record<string, unknown>;
+              break;
+            }
+            if (!payload) {
+              console.error("::error::Could not extract a vsdd-ci-meta verdict from claude output.");
+              console.error("--- raw output ---");
+              console.error(raw);
+              core.setFailed("verdict extraction failed");
+              return;
+            }
+            // Summary is whatever the agent appended after the closing -->
+            const closeIdx = raw.indexOf("-->");
+            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
+
+            const out = { ...payload, reviewer: "claude", summary };
+            await Deno.writeTextFile("claude-eval.json", JSON.stringify(out, null, 2));
+            await Deno.writeTextFile(
+              Deno.env.get("GITHUB_OUTPUT")!,
+              `verdict=${payload.verdict}\n`,
+              { append: true },
+            );
+            const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
+            console.log(`claude verdict: ${payload.verdict}, gaps: ${gaps.length}`);
       - uses: actions/upload-artifact@v7
         with:
           name: claude-eval
@@ -864,10 +864,11 @@ jobs:
           # tracked issue → opened_count == 0) pass cleanly even when the
           # underlying consensus is fail — the dedup signal IS the "already
           # known" signal.
-          sys.path.insert(0, os.path.join(os.environ.get('GITHUB_WORKSPACE', '.'), '.github', 'scripts'))
-          from consensus import decide_exit_code
+          # Note: consensus.py logic ported to vsdd/ci-meta/consensus.ts.
+          # Inlined here to keep the consensus-state writing in one Python
+          # block; equivalent semantics: rc = 0 iff verdict==pass AND opened_count==0.
           verdict_str = 'fail' if fail else 'pass'
-          rc = decide_exit_code(verdict_str, opened_count)
+          rc = 1 if (verdict_str == 'fail' or opened_count > 0) else 0
           status = 'FAIL' if rc != 0 else 'PASS'
           print(f"\n{status}: {opened_count} gap issue(s) opened, {skipped_count} skipped as duplicates.")
           sys.exit(rc)

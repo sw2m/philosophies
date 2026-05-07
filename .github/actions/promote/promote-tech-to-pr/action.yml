@@ -48,6 +48,11 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Set up Deno (for vsdd/phase-2/frontmatter.ts)
+      uses: denoland/setup-deno@v2
+      with:
+        deno-version: v2.x
+
     - name: Verify org membership of the owner
       shell: bash
       env:
@@ -251,17 +256,19 @@ runs:
         # CRITICAL OUTPUT FORMAT (read FIRST)
 
         At the END of your response, after you have used your tools to write
-        the test files, output a YAML frontmatter block summarizing what you
-        did. The block must be the LAST thing in your response, delimited
-        by `---` lines:
+        the test files, output an HTML-comment frontmatter block summarizing
+        what you did. The block must be the LAST thing in your response,
+        with `<!--` and `-->` each on their own lines (no content sharing
+        the wrapper line):
 
-        ---
-        new_test_files:
-          - path/to/new_test_file_1.ext
-          - path/to/new_test_file_2.ext
-        new_test_command: "exact command to run ONLY the new tests"
-        regression_test_command: "exact command to run ONLY the pre-existing tests"
-        ---
+        <!--
+        vsdd-phase-2:
+          new_test_files:
+            - path/to/new_test_file_1.ext
+            - path/to/new_test_file_2.ext
+          new_test_command: "exact command to run ONLY the new tests"
+          regression_test_command: "exact command to run ONLY the pre-existing tests"
+        -->
 
         Both commands must exit 0 on pass, non-zero on fail. They will be
         run from the repo root. They are how Phase 3 (Red Gate) and Phase 5
@@ -318,7 +325,7 @@ runs:
           # #65) and prints declared files. Use $GITHUB_ACTION_PATH so
           # the script resolves against THIS composite action's checkout
           # (philosophies), not the consumer's repo checkout.
-          NEW_FILES=$(python3 "${GITHUB_ACTION_PATH}/../../scripts/parse-phase2-frontmatter.py" "$PHASE2_OUTPUT" "${RUNNER_TEMP}/phase2-meta.json" 2>${RUNNER_TEMP}/phase2-parse-err.log) || {
+          NEW_FILES=$(deno run --allow-read --allow-write "${GITHUB_ACTION_PATH}/../../scripts/vsdd/phase-2/frontmatter.ts" "$PHASE2_OUTPUT" "${RUNNER_TEMP}/phase2-meta.json" 2>${RUNNER_TEMP}/phase2-parse-err.log) || {
             last_failure="Phase 2 frontmatter parse failed (attempt $attempt). $(cat ${RUNNER_TEMP}/phase2-parse-err.log)"
             echo "::warning::$last_failure"
             continue
