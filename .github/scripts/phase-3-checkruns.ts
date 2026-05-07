@@ -99,7 +99,7 @@ export class CheckRun {
   constructor(
     private readonly github: Github,
     private readonly context: Context,
-    private readonly headSha: string,
+    private readonly sha: string,
     public readonly displayName: string,
   ) {}
 
@@ -113,7 +113,7 @@ export class CheckRun {
       owner: this.context.repo.owner,
       repo: this.context.repo.repo,
       name: this.displayName,
-      head_sha: this.headSha,
+      head_sha: this.sha,
       status,
       output: {
         title: title(round, "pending"),
@@ -142,11 +142,10 @@ export class CheckRun {
   }
 
   /** PATCH the started Check Run to `cancelled`. For workflow-cancellation cleanup hooks. */
-  async cancel(opts: { round?: number } = {}): Promise<void> {
+  async cancel(): Promise<void> {
     if (this.id === undefined) {
       throw new Error(`CheckRun ${this.displayName}: cancel() called before start()`);
     }
-    const { round = 1 } = opts;
     await this.github.rest.checks.update({
       owner: this.context.repo.owner,
       repo: this.context.repo.repo,
@@ -154,7 +153,7 @@ export class CheckRun {
       status: "completed",
       conclusion: "cancelled",
       output: {
-        title: `round ${round}: cancelled mid-run`,
+        title: "cancelled mid-run",
         summary: "Workflow cancelled.",
       },
     });
@@ -171,7 +170,7 @@ export class CheckRun {
       owner: this.context.repo.owner,
       repo: this.context.repo.repo,
       name: this.displayName,
-      head_sha: this.headSha,
+      head_sha: this.sha,
       status: "completed",
       conclusion,
       output: { title: t, summary: s },
@@ -195,30 +194,30 @@ export class Phase3Category {
     private readonly github: Github,
     private readonly context: Context,
     public readonly slug: string,
-    private readonly headSha: string,
+    private readonly sha: string,
   ) {
     const cat = SYMBOLS.categories[slug];
     if (!cat) throw new Error(`Unknown category slug: ${slug}`);
     this.displayName = cat.display;
   }
 
-  /** Per-reviewer Check Run, named like `Phase 3 / Multi-word symbols (§IX) — gemini`. */
-  reviewerCheck(reviewer: string): CheckRun {
+  /** Per-reviewer Check Run factory, named like `Phase 3 / Multi-word symbols (§IX) — gemini`. */
+  reviewer(reviewer: string): CheckRun {
     return new CheckRun(
       this.github,
       this.context,
-      this.headSha,
+      this.sha,
       `${this.displayName} — ${reviewer}`,
     );
   }
 
-  /** Per-category aggregate Check Run, named like `Phase 3 / Multi-word symbols (§IX)`. */
-  aggregateCheck(): CheckRun {
-    return new CheckRun(this.github, this.context, this.headSha, this.displayName);
+  /** Per-category aggregate Check Run factory, named like `Phase 3 / Multi-word symbols (§IX)`. */
+  aggregate(): CheckRun {
+    return new CheckRun(this.github, this.context, this.sha, this.displayName);
   }
 
   /** Submit the per-category aggregate from two reviewer verdicts. One-shot completed. */
-  async submitAggregate(
+  async submit(
     g: string,
     c: string,
     opts: Omit<CompleteOpts, "verdict"> = {},
@@ -226,7 +225,7 @@ export class Phase3Category {
     const conclusion = conclude(g, c);
     const verdict =
       conclusion === "success" ? "pass" : conclusion === "failure" ? "fail" : "pending";
-    await this.aggregateCheck().submit(conclusion, { ...opts, verdict });
+    await this.aggregate().submit(conclusion, { ...opts, verdict });
   }
 
   /** Mark the category inapplicable to this PR. Posts a single per-category aggregate.
@@ -236,7 +235,7 @@ export class Phase3Category {
    */
   async markInapplicable(opts: { round?: number } = {}): Promise<void> {
     const { round = 1 } = opts;
-    await this.aggregateCheck().submit("success", {
+    await this.aggregate().submit("success", {
       title: `round ${round}: pass (inapplicable)`,
       summary: "Category not applicable to this PR.",
     });
