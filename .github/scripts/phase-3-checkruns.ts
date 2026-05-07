@@ -1,30 +1,35 @@
 // Per-(category, reviewer) Check Runs API helpers for Phase 3 (#181 / #185).
 //
-// Designed to be `require()`'d from inside a `github-deno` action's `script:`
+// Designed to be imported from inside a `github-deno` action's `script:`
 // input. The caller's user-script gets `github` (Octokit) and `context`
 // injected by the runner; this module is the deterministic data plumbing
 // over the Check Runs API.
+//
+// Source-of-truth: category slugs and display names come from the canonical
+// catalog at `.github/assets/symbols.yaml` via `./symbols.ts`. No locally-
+// defined slug / verdict / conclusion enums — those would just duplicate
+// the catalog and be drift bait.
 //
 // Pure-core / effectful-shell split (§I Phase 1b):
 //   - `name`, `conclude`, `title`, `summary` are pure data transforms.
 //   - `create`, `update`, `cancel`, `aggregate`, `inapplicable` make API
 //     calls and are the I/O boundary.
 
-export const CATEGORIES = {
-  "multi-word-symbols": "Phase 3 / Multi-word symbols (§IX)",
-  "error-structure": "Phase 3 / Error structure (§IX)",
-  "spec-discipline": "Phase 3 / Spec discipline (§VII)",
-  "security-surface": "Phase 3 / Security surface (§II)",
-  "spec-gaps": "Phase 3 / Spec gaps (§II)",
-  "purity-boundary": "Phase 3 / Purity boundary (§II)",
-} as const;
+import { SYMBOLS } from "./symbols.ts";
 
-export type Slug = keyof typeof CATEGORIES;
-export type Reviewer = "gemini" | "claude";
-export type Verdict = "pass" | "fail" | "pending";
-export type Conclusion = "success" | "failure" | "action_required";
+// Octokit-shipped types instead of locally-invented ones. Aligned with
+// what the github-deno runner actually injects (npm:@actions/github).
+import type { context, getOctokit } from "npm:@actions/github@^6";
+import type { Endpoints } from "npm:@octokit/types@^14";
 
-export const GLOBAL_AGGREGATE = "Phase 3 / Aggregate";
+type Github = ReturnType<typeof getOctokit>;
+type Context = typeof context;
+
+// Check Runs API conclusion enum — taken directly from the endpoint's
+// parameter type, not re-typed locally.
+type Conclusion = NonNullable<
+  Endpoints["POST /repos/{owner}/{repo}/check-runs"]["parameters"]["conclusion"]
+>;
 
 export type TitleOpts = {
   stale?: boolean;
@@ -48,20 +53,10 @@ export type AggregateOpts = TitleOpts & {
   body?: string;
 };
 
-// `github` and `context` shapes intentionally use loose `any` here — these
-// objects are injected by `actions/github-script` / `github-deno` at runtime
-// and have stable enough surface (`github.rest.checks.{create,update}`,
-// `context.repo.{owner,repo}`) that adding strict types would mostly chase
-// upstream drift. Tighten if/when @octokit/types is pulled in directly.
-// deno-lint-ignore no-explicit-any
-export type Github = any;
-// deno-lint-ignore no-explicit-any
-export type Context = any;
-
-export function name(slug: Slug, reviewer: Reviewer | null = null): string {
-  const base = CATEGORIES[slug];
-  if (!base) throw new Error(`Unknown category slug: ${slug}`);
-  return reviewer ? `${base} — ${reviewer}` : base;
+export function name(slug: string, reviewer: string | null = null): string {
+  const cat = SYMBOLS.categories[slug];
+  if (!cat) throw new Error(`Unknown category slug: ${slug}`);
+  return reviewer ? `${cat.display} — ${reviewer}` : cat.display;
 }
 
 export function conclude(g: string, c: string): Conclusion {
@@ -90,8 +85,8 @@ export function summary(body: string, opts: TitleOpts = {}): string {
 export async function create(
   github: Github,
   context: Context,
-  slug: Slug,
-  reviewer: Reviewer,
+  slug: string,
+  reviewer: string,
   sha: string,
   opts: CreateOpts = {},
 ): Promise<number> {
@@ -151,7 +146,7 @@ export async function cancel(
 export async function aggregate(
   github: Github,
   context: Context,
-  slug: Slug,
+  slug: string,
   sha: string,
   g: string,
   c: string,
@@ -177,7 +172,7 @@ export async function aggregate(
 export async function inapplicable(
   github: Github,
   context: Context,
-  slug: Slug,
+  slug: string,
   sha: string,
 ): Promise<void> {
   const n = name(slug, null);
