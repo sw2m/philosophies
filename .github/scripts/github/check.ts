@@ -5,11 +5,13 @@
 //
 // Designed to be imported from inside a `github-deno` action's `script:`
 // input. The caller's user-script gets `github` (Octokit) and `context`
-// injected by the runner.
+// injected by the runner; bundle them into an `OctokitContext` and pass
+// to `Check`'s constructor.
 //
 // Phase-3-specific concerns (the catalog, per-(slug, reviewer) naming,
-// verdict aggregation) live in `./phase-3-category.ts`. This file is
-// agnostic to caller domain.
+// verdict aggregation) live in `../vsdd/phase-3-check.ts`. VSDD review-
+// cycle formatting (round/verdict, terminal-stated annotations) lives in
+// `../vsdd/check.ts`. This file is agnostic to caller domain.
 
 import type { context, getOctokit } from "npm:@actions/github@^6";
 import type { Endpoints } from "npm:@octokit/types@^14";
@@ -17,31 +19,32 @@ import type { Endpoints } from "npm:@octokit/types@^14";
 type Github = ReturnType<typeof getOctokit>;
 type Context = typeof context;
 
-// API-shipped enums + entity shape, pulled from the Check Runs endpoint
-// definitions. Literal unions live in @octokit/types — not duplicated here.
+// API-shipped enums + entity shape. Literal unions live in @octokit/types —
+// not duplicated here.
 type CreateOp = Endpoints["POST /repos/{owner}/{repo}/check-runs"];
 export type Conclusion = NonNullable<CreateOp["parameters"]["conclusion"]>;
 export type Status = NonNullable<CreateOp["parameters"]["status"]>;
 export type CheckRun = CreateOp["response"]["data"];
 
-export interface TitleOpts {
-  stale?: boolean;
-  terminal?: string;
-  head?: string;
+/** Bundle of (github Octokit, actions context). The two values always travel
+ *  together; passing one struct keeps constructor signatures sane. */
+export interface OctokitContext {
+  github: Github;
+  context: Context;
 }
 
 export interface StartOpts {
-  round?: number;
   status?: Status;
+  title?: string;
+  summary?: string;
 }
 
-export interface CompleteOpts extends TitleOpts {
-  round?: number;
-  verdict?: string;
-  body?: string;
-  /** Override the derived title; bypasses `round`/`verdict` formatting. */
+/** Input for `complete()` and `submit()` — single object containing the
+ *  conclusion and any output fields. Subclasses widen this with extra
+ *  formatting keys (round, verdict, stale-annotation SHAs, etc.). */
+export interface CheckResult {
+  conclusion: Conclusion;
   title?: string;
-  /** Override the derived summary; bypasses `body` formatting. */
   summary?: string;
 }
 
@@ -49,42 +52,15 @@ export interface CompleteOpts extends TitleOpts {
  * One Check Run. `implements CheckRun` — instance is the entity after
  * `start()` / `submit()` populates its schema fields from the API response.
  *
- * Static methods carry the output formatting helpers (`title`, `summary`)
- * since they're concerns of the Check Run's `output` field shape.
- *
  * Lifecycle:
- *   - `start()` then `complete()` / `cancel()` for in-progress→completed.
- *   - `submit()` for one-shot completed creation (aggregate / inapplicable).
+ *   - `start()` then `complete(result)` / `cancel()` for in-progress→terminal.
+ *   - `submit(result)` for one-shot completed creation.
  *
  * Each transition replaces the instance's CheckRun fields with the latest
  * API response, so a consumer reading `check.id`, `check.status`,
- * `check.conclusion`, etc. always gets the freshest server-side state.
+ * `check.conclusion`, etc. always sees the freshest server-side state.
  */
 export class Check implements CheckRun {
-  /** Format an `output.title` string. Throws if `stale` is set without the SHAs it needs. */
-  static title(round: number, verdict: string, opts: TitleOpts = {}): string {
-    const { stale, terminal, head } = opts;
-    if (stale) {
-      if (!terminal || !head) {
-        throw new Error("Check.title(): stale requires both `terminal` and `head` SHA inputs");
-      }
-      return `terminal-stated at ${terminal.slice(0, 8)}; HEAD ${head.slice(0, 8)} not reviewed`;
-    }
-    return `round ${round}: ${verdict}`;
-  }
-
-  /** Format an `output.summary` string with optional stale-prefix annotation. */
-  static summary(body: string, opts: TitleOpts = {}): string {
-    const { stale, terminal } = opts;
-    if (stale) {
-      if (!terminal) {
-        throw new Error("Check.summary(): stale requires `terminal` SHA input");
-      }
-      return `Stale: this category terminal-stated at ${terminal.slice(0, 8)}; the body below is the prior review.\n\n${body}`;
-    }
-    return body;
-  }
-
   // CheckRun schema fields. Set in constructor:
   head_sha: string;
   name: string;
@@ -106,36 +82,32 @@ export class Check implements CheckRun {
   pull_requests!: CheckRun["pull_requests"];
   deployment?: CheckRun["deployment"];
 
-  // Internal lifecycle flag — distinct from `id`, which TS believes is always
-  // a number once declared. Lets us guard double-`start()` cleanly.
-  private created = false;
+  // Internal lifecycle flag — guards against double-`start()`,
+  // `complete()` before `start()`, and `submit()` on already-created.
+  protected created = false;
 
   constructor(
-    private readonly github: Github,
-    private readonly context: Context,
-    sha: string,
+    protected readonly api: OctokitContext,
+    head_sha: string,
     name: string,
   ) {
-    this.head_sha = sha;
+    this.head_sha = head_sha;
     this.name = name;
   }
 
-  /** POST a new Check Run in `in_progress` status (default). Hydrates instance. */
+  /** POST a new Check Run in `in_progress` status. Hydrates instance. */
   async start(opts: StartOpts = {}): Promise<this> {
     if (this.created) {
       throw new Error(`Check ${this.name}: start() called twice on the same instance`);
     }
-    const { round = 1, status = "in_progress" } = opts;
-    const res = await this.github.rest.checks.create({
-      owner: this.context.repo.owner,
-      repo: this.context.repo.repo,
+    const { status = "in_progress", title = "starting", summary = `Check run started for ${this.name}` } = opts;
+    const res = await this.api.github.rest.checks.create({
+      owner: this.api.context.repo.owner,
+      repo: this.api.context.repo.repo,
       name: this.name,
       head_sha: this.head_sha,
       status,
-      output: {
-        title: Check.title(round, "pending"),
-        summary: `Check run started for ${this.name}`,
-      },
+      output: { title, summary },
     });
     Object.assign(this, res.data);
     this.created = true;
@@ -143,59 +115,47 @@ export class Check implements CheckRun {
   }
 
   /** PATCH the started Check Run to a terminal conclusion. Requires `start()` first. */
-  async complete(conclusion: Conclusion, opts: CompleteOpts = {}): Promise<this> {
+  async complete(result: CheckResult): Promise<this> {
     if (!this.created) {
       throw new Error(`Check ${this.name}: complete() called before start()`);
     }
-    const t = opts.title ?? Check.title(opts.round ?? 1, opts.verdict ?? conclusion, opts);
-    const s = opts.summary ?? Check.summary(opts.body ?? "", opts);
-    const res = await this.github.rest.checks.update({
-      owner: this.context.repo.owner,
-      repo: this.context.repo.repo,
+    const { conclusion, title = String(conclusion), summary = "" } = result;
+    const res = await this.api.github.rest.checks.update({
+      owner: this.api.context.repo.owner,
+      repo: this.api.context.repo.repo,
       check_run_id: this.id,
       status: "completed",
       conclusion,
-      output: { title: t, summary: s },
+      output: { title, summary },
     });
     Object.assign(this, res.data);
     return this;
   }
 
-  /** PATCH the started Check Run to `cancelled`. For workflow-cancellation cleanup hooks. */
+  /** Convenience: `complete({ conclusion: "cancelled", … })` with the canonical
+   *  cancellation strings. For workflow-cancellation cleanup hooks. */
   async cancel(): Promise<this> {
-    if (!this.created) {
-      throw new Error(`Check ${this.name}: cancel() called before start()`);
-    }
-    const res = await this.github.rest.checks.update({
-      owner: this.context.repo.owner,
-      repo: this.context.repo.repo,
-      check_run_id: this.id,
-      status: "completed",
+    return this.complete({
       conclusion: "cancelled",
-      output: { title: "cancelled mid-run", summary: "Workflow cancelled." },
+      title: "cancelled mid-run",
+      summary: "Workflow cancelled.",
     });
-    Object.assign(this, res.data);
-    return this;
   }
 
-  /**
-   * One-shot: POST a Check Run already in `completed` state. For aggregate
-   * and inapplicable flows where the start→complete split adds nothing.
-   */
-  async submit(conclusion: Conclusion, opts: CompleteOpts = {}): Promise<this> {
+  /** One-shot: POST a Check Run already in `completed` state. Hydrates instance. */
+  async submit(result: CheckResult): Promise<this> {
     if (this.created) {
       throw new Error(`Check ${this.name}: submit() called on an already-created Check`);
     }
-    const t = opts.title ?? Check.title(opts.round ?? 1, opts.verdict ?? conclusion, opts);
-    const s = opts.summary ?? Check.summary(opts.body ?? "", opts);
-    const res = await this.github.rest.checks.create({
-      owner: this.context.repo.owner,
-      repo: this.context.repo.repo,
+    const { conclusion, title = String(conclusion), summary = "" } = result;
+    const res = await this.api.github.rest.checks.create({
+      owner: this.api.context.repo.owner,
+      repo: this.api.context.repo.repo,
       name: this.name,
       head_sha: this.head_sha,
       status: "completed",
       conclusion,
-      output: { title: t, summary: s },
+      output: { title, summary },
     });
     Object.assign(this, res.data);
     this.created = true;
