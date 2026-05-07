@@ -201,6 +201,7 @@ runs:
         github-token: ${{ inputs.github-token }}
         script: |
           const { Decompose } = await import("./.github/scripts/vsdd/promote/decompose.ts");
+          const { Spec } = await import("./.github/scripts/vsdd/promote/spec.ts");
           const issueNumber = ${{ inputs.issue-number }};
           const ownerLogin = "${{ inputs.owner-login }}";
           const [owner, repo] = "${{ github.repository }}".split("/");
@@ -215,25 +216,16 @@ runs:
 
           const opened: Array<{ title: string; url: string }> = [];
           for (const { title, body } of specs) {
-            const footer =
-              `\n\n---\n` +
-              `_Tech-spec sub-issue of #${issueNumber} (goal). Opened by ` +
-              "`promote-goal-to-tech` after @" + ownerLogin + " self-assigned the goal._\n" +
-              "_Assign yourself to this issue to start the 5-phase tech→PR pipeline._\n";
-            let r;
+            const data = { body, parent: issueNumber, owner: ownerLogin };
+            const spec = new Spec({ api: github, owner, repo });
             try {
-              r = await github.rest.issues.create({
-                owner, repo, title, body: body + footer, labels: ["spec:tech"],
-              });
+              await spec.post(data, { title, labels: ["spec:tech"] });
             } catch {
               // Label may be missing on a downstream repo. Retry without.
-              r = await github.rest.issues.create({
-                owner, repo, title, body: body + footer,
-              });
+              await spec.post(data, { title });
             }
-            const url = r.data.html_url;
-            console.log(`  opened: ${url}`);
-            opened.push({ title, url });
+            console.log(`  opened: ${spec.html_url}`);
+            opened.push({ title, url: spec.html_url });
           }
 
           // Mustache-rendered parent-goal comment via the Decompose subclass.
