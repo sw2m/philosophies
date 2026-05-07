@@ -1,0 +1,77 @@
+name: 'frontmatter-extract'
+description: |
+  Generic HTML-comment YAML frontmatter extractor. Parses every well-formed
+  block in `body-file`, applies `query` (a jq expression) to the parsed
+  blocks array, and writes each match to a separate file in `out-dir`.
+  Returns the JSON array of written paths as the `paths` output and the
+  count as `count`.
+
+  Multiple matches → multiple files. The naming scheme is configurable:
+    - `index`  — 0, 1, 2, ... (default; ordered, simple)
+    - `sha`    — sha256-prefix (content-addressed; same data → same filename)
+    - `alpha`  — a, b, ..., z, aa, ab, ... (human-readable iteration)
+
+  File extension follows `format` (`json` default; `yaml` available).
+
+  Format-agnostic: works on any HTML-comment YAML frontmatter (not VSDD-
+  specific). The jq query decides which blocks count as a match — the
+  caller is responsible for `select(. != null)` / null-filtering as
+  appropriate.
+
+inputs:
+  body-file:
+    description: 'Path to the body file to scan for HTML-comment frontmatter.'
+    required: true
+  query:
+    description: 'jq expression applied to the parsed-blocks JSON array.'
+    required: true
+  out-dir:
+    description: 'Directory to write per-match files into. Created if missing.'
+    required: true
+  format:
+    description: 'Per-match file format: json (default) or yaml.'
+    required: false
+    default: 'json'
+  naming:
+    description: 'Filename stem strategy: index | sha | alpha.'
+    required: false
+    default: 'index'
+  deno-version:
+    description: 'Deno version installed via setup-deno.'
+    required: false
+    default: 'v2.x'
+
+outputs:
+  paths:
+    description: 'JSON array of file paths written to out-dir.'
+    value: ${{ steps.run.outputs.paths }}
+  count:
+    description: 'Number of files written (jq-readable from `paths`).'
+    value: ${{ steps.run.outputs.count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: denoland/setup-deno@v2
+      with:
+        deno-version: ${{ inputs.deno-version }}
+
+    - id: run
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Resolve extract.ts via GITHUB_ACTION_PATH so this works whether
+        # the consumer is the philosophies repo itself or a downstream
+        # repo vendoring philosophies under .vsdd-philosophies/.
+        SCRIPT="${GITHUB_ACTION_PATH}/../../../scripts/extract.ts"
+
+        out=$(deno run --allow-read --allow-write --allow-run \
+          "$SCRIPT" \
+          --query "${{ inputs.query }}" \
+          --out-dir "${{ inputs.out-dir }}" \
+          --format "${{ inputs.format }}" \
+          --naming "${{ inputs.naming }}" \
+          "${{ inputs.body-file }}")
+
+        echo "paths=$out" >> "$GITHUB_OUTPUT"
+        echo "count=$(echo "$out" | jq 'length')" >> "$GITHUB_OUTPUT"
