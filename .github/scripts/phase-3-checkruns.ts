@@ -2,68 +2,41 @@
 //
 // Designed to be imported from inside a `github-deno` action's `script:`
 // input. The caller's user-script gets `github` (Octokit) and `context`
-// injected by the runner; this module is the deterministic data plumbing
-// over the Check Runs API.
+// injected by the runner; this module wraps the Check Runs API in
+// instance-stateful objects so the create→update id-passing dance is
+// internal to the abstraction.
 //
 // Source-of-truth: category slugs and display names come from the canonical
-// catalog at `.github/assets/symbols.yaml` via `./symbols.ts`. No locally-
-// defined slug / verdict / conclusion enums — those would just duplicate
-// the catalog and be drift bait.
+// catalog at `.github/assets/symbols.yaml` via `./symbols.ts`. Octokit-shipped
+// types (Conclusion, Status, etc.) come from npm:@octokit/types and
+// npm:@actions/github — no locally-invented enums.
 //
-// Pure-core / effectful-shell split (§I Phase 1b):
-//   - `name`, `conclude`, `title`, `summary` are pure data transforms.
-//   - `create`, `update`, `cancel`, `aggregate`, `inapplicable` make API
-//     calls and are the I/O boundary.
+// Layering:
+//   - `CheckRun`         — generic primitive, one instance per Check Run.
+//   - `Phase3Category`   — domain layer, composes CheckRun against the
+//                          catalog's per-(slug, reviewer) naming convention.
+//   - `title` / `summary` / `conclude` — pure data transforms exported as
+//     free functions; no state.
 
 import { SYMBOLS } from "./symbols.ts";
-
-// Octokit-shipped types instead of locally-invented ones. Aligned with
-// what the github-deno runner actually injects (npm:@actions/github).
 import type { context, getOctokit } from "npm:@actions/github@^6";
 import type { Endpoints } from "npm:@octokit/types@^14";
 
 type Github = ReturnType<typeof getOctokit>;
 type Context = typeof context;
 
-// Check Runs API conclusion enum — taken directly from the endpoint's
-// parameter type, not re-typed locally.
-type Conclusion = NonNullable<
-  Endpoints["POST /repos/{owner}/{repo}/check-runs"]["parameters"]["conclusion"]
->;
+// API-shipped enums — the literal unions live in @octokit/types where they
+// belong, not duplicated locally.
+type CreateParams = Endpoints["POST /repos/{owner}/{repo}/check-runs"]["parameters"];
+export type Conclusion = NonNullable<CreateParams["conclusion"]>;
+export type Status = NonNullable<CreateParams["status"]>;
 
-export type TitleOpts = {
+// ─── Pure helpers ──────────────────────────────────────────────────────────
+
+export interface TitleOpts {
   stale?: boolean;
   terminal?: string;
   head?: string;
-};
-
-export type CreateOpts = {
-  round?: number;
-  status?: "queued" | "in_progress" | "completed";
-};
-
-export type UpdateOpts = TitleOpts & {
-  round?: number;
-  verdict?: string;
-  body?: string;
-};
-
-export type AggregateOpts = TitleOpts & {
-  round?: number;
-  body?: string;
-};
-
-export function name(slug: string, reviewer: string | null = null): string {
-  const cat = SYMBOLS.categories[slug];
-  if (!cat) throw new Error(`Unknown category slug: ${slug}`);
-  return reviewer ? `${cat.display} — ${reviewer}` : cat.display;
-}
-
-export function conclude(g: string, c: string): Conclusion {
-  if (g === "fail" || c === "fail") return "failure";
-  if (g === "pending" || c === "pending") return "action_required";
-  if (g === "pass" && c === "pass") return "success";
-  return "action_required";
 }
 
 export function title(round: number, verdict: string, opts: TitleOpts = {}): string {
@@ -82,107 +55,176 @@ export function summary(body: string, opts: TitleOpts = {}): string {
   return body;
 }
 
-export async function create(
-  github: Github,
-  context: Context,
-  slug: string,
-  reviewer: string,
-  sha: string,
-  opts: CreateOpts = {},
-): Promise<number> {
-  const { round = 1, status = "in_progress" } = opts;
-  const n = name(slug, reviewer);
-  const res = await github.rest.checks.create({
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    name: n,
-    head_sha: sha,
-    status,
-    output: {
-      title: title(round, "pending"),
-      summary: `Check run started for ${n}`,
-    },
-  });
-  return res.data.id;
+export function conclude(g: string, c: string): Conclusion {
+  if (g === "fail" || c === "fail") return "failure";
+  if (g === "pending" || c === "pending") return "action_required";
+  if (g === "pass" && c === "pass") return "success";
+  return "action_required";
 }
 
-export async function update(
-  github: Github,
-  context: Context,
-  id: number,
-  conclusion: Conclusion,
-  opts: UpdateOpts = {},
-): Promise<void> {
-  const { round = 1, verdict, body = "", stale, terminal, head } = opts;
-  const t = title(round, verdict ?? conclusion, { stale, terminal, head });
-  const s = summary(body, { stale, terminal });
-  await github.rest.checks.update({
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    check_run_id: id,
-    status: "completed",
-    conclusion,
-    output: { title: t, summary: s },
-  });
+// ─── CheckRun: generic primitive ───────────────────────────────────────────
+
+export interface StartOpts {
+  round?: number;
+  status?: Status;
 }
 
-export async function cancel(
-  github: Github,
-  context: Context,
-  id: number,
-  opts: { round?: number } = {},
-): Promise<void> {
-  const { round = 1 } = opts;
-  await github.rest.checks.update({
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    check_run_id: id,
-    status: "completed",
-    conclusion: "cancelled",
-    output: { title: `round ${round}: cancelled mid-run`, summary: "Workflow cancelled." },
-  });
+export interface CompleteOpts extends TitleOpts {
+  round?: number;
+  verdict?: string;
+  body?: string;
+  /** Override the derived title; bypasses `round`/`verdict` formatting. */
+  title?: string;
+  /** Override the derived summary; bypasses `body` formatting. */
+  summary?: string;
 }
 
-export async function aggregate(
-  github: Github,
-  context: Context,
-  slug: string,
-  sha: string,
-  g: string,
-  c: string,
-  opts: AggregateOpts = {},
-): Promise<void> {
-  const conclusion = conclude(g, c);
-  const n = name(slug, null);
-  const { round = 1, body = "", stale, terminal, head } = opts;
-  const verdict = conclusion === "success" ? "pass" : conclusion === "failure" ? "fail" : "pending";
-  const t = title(round, verdict, { stale, terminal, head });
-  const s = summary(body, { stale, terminal });
-  await github.rest.checks.create({
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    name: n,
-    head_sha: sha,
-    status: "completed",
-    conclusion,
-    output: { title: t, summary: s },
-  });
+/**
+ * One Check Run. Encapsulates the create→update lifecycle so consumers
+ * don't carry a numeric id between calls.
+ *
+ * Use `start()` then `complete()` / `cancel()` for the in-progress→completed
+ * pattern. Use `submit()` for one-shot completed creations (aggregate /
+ * inapplicable / cancellation cleanup hooks).
+ */
+export class CheckRun {
+  private id?: number;
+
+  constructor(
+    private readonly github: Github,
+    private readonly context: Context,
+    private readonly headSha: string,
+    public readonly displayName: string,
+  ) {}
+
+  /** POST a new Check Run in `in_progress` status (default). Returns the id. */
+  async start(opts: StartOpts = {}): Promise<number> {
+    const { round = 1, status = "in_progress" } = opts;
+    const res = await this.github.rest.checks.create({
+      owner: this.context.repo.owner,
+      repo: this.context.repo.repo,
+      name: this.displayName,
+      head_sha: this.headSha,
+      status,
+      output: {
+        title: title(round, "pending"),
+        summary: `Check run started for ${this.displayName}`,
+      },
+    });
+    this.id = res.data.id;
+    return this.id;
+  }
+
+  /** PATCH the started Check Run to a terminal conclusion. Requires `start()` first. */
+  async complete(conclusion: Conclusion, opts: CompleteOpts = {}): Promise<void> {
+    if (this.id === undefined) {
+      throw new Error(`CheckRun ${this.displayName}: complete() called before start()`);
+    }
+    const t = opts.title ?? title(opts.round ?? 1, opts.verdict ?? conclusion, opts);
+    const s = opts.summary ?? summary(opts.body ?? "", opts);
+    await this.github.rest.checks.update({
+      owner: this.context.repo.owner,
+      repo: this.context.repo.repo,
+      check_run_id: this.id,
+      status: "completed",
+      conclusion,
+      output: { title: t, summary: s },
+    });
+  }
+
+  /** PATCH the started Check Run to `cancelled`. For workflow-cancellation cleanup hooks. */
+  async cancel(opts: { round?: number } = {}): Promise<void> {
+    if (this.id === undefined) {
+      throw new Error(`CheckRun ${this.displayName}: cancel() called before start()`);
+    }
+    const { round = 1 } = opts;
+    await this.github.rest.checks.update({
+      owner: this.context.repo.owner,
+      repo: this.context.repo.repo,
+      check_run_id: this.id,
+      status: "completed",
+      conclusion: "cancelled",
+      output: {
+        title: `round ${round}: cancelled mid-run`,
+        summary: "Workflow cancelled.",
+      },
+    });
+  }
+
+  /**
+   * One-shot: POST a Check Run already in `completed` state. For aggregate
+   * and inapplicable flows where the start→complete split adds nothing.
+   */
+  async submit(conclusion: Conclusion, opts: CompleteOpts = {}): Promise<number> {
+    const t = opts.title ?? title(opts.round ?? 1, opts.verdict ?? conclusion, opts);
+    const s = opts.summary ?? summary(opts.body ?? "", opts);
+    const res = await this.github.rest.checks.create({
+      owner: this.context.repo.owner,
+      repo: this.context.repo.repo,
+      name: this.displayName,
+      head_sha: this.headSha,
+      status: "completed",
+      conclusion,
+      output: { title: t, summary: s },
+    });
+    this.id = res.data.id;
+    return this.id;
+  }
 }
 
-export async function inapplicable(
-  github: Github,
-  context: Context,
-  slug: string,
-  sha: string,
-): Promise<void> {
-  const n = name(slug, null);
-  await github.rest.checks.create({
-    owner: context.repo.owner,
-    repo: context.repo.repo,
-    name: n,
-    head_sha: sha,
-    status: "completed",
-    conclusion: "success",
-    output: { title: "round 1: pass (inapplicable)", summary: "Category not applicable to this PR." },
-  });
+// ─── Phase3Category: domain layer over the catalog ─────────────────────────
+
+/**
+ * One Phase-3 review category at a given PR HEAD. Knows the catalog's
+ * per-(slug, reviewer) display naming, and exposes domain methods over the
+ * generic `CheckRun` primitive.
+ */
+export class Phase3Category {
+  public readonly displayName: string;
+
+  constructor(
+    private readonly github: Github,
+    private readonly context: Context,
+    public readonly slug: string,
+    private readonly headSha: string,
+  ) {
+    const cat = SYMBOLS.categories[slug];
+    if (!cat) throw new Error(`Unknown category slug: ${slug}`);
+    this.displayName = cat.display;
+  }
+
+  /** Per-reviewer Check Run, named like `Phase 3 / Multi-word symbols (§IX) — gemini`. */
+  reviewerCheck(reviewer: string): CheckRun {
+    return new CheckRun(
+      this.github,
+      this.context,
+      this.headSha,
+      `${this.displayName} — ${reviewer}`,
+    );
+  }
+
+  /** Per-category aggregate Check Run, named like `Phase 3 / Multi-word symbols (§IX)`. */
+  aggregateCheck(): CheckRun {
+    return new CheckRun(this.github, this.context, this.headSha, this.displayName);
+  }
+
+  /** Submit the per-category aggregate from two reviewer verdicts. One-shot completed. */
+  async submitAggregate(
+    g: string,
+    c: string,
+    opts: Omit<CompleteOpts, "verdict"> = {},
+  ): Promise<void> {
+    const conclusion = conclude(g, c);
+    const verdict =
+      conclusion === "success" ? "pass" : conclusion === "failure" ? "fail" : "pending";
+    await this.aggregateCheck().submit(conclusion, { ...opts, verdict });
+  }
+
+  /** Mark the category inapplicable to this PR. Posts a single per-category aggregate. */
+  async markInapplicable(): Promise<void> {
+    await this.aggregateCheck().submit("success", {
+      title: "round 1: pass (inapplicable)",
+      summary: "Category not applicable to this PR.",
+    });
+  }
 }
