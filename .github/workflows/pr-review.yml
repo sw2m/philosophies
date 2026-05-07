@@ -43,21 +43,21 @@ env:
   PHASE_3_PROMPT: |-
     # CRITICAL OUTPUT FORMAT (read this FIRST)
 
-    Your response MUST start, on the very first line, with exactly `---` (no leading whitespace, no preamble), then `verdict: pass` or `verdict: fail`, then `---`, then your bullet list.
+    Your response MUST start, on the very first line, with an HTML-comment frontmatter block in exactly this shape, then your bullet list:
 
     Acceptable response example:
 
     ```
-    ---
-    verdict: fail
-    ---
+    <!--
+    vsdd-phase-3:
+      verdict: fail
+    -->
 
     - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
     - path/to/other.ts:10 — Nitpick. Fix: …
     ```
 
-    If you do not produce frontmatter as your first output, the workflow
-    will fail and your review will be discarded. Non-negotiable.
+    The `<!--` and `-->` must each sit alone on their own line — no content sharing the wrapper line. The `verdict` value must be exactly `pass` or `fail`. If you do not produce this frontmatter as your first output, the workflow will fail and your review will be discarded. Non-negotiable.
 
     # TASK
 
@@ -118,11 +118,12 @@ env:
 
     # OUTPUT FORMAT (strict)
 
-    Begin your response with YAML frontmatter, exactly this shape:
+    Begin your response with the HTML-comment frontmatter block, exactly this shape:
 
-    ---
-    verdict: pass | fail
-    ---
+    <!--
+    vsdd-phase-3:
+      verdict: pass | fail
+    -->
 
     The verdict answers "should this PR be approved?", **not** "are
     there zero concerns?". A `pass` with listed nitpicks is correct
@@ -138,7 +139,7 @@ env:
     The frontmatter MUST be the first thing in your output (no leading
     whitespace, no preamble).
 
-    After the closing `---`, list every concern (blocking and
+    After the closing `-->`, list every concern (blocking and
     nitpicks alike) as terse bullets. Each bullet: a concrete flaw
     with `file:line` and a proposed fix. Mark blocking concerns
     explicitly with **(blocking)** at the start of the bullet so the
@@ -530,24 +531,22 @@ jobs:
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
-        uses: actions/github-script@v9
+        uses: ./.vsdd-philosophies/.github/actions/script/github-deno
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-            const { extractVerdict } = require(path.resolve('.vsdd-philosophies/.github/scripts/extract-verdict.js'));
-            const raw = fs.readFileSync('review.md', 'utf8');
-            const { verdict, body } = extractVerdict(raw);
-            if (verdict !== 'pass' && verdict !== 'fail') {
-              core.setFailed('Gemini output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
+            const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
+            const raw = await Deno.readTextFile("review.md");
+            const { verdict, body } = extract(raw, "vsdd-phase-3");
+            if (verdict !== "pass" && verdict !== "fail") {
+              core.setFailed("Gemini output had no extractable verdict (no vsdd-phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
             }
-            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
-            const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
+            const event = verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
+            const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? "unparseable"}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
             // Self-review guard — see ci-meta.yml's consensus step
             // for the rationale and the spec annotation about hardcoding.
             const author = context.payload.pull_request?.user?.login;
-            if (author === 'github-actions[bot]') {
+            if (author === "github-actions[bot]") {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -605,23 +604,21 @@ jobs:
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
-        uses: actions/github-script@v9
+        uses: ./.vsdd-philosophies/.github/actions/script/github-deno
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-            const { extractVerdict } = require(path.resolve('.vsdd-philosophies/.github/scripts/extract-verdict.js'));
-            const raw = fs.readFileSync('review.md', 'utf8');
-            const { verdict, body } = extractVerdict(raw);
-            if (verdict !== 'pass' && verdict !== 'fail') {
-              core.setFailed('Claude output had no extractable verdict (no frontmatter, no fallback match). Failing the workflow; raw output is preserved in the review body for human triage.');
+            const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
+            const raw = await Deno.readTextFile("review.md");
+            const { verdict, body } = extract(raw, "vsdd-phase-3");
+            if (verdict !== "pass" && verdict !== "fail") {
+              core.setFailed("Claude output had no extractable verdict (no vsdd-phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
             }
-            const event = verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
-            const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? 'unparseable'}\`_\n\n`;
+            const event = verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
+            const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? "unparseable"}\`_\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
             // Self-review guard — same as the gemini-review step.
             const author = context.payload.pull_request?.user?.login;
-            if (author === 'github-actions[bot]') {
+            if (author === "github-actions[bot]") {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,

@@ -99,127 +99,103 @@ jobs:
       cleared: ${{ steps.check.outputs.cleared }}
     steps:
       - id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          ISSUE: ${{ github.event.issue.number }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Per #93: gate verdict freshness against the issue's BODY-EDIT
-          # timestamp (`lastEditedAt`), not its `updated_at`. `updated_at`
-          # bumps on every field change — assignments, label changes,
-          # comment additions — including the very `assigned` event that
-          # fires this workflow. That made fresh verdicts always read as
-          # stale at validation time (since the assign timestamp post-
-          # dates them by definition), producing a structural race that
-          # made promotion impossible without admin override. Body edits
-          # are the ONLY change that can invalidate Phase 1c verdicts
-          # (the verdicts judge body content); gating on `lastEditedAt`
-          # gives the right reference. Falls back to `createdAt` when
-          # the body has never been edited since the issue opened.
-          OWNER="${REPO%/*}"
-          NAME="${REPO#*/}"
-          REF_AT=$(gh api graphql \
-            -f query='query($owner: String!, $name: String!, $num: Int!) {
-              repository(owner: $owner, name: $name) {
-                issue(number: $num) {
-                  lastEditedAt
-                  createdAt
+        uses: ./.github/actions/script/github-deno
+        with:
+          script: |
+            // Phase 1c clearance — both gemini AND claude must have a
+            // fresh `pass` verdict on the issue, AND the orchestrator
+            // must not have a fresh `fail` verdict. "Fresh" means the
+            // verdict comment was posted AFTER the issue's last body
+            // edit (per #93 — body edit is the only thing that
+            // invalidates a verdict).
+            const cardinality = await import("./.github/scripts/vsdd/phase-1c/cardinality.ts");
+            const [owner, name] = "${{ github.repository }}".split("/");
+            const issue = ${{ github.event.issue.number }};
+
+            // Reference timestamp for freshness (per #93).
+            const q = await github.graphql(
+              `query($owner: String!, $name: String!, $num: Int!) {
+                repository(owner: $owner, name: $name) {
+                  issue(number: $num) {
+                    lastEditedAt
+                    createdAt
+                  }
+                }
+              }`,
+              { owner, name, num: issue },
+            );
+            const refAt = q.repository?.issue?.lastEditedAt || q.repository?.issue?.createdAt;
+            if (!refAt) {
+              core.setFailed(`Could not resolve body-edit timestamp for issue #${issue}; refusing to evaluate verdict freshness.`);
+              await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+              return;
+            }
+            const refEpoch = Math.floor(new Date(refAt).getTime() / 1000);
+            console.log(`Phase 1c verdict-freshness reference: ${refAt} (epoch ${refEpoch}); per #93 this is the body-edit timestamp.`);
+
+            // Pull all comments and find latest per reviewer.
+            const allComments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo: name, issue_number: issue, per_page: 100 },
+            );
+            const bot = allComments.filter((c) => c.user?.login === "github-actions[bot]");
+
+            // Find the latest comment whose vsdd-phase-1c block matches
+            // `slug`. Returns the comment's verdict + creation epoch, or
+            // null when no matching comment exists.
+            function latest(slug) {
+              let hit = null;
+              for (const c of bot) {
+                const r = cardinality.read(c.body || "", slug);
+                if (!r) continue;
+                if (!hit || new Date(c.created_at) > new Date(hit.c.created_at)) {
+                  hit = { c, r };
                 }
               }
-            }' \
-            -f owner="$OWNER" -f name="$NAME" -F num="$ISSUE" \
-            --jq '.data.repository.issue.lastEditedAt // .data.repository.issue.createdAt')
-          if [ -z "$REF_AT" ] || [ "$REF_AT" = "null" ]; then
-            echo "::error::Could not resolve body-edit timestamp for issue #${ISSUE}; refusing to evaluate verdict freshness."
-            echo "cleared=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          updated_epoch=$(date -d "$REF_AT" +%s)
-          echo "Phase 1c verdict-freshness reference: $REF_AT (epoch $updated_epoch); per #93 this is the body-edit timestamp, not updated_at."
+              if (!hit) return null;
+              return {
+                verdict: hit.r.verdict,
+                created: hit.c.created_at,
+                epoch: Math.floor(new Date(hit.c.created_at).getTime() / 1000),
+              };
+            }
 
-          # Find the latest verdict marker per reviewer that
-          # github-actions[bot] posted AFTER the issue's last body edit.
-          # Both reviewers (gemini, claude) must be present and PASS.
-          comments=$(gh api -H "Accept: application/vnd.github+json" \
-            "repos/${REPO}/issues/${ISSUE}/comments?per_page=100")
+            // Both gemini and claude must be present, fresh, and pass.
+            for (const slug of ["gemini", "claude"]) {
+              const v = latest(slug);
+              if (!v) {
+                core.setFailed(`No Phase 1c review from ${slug} on this issue. Edit the issue body to re-trigger Phase 1c review.`);
+                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                return;
+              }
+              if (!v.verdict) {
+                core.setFailed(`Phase 1c ${slug} comment found but verdict frontmatter is missing/unparseable; treating as fail.`);
+                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                return;
+              }
+              if (v.epoch < refEpoch) {
+                core.setFailed(`Phase 1c ${slug} verdict (${v.verdict}) is stale — posted at ${v.created}, issue body last edited at ${refAt}. Edit the issue body to re-trigger Phase 1c.`);
+                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                return;
+              }
+              if (v.verdict !== "pass") {
+                core.setFailed(`Phase 1c ${slug} verdict is '${v.verdict}'. Address the blocking concerns in the review comment, edit the issue, and re-run Phase 1c.`);
+                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                return;
+              }
+              console.log(`✓ ${slug} verdict pass at ${v.created}`);
+            }
 
-          for reviewer in gemini claude; do
-            # Each Phase 1c reviewer comment carries an HTML-comment-
-            # wrapped frontmatter block at the very top:
-            #   <!-- vsdd-phase-1c
-            #   reviewer: gemini
-            #   verdict: pass
-            #   -->
-            # The block is invisible to human readers but parseable here.
-            # Pull the latest comment whose frontmatter matches THIS
-            # reviewer (so a fresh edit→re-review supersedes the prior
-            # verdict for the same reviewer).
-            latest=$(jq -r --arg r "$reviewer" '
-              [.[]
-                | select(.user.login == "github-actions[bot]")
-                | select(.body | test("<!-- vsdd-phase-1c[\\s\\S]*reviewer:\\s*" + $r + "[\\s\\S]*-->"))
-              ]
-              | sort_by(.created_at)
-              | last
-            ' <<<"$comments")
-            if [ "$latest" = "null" ] || [ -z "$latest" ]; then
-              echo "::error::No Phase 1c review from ${reviewer} on this issue. Edit the issue body to re-trigger Phase 1c review."
-              echo "cleared=false" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            # Pull the verdict from the frontmatter of the chosen comment.
-            verdict=$(jq -r '.body' <<<"$latest" \
-              | sed -n 's/^verdict:\s*\(pass\|fail\)\s*$/\1/p' \
-              | head -1)
-            if [ -z "$verdict" ]; then
-              echo "::error::Phase 1c ${reviewer} comment found but verdict frontmatter is missing/unparseable; treating as fail."
-              echo "cleared=false" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            created_at=$(jq -r '.created_at' <<<"$latest")
-            created_epoch=$(date -d "$created_at" +%s)
-            if [ "$created_epoch" -lt "$updated_epoch" ]; then
-              echo "::error::Phase 1c ${reviewer} verdict (${verdict}) is stale — posted at ${created_at}, issue body last edited at ${REF_AT}. Edit the issue body to re-trigger Phase 1c."
-              echo "cleared=false" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            if [ "$verdict" != "pass" ]; then
-              echo "::error::Phase 1c ${reviewer} verdict is '${verdict}'. Address the blocking concerns in the review comment, edit the issue, and re-run Phase 1c."
-              echo "cleared=false" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            echo "✓ ${reviewer} verdict pass at ${created_at}"
-          done
-          # Per #128: in addition to the strict gemini+claude pass
-          # requirement above, also check for any orchestrator-emitted
-          # `fail` verdict on goal-specs. The orchestrator runs after the
-          # named reviewers and posts `fail` for count-validity issues
-          # or classification disagreement.
-          orch_latest=$(jq -r '
-            [.[]
-              | select(.user.login == "github-actions[bot]")
-              | select(.body | test("<!-- vsdd-phase-1c[\\s\\S]*reviewer:\\s*orchestrator[\\s\\S]*-->"))
-            ]
-            | sort_by(.created_at)
-            | last
-          ' <<<"$comments")
-          if [ "$orch_latest" != "null" ] && [ -n "$orch_latest" ]; then
-            orch_verdict=$(jq -r '.body' <<<"$orch_latest" \
-              | sed -n 's/^verdict:\s*\(pass\|fail\)\s*$/\1/p' \
-              | head -1)
-            orch_created=$(jq -r '.created_at' <<<"$orch_latest")
-            orch_epoch=$(date -d "$orch_created" +%s)
-            # Only enforce when the orchestrator comment is fresh (not
-            # stale relative to the issue's last body edit, per #93).
-            if [ "$orch_epoch" -ge "$updated_epoch" ] && [ "$orch_verdict" = "fail" ]; then
-              echo "::error::Phase 1c orchestrator verdict is 'fail' at ${orch_created}. See the orchestrator comment for blocking concerns."
-              echo "cleared=false" >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-          fi
-          echo "cleared=true" >> "$GITHUB_OUTPUT"
+            // Per #128: also check for any fresh orchestrator-emitted
+            // fail verdict on goal-specs.
+            const orch = latest("orchestrator");
+            if (orch && orch.epoch >= refEpoch && orch.verdict === "fail") {
+              core.setFailed(`Phase 1c orchestrator verdict is 'fail' at ${orch.created}. See the orchestrator comment for blocking concerns.`);
+              await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+              return;
+            }
+
+            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=true\n", { append: true });
 
   promote-goal-to-tech:
     name: Decompose goal-spec into tech-spec sub-issues

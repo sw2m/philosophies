@@ -22,21 +22,18 @@
 
 import { parse as fm } from "./frontmatter.ts";
 
-const KEY = "vsdd-phase-3";
-
 export type Verdict = "pass" | "fail";
 export type Result = { verdict: Verdict | null; body: string };
 
-/** Pull the `vsdd-phase-3` verdict from `text`. Returns the verdict and
- *  the original text (callers render it; the metadata block is not
- *  stripped — it stays in the comment so downstream consumers can re-read
- *  the per-reviewer metadata). When no verdict can be resolved (empty
- *  body, malformed frontmatter, missing key), returns `{verdict: null,
- *  body: text}`. */
-export function extract(text: string): Result {
+/** Pull the verdict from a kv-discriminated frontmatter block keyed by
+ *  `key` (e.g., `vsdd-phase-3`, `vsdd-ci-meta`). Returns the verdict and
+ *  the original text — the metadata block is not stripped, so downstream
+ *  consumers can re-read per-reviewer metadata from the same comment.
+ *  When no verdict can be resolved, returns `{verdict: null, body: text}`. */
+export function extract(text: string, key: string): Result {
   for (const block of fm(text)) {
     if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-    const inner = (block as Record<string, unknown>)[KEY];
+    const inner = (block as Record<string, unknown>)[key];
     if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
     const v = (inner as Record<string, unknown>).verdict;
     if (v === "pass" || v === "fail") return { verdict: v, body: text };

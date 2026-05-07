@@ -72,30 +72,30 @@ jobs:
           gh api --paginate "repos/${REPO}/pulls/${PR}/files" > pr-files.json
           echo "files: $(jq 'length' pr-files.json)"
 
-      - name: Compute whitelist via JS module
+      - name: Compute whitelist via brand.ts
         id: whitelist
+        uses: ./.github/actions/script/github-deno
         env:
           PR_FILES: pr-files.json
-        shell: bash
-        run: |
-          set -euo pipefail
-          out=$(node -e '
-            const fs = require("fs");
-            const {isWhitelistPath} = require("./.github/scripts/vsdd-brand.js");
-            const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
-            const compute = () => {
-              if (arr.length === 0) return "false";
-              for (const f of arr) {
-                if (!isWhitelistPath(f.filename)) return "false";
-                if (f.previous_filename && !isWhitelistPath(f.previous_filename)) {
-                  return "false";
-                }
+        with:
+          result-encoding: string
+          script: |
+            const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
+            const arr = JSON.parse(await Deno.readTextFile(Deno.env.get("PR_FILES")!));
+            let out = "true";
+            if (arr.length === 0) out = "false";
+            else for (const f of arr) {
+              if (!whitelist(f.filename)) { out = "false"; break; }
+              if (f.previous_filename && !whitelist(f.previous_filename)) {
+                out = "false"; break;
               }
-              return "true";
-            };
-            console.log(compute());
-          ')
-          echo "whitelist=$out" >> "$GITHUB_OUTPUT"
+            }
+            await Deno.writeTextFile(
+              Deno.env.get("GITHUB_OUTPUT")!,
+              `whitelist=${out}\n`,
+              { append: true },
+            );
+            return out;
 
       - name: Compute impl-content via classify-changes.sh
         id: impl

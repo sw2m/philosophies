@@ -235,17 +235,13 @@ jobs:
           actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (gemini)
-        uses: actions/github-script@v9
+        uses: ./.github/actions/script/github-deno
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-            const budget = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-budget.js',
-            ));
-            const REVIEWER = 'gemini';
-            const reviewBody = fs.readFileSync('review.md', 'utf8');
+            const budget = await import("./.github/scripts/vsdd/phase-1c/budget.ts");
+            const cardinality = await import("./.github/scripts/vsdd/phase-1c/cardinality.ts");
+            const SLUG = "gemini";
+            const reviewBody = await Deno.readTextFile("review.md");
             // Round counting: paginate through all issue comments, count
             // prior frontmatter comments authored by this reviewer.
             const allComments = await github.paginate(
@@ -257,47 +253,43 @@ jobs:
                 per_page: 100,
               },
             );
-            const round = budget.computeRound(allComments, REVIEWER);
-            const budgetN = budget.computeBudget(round);
-            const result = budget.processReview({
-              body: reviewBody,
-              round,
-              budget: budgetN,
-            });
+            const round = budget.round(allComments, SLUG);
+            const cap = budget.budget(round);
+            const result = budget.process({ body: reviewBody, round, budget: cap });
             // Per #128: extract subjects/outcomes counts from the LLM
-            // output for goal-specs and add them to the frontmatter so
+            // prose body for goal-specs and add them to the kv-block so
             // the orchestrator step can read them.
-            const cardinality = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-cardinality.js',
-            ));
             const issueLabels = (context.payload.issue?.labels || [])
-              .map((l) => (typeof l === 'string' ? l : l.name));
-            const isGoalSpec = issueLabels.includes('spec:goal');
-            let countLines = '';
-            if (isGoalSpec) {
-              const tuple = cardinality.parseCountTuple(reviewBody);
-              if (tuple) {
-                countLines =
-                  `subjects: ${tuple.subjects}\n` +
-                  `outcomes: ${tuple.outcomes}\n`;
+              .map((l) => (typeof l === "string" ? l : l.name));
+            const isGoal = issueLabels.includes("spec:goal");
+            let subjects, outcomes;
+            if (isGoal) {
+              const sm = reviewBody.match(/subjects:\s*(\S+)/);
+              const om = reviewBody.match(/outcomes:\s*(\S+)/);
+              if (sm && om && cardinality.valid(sm[1]) && cardinality.valid(om[1])) {
+                subjects = parseInt(sm[1], 10);
+                outcomes = parseInt(om[1], 10);
               } else {
-                countLines = `subjects: 0\noutcomes: 0\n`;
+                subjects = 0;
+                outcomes = 0;
               }
             }
-            const frontmatter =
-              `<!-- vsdd-phase-1c\n` +
-              `reviewer: ${REVIEWER}\n` +
-              `verdict: ${result.verdict}\n` +
-              countLines +
-              `-->\n\n`;
+            const fm = [
+              "<!--",
+              "vsdd-phase-1c:",
+              `  reviewer: ${SLUG}`,
+              `  verdict: ${result.verdict}`,
+              ...(subjects !== undefined ? [`  subjects: ${subjects}`, `  outcomes: ${outcomes}`] : []),
+              "-->",
+              "",
+            ].join("\n");
             const header = `**VSDD Phase 1c — Gemini**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: frontmatter + header + result.body + footer,
+              body: fm + "\n" + header + result.body + footer,
             });
 
   claude-review:
@@ -323,17 +315,15 @@ jobs:
           actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (claude)
-        uses: actions/github-script@v9
+        uses: ./.github/actions/script/github-deno
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-            const budget = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-budget.js',
-            ));
-            const REVIEWER = 'claude';
-            const reviewBody = fs.readFileSync('review.md', 'utf8');
+            const budget = await import("./.github/scripts/vsdd/phase-1c/budget.ts");
+            const cardinality = await import("./.github/scripts/vsdd/phase-1c/cardinality.ts");
+            const SLUG = "claude";
+            const reviewBody = await Deno.readTextFile("review.md");
+            // Round counting: paginate through all issue comments, count
+            // prior frontmatter comments authored by this reviewer.
             const allComments = await github.paginate(
               github.rest.issues.listComments,
               {
@@ -343,47 +333,43 @@ jobs:
                 per_page: 100,
               },
             );
-            const round = budget.computeRound(allComments, REVIEWER);
-            const budgetN = budget.computeBudget(round);
-            const result = budget.processReview({
-              body: reviewBody,
-              round,
-              budget: budgetN,
-            });
+            const round = budget.round(allComments, SLUG);
+            const cap = budget.budget(round);
+            const result = budget.process({ body: reviewBody, round, budget: cap });
             // Per #128: extract subjects/outcomes counts from the LLM
-            // output for goal-specs and add them to the frontmatter so
+            // prose body for goal-specs and add them to the kv-block so
             // the orchestrator step can read them.
-            const cardinality = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-cardinality.js',
-            ));
             const issueLabels = (context.payload.issue?.labels || [])
-              .map((l) => (typeof l === 'string' ? l : l.name));
-            const isGoalSpec = issueLabels.includes('spec:goal');
-            let countLines = '';
-            if (isGoalSpec) {
-              const tuple = cardinality.parseCountTuple(reviewBody);
-              if (tuple) {
-                countLines =
-                  `subjects: ${tuple.subjects}\n` +
-                  `outcomes: ${tuple.outcomes}\n`;
+              .map((l) => (typeof l === "string" ? l : l.name));
+            const isGoal = issueLabels.includes("spec:goal");
+            let subjects, outcomes;
+            if (isGoal) {
+              const sm = reviewBody.match(/subjects:\s*(\S+)/);
+              const om = reviewBody.match(/outcomes:\s*(\S+)/);
+              if (sm && om && cardinality.valid(sm[1]) && cardinality.valid(om[1])) {
+                subjects = parseInt(sm[1], 10);
+                outcomes = parseInt(om[1], 10);
               } else {
-                countLines = `subjects: 0\noutcomes: 0\n`;
+                subjects = 0;
+                outcomes = 0;
               }
             }
-            const frontmatter =
-              `<!-- vsdd-phase-1c\n` +
-              `reviewer: ${REVIEWER}\n` +
-              `verdict: ${result.verdict}\n` +
-              countLines +
-              `-->\n\n`;
+            const fm = [
+              "<!--",
+              "vsdd-phase-1c:",
+              `  reviewer: ${SLUG}`,
+              `  verdict: ${result.verdict}`,
+              ...(subjects !== undefined ? [`  subjects: ${subjects}`, `  outcomes: ${outcomes}`] : []),
+              "-->",
+              "",
+            ].join("\n");
             const header = `**VSDD Phase 1c — Claude**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: frontmatter + header + result.body + footer,
+              body: fm + "\n" + header + result.body + footer,
             });
 
   orchestrator:
@@ -401,14 +387,10 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Read tuples + post orchestrator verdict
-        uses: actions/github-script@v9
+        uses: ./.github/actions/script/github-deno
         with:
           script: |
-            const path = require('path');
-            const cardinality = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-cardinality.js',
-            ));
+            const cardinality = await import("./.github/scripts/vsdd/phase-1c/cardinality.ts");
 
             const allComments = await github.paginate(
               github.rest.issues.listComments,
@@ -420,12 +402,11 @@ jobs:
               },
             );
 
-            const tuples = cardinality.extractReviewerTuples(allComments);
+            const t = cardinality.tuples(allComments);
             const concerns = [];
             let canonical = null;
 
-            // Validation: zero/missing counts on either reviewer.
-            if (!tuples.gemini) {
+            if (!t.gemini) {
               concerns.push(
                 "(blocking) Gemini's most-recent review is missing or has " +
                 "invalid `subjects`/`outcomes` counts (treated as 0). The " +
@@ -433,7 +414,7 @@ jobs:
                 "edit the goal body and re-run Phase 1c.",
               );
             }
-            if (!tuples.claude) {
+            if (!t.claude) {
               concerns.push(
                 "(blocking) Claude's most-recent review is missing or has " +
                 "invalid `subjects`/`outcomes` counts (treated as 0). The " +
@@ -442,30 +423,26 @@ jobs:
               );
             }
 
-            if (tuples.gemini && tuples.claude) {
-              const gMin = cardinality.computeClassification(tuples.gemini);
-              const cMin = cardinality.computeClassification(tuples.claude);
-              if (gMin.isSingleTechSpec !== cMin.isSingleTechSpec) {
+            if (t.gemini && t.claude) {
+              const g = cardinality.classify(t.gemini);
+              const c = cardinality.classify(t.claude);
+              if (g.single !== c.single) {
                 concerns.push(
                   `(blocking) Reviewers disagree on classification: ` +
-                  `gemini reports ${JSON.stringify(tuples.gemini)} ` +
-                  `(min=${gMin.min}, ` +
-                  `${gMin.isSingleTechSpec ? 'atomic' : 'decomposable'}); ` +
-                  `claude reports ${JSON.stringify(tuples.claude)} ` +
-                  `(min=${cMin.min}, ` +
-                  `${cMin.isSingleTechSpec ? 'atomic' : 'decomposable'}). ` +
+                  `gemini reports ${JSON.stringify(t.gemini)} ` +
+                  `(min=${g.min}, ${g.single ? "atomic" : "decomposable"}); ` +
+                  `claude reports ${JSON.stringify(t.claude)} ` +
+                  `(min=${c.min}, ${c.single ? "atomic" : "decomposable"}). ` +
                   `Edit the goal body to clarify until both reviewers ` +
                   `read the same shape.`,
                 );
               } else {
-                // Agreement on classification — compute canonical tuple
-                // (per-axis MIN; preserves agreed classification).
-                canonical = cardinality.perAxisMin(tuples.gemini, tuples.claude);
+                canonical = cardinality.combine(t.gemini, t.claude);
               }
             }
 
-            const verdict = concerns.length === 0 ? 'pass' : 'fail';
-            const fm = cardinality.buildOrchestratorFrontmatter({
+            const verdict = concerns.length === 0 ? "pass" : "fail";
+            const fm = cardinality.emit({
               verdict,
               ...(canonical || {}),
             });
@@ -474,15 +451,15 @@ jobs:
             if (concerns.length === 0) {
               const tupleStr = canonical
                 ? `subjects=${canonical.subjects}, outcomes=${canonical.outcomes}, min=${Math.min(canonical.subjects, canonical.outcomes)}`
-                : '(no canonical tuple — check orchestrator state)';
+                : "(no canonical tuple — check orchestrator state)";
               body = `Reviewer counts agreed on classification. Canonical tuple: ${tupleStr}.`;
             } else {
-              body = concerns.map((c) => `- ${c}`).join('\n');
+              body = concerns.map((x) => `- ${x}`).join("\n");
             }
             const footer = `\n\n---\n_Per #128: cardinality orchestrator. Verdict gates promotion when fail; canonical tuple consumed by promote-goal-to-tech._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: fm + '\n\n' + header + body + footer,
+              body: fm + "\n\n" + header + body + footer,
             });

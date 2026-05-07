@@ -30,88 +30,68 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Scan via gh api --paginate + JS hasMarkerToken (SIGPIPE short-circuit)
+      - name: Scan PR comments via brand.ts
         id: scan
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR: ${{ inputs.pr-number }}
-          REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -uo pipefail
-          # Per #129: paginated comment fetch with first-match short-
-          # circuit, routing token-detection through vsdd-brand.js's
-          # `hasMarkerToken` so the workflow and the pure module stay in
-          # step. On rate-limit (HTTP 403 + x-ratelimit-remaining: 0
-          # detected via gh's stderr): one 30s backoff and retry, then
-          # fail-closed.
-          scan() {
-            local err
-            err=$(mktemp)
-            local out
-            set +e
-            out=$(
-              gh api --paginate "repos/${REPO}/issues/${PR}/comments" 2>"$err" \
-                | jq -c '.[] | {login: .user.login, body: .body}' \
-                | node -e '
-                  const {hasMarkerToken} = require("./.github/scripts/vsdd-brand.js");
-                  const rl = require("readline").createInterface({input: process.stdin});
-                  let answered = false;
-                  rl.on("line", (line) => {
-                    if (answered || !line) return;
-                    try {
-                      const c = JSON.parse(line);
-                      if (c.login === "github-actions[bot]" && hasMarkerToken(c.body)) {
-                        answered = true;
-                        process.stdout.write("found");
-                        process.exit(0);
-                      }
-                    } catch {}
-                  });
-                  rl.on("close", () => {
-                    if (!answered) process.stdout.write("absent");
-                  });
-                '
-            )
-            local rc=$?
-            set -e
-            # If we got a definitive "found" or "absent" from node, the
-            # scan succeeded regardless of upstream gh exit (gh's
-            # SIGPIPE-on-match is expected non-zero).
-            if [ "$out" = "found" ] || [ "$out" = "absent" ]; then
-              printf '%s' "$out"
-              rm -f "$err"
-              return 0
-            fi
-            # No clean answer: classify error via gh's stderr.
-            if grep -qiE '(HTTP 403|rate.?limit|x-ratelimit-remaining:\s*0)' "$err"; then
-              rm -f "$err"
-              return 2  # rate-limited
-            fi
-            rm -f "$err"
-            return 1  # other error
-          }
+        uses: ./.github/actions/script/github-deno
+        with:
+          result-encoding: string
+          script: |
+            // Paginated comment fetch with first-match short-circuit,
+            // routing token-detection through vsdd/brand.ts so the
+            // workflow and the pure module share one predicate. On
+            // rate-limit: one 30s backoff retry, then fail-closed
+            // (marker-present=false).
+            const { marked } = await import("./.github/scripts/vsdd/brand.ts");
+            const pr = ${{ inputs.pr-number }};
+            const [owner, repo] = "${{ github.repository }}".split("/");
 
-          result=$(scan); rc=$?
-          if [ "$rc" = "2" ]; then
-            echo "::notice::API rate-limited; retrying once after 30s backoff."
-            sleep 30
-            result=$(scan); rc=$?
-            if [ "$rc" = "2" ]; then
-              echo "::notice::Rate-limited twice; failing-closed (marker-present=false)."
-              echo "marker-present=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-          if [ "$rc" != "0" ]; then
-            echo "::notice::Comment scan pipeline failed non-rate-limit ($rc); failing-closed (marker-present=false)."
-            echo "marker-present=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$result" = "found" ]; then
-            echo "marker-present=true" >> "$GITHUB_OUTPUT"
-            echo "Marker present on PR #${PR}."
-          else
-            echo "marker-present=false" >> "$GITHUB_OUTPUT"
-            echo "No marker present on PR #${PR}."
-          fi
+            async function scan() {
+              const it = github.paginate.iterator(
+                github.rest.issues.listComments,
+                { owner, repo, issue_number: pr, per_page: 100 },
+              );
+              for await (const { data } of it) {
+                for (const c of data) {
+                  if (c.user?.login === "github-actions[bot]" && marked(c.body || "")) {
+                    return "found";
+                  }
+                }
+              }
+              return "absent";
+            }
+
+            let result;
+            try {
+              result = await scan();
+            } catch (e) {
+              const status = (e as { status?: number })?.status;
+              if (status === 403) {
+                core.notice("API rate-limited; retrying once after 30s backoff.");
+                await new Promise((r) => setTimeout(r, 30_000));
+                try {
+                  result = await scan();
+                } catch (e2) {
+                  const status2 = (e2 as { status?: number })?.status;
+                  if (status2 === 403) {
+                    core.notice("Rate-limited twice; failing-closed (marker-present=false).");
+                    await Deno.writeTextFile(
+                      Deno.env.get("GITHUB_OUTPUT")!,
+                      "marker-present=false\n",
+                      { append: true },
+                    );
+                    return "absent";
+                  }
+                  throw e2;
+                }
+              } else {
+                throw e;
+              }
+            }
+
+            const present = result === "found" ? "true" : "false";
+            await Deno.writeTextFile(
+              Deno.env.get("GITHUB_OUTPUT")!,
+              `marker-present=${present}\n`,
+              { append: true },
+            );
+            return result;
