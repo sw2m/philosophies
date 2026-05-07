@@ -84,10 +84,21 @@ labels:
     ci-meta: ci-meta            # tagged on issues opened by ci-meta gap-finder
     needs-human: needs-human    # tagged when CI bails (e.g. promote-tech-to-pr Green Gate exhaustion)
 
-# HTML-comment frontmatter tokens that open verdict / brand / context blocks.
-# Consumers regex against these prefixes to find the structured frontmatter.
+# HTML-comment frontmatter tokens that mark structured metadata blocks in
+# PR/issue/agent text. Consumers parse via `.github/scripts/vsdd/frontmatter.ts`
+# (#210) — single-source-of-truth parser, no per-call regexes.
+#
+# Two block shapes:
+#   - **Inline scalar marker** — `<!-- vsdd-{token} -->` parses to the YAML
+#     string `"vsdd-{token}"`. Caller checks scalar equality.
+#   - **Kv-discriminated block** — `<!--\nvsdd-{token}:\n  field: value\n  ...\n-->`
+#     parses to `{ "vsdd-{token}": { field: value, ... } }`. Caller filters
+#     by top-level key.
 frontmatter-tokens:
-  phase-1c:        vsdd-phase-1c       # `<!-- vsdd-phase-1c\nreviewer: ...\nverdict: ... -->` per phase-1c-budget.js
-  phase-3:         vsdd-phase-3        # `<!-- vsdd-phase-3\ncategory: ...\nreviewer: ... -->` per #182
-  opt-out-brand:   vsdd-opt-out-brand  # `<!-- vsdd-opt-out-brand -->` posted by vsdd-brand.yml
-  canonical:       vsdd-canonical      # `<vsdd-canonical>...</vsdd-canonical>` wraps embedded MEMORY.md in eval-input
+  phase-1c:           vsdd-phase-1c           # block: `{reviewer, verdict, subjects?, outcomes?}` — issue-review.yml + phase-1c/{budget,cardinality}.ts
+  phase-2:            vsdd-phase-2            # block: `{new_test_files, new_test_command, regression_test_command}` — promote-tech-to-pr agent output
+  phase-3:            vsdd-phase-3            # block: `{reviewer, verdict, category?}` — pr-review.yml per-reviewer verdict
+  ci-meta:            vsdd-ci-meta            # block: `{reviewer, verdict}` — ci-meta.yml per-reviewer verdict
+  opt-out-brand:      vsdd-opt-out-brand      # inline scalar marker — vsdd-brand.yml
+  red-gate-cleared:   vsdd-red-gate-cleared   # inline scalar marker — red-conditions-gate.yml; consumed by non-test-blocker.yml + vsdd-brand.yml
+  canonical:          vsdd-canonical          # `<vsdd-canonical>...</vsdd-canonical>` XML wrapper (NOT HTML-comment) for embedded MEMORY.md in eval-input
