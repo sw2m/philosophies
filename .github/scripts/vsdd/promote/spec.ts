@@ -6,13 +6,7 @@
 
 import { Issue as Base, type Ctx } from "../issue.ts";
 
-const TEMPLATE = [
-  "{{{body}}}",
-  "",
-  "---",
-  "_Tech-spec sub-issue of #{{parent}} (goal). Opened by `promote-goal-to-tech` after @{{owner}} self-assigned the goal._",
-  "_Assign yourself to this issue to start the 5-phase tech→PR pipeline._",
-].join("\n");
+const TEMPLATE = await Deno.readTextFile(new URL("./spec.mustache", import.meta.url));
 
 export class Spec extends Base {
   constructor(ctx: Ctx) {

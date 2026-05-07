@@ -12,28 +12,7 @@ import { marks } from "../frontmatter.ts";
 
 const KEY = "vsdd-tech-spec";
 
-const TEMPLATE = [
-  "{{#opened.length}}",
-  "**Goal decomposed into {{opened.length}} tech-spec sub-issue(s).**",
-  "_Triggered by @{{owner}} self-assigning this goal._",
-  "",
-  "{{#opened}}",
-  "- {{{url}}} — {{title}}",
-  "{{/opened}}",
-  "",
-  "Each sub-issue carries `spec:tech`. Assign yourself to a tech-spec to start the 5-phase implementation pipeline (scaffold → tests → Red gate → implement → Green gate).",
-  "{{/opened.length}}",
-  "{{^opened.length}}",
-  "**No tech-specs produced.**",
-  "_Triggered by @{{owner}} but the agent could not decompose this goal._",
-  "",
-  "Free-form rationale from the agent:",
-  "",
-  "> {{summary}}",
-  "",
-  "Refine the goal-spec body and re-assign to retry, or open tech-specs by hand and apply `spec:tech`.",
-  "{{/opened.length}}",
-].join("\n");
+const TEMPLATE = await Deno.readTextFile(new URL("./decompose.mustache", import.meta.url));
 
 export type Spec = { title: string; body: string };
 
