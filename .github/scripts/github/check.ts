@@ -1,17 +1,13 @@
 // Generic Check Runs API primitive. One `Check` instance per Check Run.
 // `implements CheckRun` (the canonical Octokit entity type) so the instance
-// IS the check run after it's created — its CheckRun-schema fields are
-// populated from the API response.
+// IS the check run after it's created.
 //
-// Designed to be imported from inside a `github-deno` action's `script:`
-// input. The caller's user-script gets `github` (Octokit) and `context`
-// injected by the runner; bundle them into an `OctokitContext` and pass
-// to `Check`'s constructor.
-//
-// Phase-3-specific concerns (the catalog, per-(slug, reviewer) naming,
-// verdict aggregation) live in `../vsdd/phase-3-check.ts`. VSDD review-
-// cycle formatting (round/verdict, terminal-stated annotations) lives in
-// `../vsdd/check.ts`. This file is agnostic to caller domain.
+// This module is unopinionated — input types are derived directly from
+// Octokit's endpoint parameters via `@octokit/types`'s `Endpoints` map, with
+// only the constructor-known fields (`owner`, `repo`, `name`, `head_sha`,
+// `check_run_id`, plus `status` where the lifecycle method dictates it)
+// stripped. Callers who want simplified or opinionated input shapes use
+// the VSDD-flavored subclass at `../vsdd/check.ts`.
 
 import type { context, getOctokit } from "npm:@actions/github@^6";
 import type { Endpoints } from "npm:@octokit/types@^14";
@@ -19,33 +15,41 @@ import type { Endpoints } from "npm:@octokit/types@^14";
 type Github = ReturnType<typeof getOctokit>;
 type Context = typeof context;
 
-// API-shipped enums + entity shape. Literal unions live in @octokit/types —
-// not duplicated here.
 type CreateOp = Endpoints["POST /repos/{owner}/{repo}/check-runs"];
+type UpdateOp = Endpoints["PATCH /repos/{owner}/{repo}/check-runs/{check_run_id}"];
+
 export type Conclusion = NonNullable<CreateOp["parameters"]["conclusion"]>;
 export type Status = NonNullable<CreateOp["parameters"]["status"]>;
 export type CheckRun = CreateOp["response"]["data"];
 
-/** Bundle of (github Octokit, actions context). The two values always travel
+/** What `start()` accepts — the create-endpoint params minus constructor-known
+ *  fields (`owner`, `repo`, `name`, `head_sha`) and the terminal-state fields
+ *  (`conclusion`, `completed_at`) that don't apply to a Check being kicked
+ *  off into `in_progress`. */
+export type StartInput = Omit<
+  CreateOp["parameters"],
+  "owner" | "repo" | "name" | "head_sha" | "conclusion" | "completed_at"
+>;
+
+/** What `complete()` accepts — the PATCH update params minus constructor-known
+ *  fields, with `conclusion` promoted to required (we're transitioning to a
+ *  terminal state) and `status` omitted (always "completed" here). */
+export type CompleteInput =
+  & Omit<UpdateOp["parameters"], "owner" | "repo" | "check_run_id" | "name" | "head_sha" | "status">
+  & { conclusion: Conclusion };
+
+/** What `submit()` accepts — same shape as `start()` but for one-shot
+ *  POST-as-completed; `status` omitted (we set "completed") and `conclusion`
+ *  required. */
+export type SubmitInput =
+  & Omit<CreateOp["parameters"], "owner" | "repo" | "name" | "head_sha" | "status">
+  & { conclusion: Conclusion };
+
+/** Bundle of (Octokit, actions context). The two values always travel
  *  together; passing one struct keeps constructor signatures sane. */
 export interface OctokitContext {
   github: Github;
   context: Context;
-}
-
-export interface StartOpts {
-  status?: Status;
-  title?: string;
-  summary?: string;
-}
-
-/** Input for `complete()` and `submit()` — single object containing the
- *  conclusion and any output fields. Subclasses widen this with extra
- *  formatting keys (round, verdict, stale-annotation SHAs, etc.). */
-export interface CheckResult {
-  conclusion: Conclusion;
-  title?: string;
-  summary?: string;
 }
 
 /**
@@ -53,12 +57,12 @@ export interface CheckResult {
  * `start()` / `submit()` populates its schema fields from the API response.
  *
  * Lifecycle:
- *   - `start()` then `complete(result)` / `cancel()` for in-progress→terminal.
- *   - `submit(result)` for one-shot completed creation.
+ *   - `start(input)` then `complete(input)` / `cancel()` for in-progress→terminal.
+ *   - `submit(input)` for one-shot completed creation.
  *
  * Each transition replaces the instance's CheckRun fields with the latest
- * API response, so a consumer reading `check.id`, `check.status`,
- * `check.conclusion`, etc. always sees the freshest server-side state.
+ * API response, so consumers reading `check.id`, `check.status`,
+ * `check.conclusion`, etc. always see the freshest server-side state.
  */
 export class Check implements CheckRun {
   // CheckRun schema fields. Set in constructor:
@@ -82,8 +86,8 @@ export class Check implements CheckRun {
   pull_requests!: CheckRun["pull_requests"];
   deployment?: CheckRun["deployment"];
 
-  // Internal lifecycle flag — guards against double-`start()`,
-  // `complete()` before `start()`, and `submit()` on already-created.
+  // Internal lifecycle flag — guards double-`start()`, `complete()` /
+  // `cancel()` before `start()`, and `submit()` on already-created.
   protected created = false;
 
   constructor(
@@ -95,67 +99,62 @@ export class Check implements CheckRun {
     this.name = name;
   }
 
-  /** POST a new Check Run in `in_progress` status. Hydrates instance. */
-  async start(opts: StartOpts = {}): Promise<this> {
+  /** POST a new Check Run. Defaults `status` to `"in_progress"`; caller can
+   *  override anything else the API accepts. */
+  async start(input: StartInput = {}): Promise<this> {
     if (this.created) {
       throw new Error(`Check ${this.name}: start() called twice on the same instance`);
     }
-    const { status = "in_progress", title = "starting", summary = `Check run started for ${this.name}` } = opts;
     const res = await this.api.github.rest.checks.create({
       owner: this.api.context.repo.owner,
       repo: this.api.context.repo.repo,
       name: this.name,
       head_sha: this.head_sha,
-      status,
-      output: { title, summary },
+      status: "in_progress",
+      ...input,
     });
     Object.assign(this, res.data);
     this.created = true;
     return this;
   }
 
-  /** PATCH the started Check Run to a terminal conclusion. Requires `start()` first. */
-  async complete(result: CheckResult): Promise<this> {
+  /** PATCH the started Check Run to a terminal conclusion. Requires `start()`. */
+  async complete(input: CompleteInput): Promise<this> {
     if (!this.created) {
       throw new Error(`Check ${this.name}: complete() called before start()`);
     }
-    const { conclusion, title = String(conclusion), summary = "" } = result;
     const res = await this.api.github.rest.checks.update({
       owner: this.api.context.repo.owner,
       repo: this.api.context.repo.repo,
       check_run_id: this.id,
       status: "completed",
-      conclusion,
-      output: { title, summary },
+      ...input,
     });
     Object.assign(this, res.data);
     return this;
   }
 
-  /** Convenience: `complete({ conclusion: "cancelled", … })` with the canonical
-   *  cancellation strings. For workflow-cancellation cleanup hooks. */
+  /** Convenience: complete with `conclusion: "cancelled"` and the canonical
+   *  cancellation output strings. For workflow-cancellation cleanup hooks. */
   async cancel(): Promise<this> {
     return this.complete({
       conclusion: "cancelled",
-      title: "cancelled mid-run",
-      summary: "Workflow cancelled.",
+      output: { title: "cancelled mid-run", summary: "Workflow cancelled." },
     });
   }
 
-  /** One-shot: POST a Check Run already in `completed` state. Hydrates instance. */
-  async submit(result: CheckResult): Promise<this> {
+  /** One-shot: POST a Check Run already in `completed` state. */
+  async submit(input: SubmitInput): Promise<this> {
     if (this.created) {
       throw new Error(`Check ${this.name}: submit() called on an already-created Check`);
     }
-    const { conclusion, title = String(conclusion), summary = "" } = result;
     const res = await this.api.github.rest.checks.create({
       owner: this.api.context.repo.owner,
       repo: this.api.context.repo.repo,
       name: this.name,
       head_sha: this.head_sha,
       status: "completed",
-      conclusion,
-      output: { title, summary },
+      ...input,
     });
     Object.assign(this, res.data);
     this.created = true;

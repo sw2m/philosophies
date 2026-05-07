@@ -1,40 +1,41 @@
 // Phase-3 review Check Run. `extends VSDDCheck` so VSDD output formatting
 // (round/verdict, stale annotations) carries over; adds catalog-aware
-// naming and the two-reviewer verdict aggregation that's specific to
-// Phase 3's per-category structure.
+// naming and the two-reviewer verdict aggregation specific to Phase 3.
 //
 // One `Phase3Check` instance per (head_sha, slug, [reviewerName]) tuple:
 //   - reviewerName given     → per-reviewer Check ("Phase 3 / <slug> — <reviewer>")
 //   - reviewerName omitted   → per-category aggregate Check ("Phase 3 / <slug>")
 //
-// The aggregate flavor accepts `submit({gemini, claude, ...})` to combine
-// two reviewer verdicts into the per-category aggregate's conclusion. The
-// reviewer flavor uses the inherited `submit({conclusion, ...})` shape.
+// The aggregate flavor's `submit()` accepts `{gemini, claude, ...}` to
+// combine two reviewer verdicts; the inherited per-reviewer flow uses
+// `{conclusion, ...}`. Single signature via a widened input type — no
+// overloads.
 
 import { SYMBOLS } from "../symbols.ts";
 import {
   VSDDCheck,
-  type VSDDCheckResult,
-  type VSDDStartOpts,
+  type VSDDFormatOpts,
+  type VSDDSubmitResult,
 } from "./check.ts";
-import type { Conclusion, OctokitContext } from "../github/check.ts";
+import type { Conclusion, OctokitContext, SubmitInput } from "../github/check.ts";
 
 /** Input for Phase3Check's `submit`. Either provide a `conclusion` directly
- *  (per-reviewer flavor, inherited Check shape), OR `gemini` + `claude`
- *  reviewer verdicts (aggregate flavor — `Phase3Check.conclude` combines
- *  them). VSDD formatting fields carry over. */
-export interface Phase3SubmitInput
-  extends Omit<VSDDCheckResult, "conclusion"> {
-  conclusion?: Conclusion;
-  gemini?: string;
-  claude?: string;
-}
+ *  (per-reviewer flavor, inherited shape), OR `gemini` + `claude` reviewer
+ *  verdicts (aggregate flavor — `Phase3Check.conclude` combines them).
+ *  VSDD formatting fields carry over via VSDDFormatOpts. */
+export type Phase3SubmitInput =
+  & Omit<SubmitInput, "conclusion">
+  & VSDDFormatOpts
+  & {
+    conclusion?: Conclusion;
+    gemini?: string;
+    claude?: string;
+  };
 
 /**
  * Phase-3 review Check Run. Knows the catalog (per-slug display names)
- * and verdict aggregation. Construct directly — no separate "category"
- * coordinator class needed; the slug + optional reviewerName carries
- * enough context.
+ * and verdict aggregation. The slug + optional reviewerName carries
+ * enough context — no separate "category" coordinator class needed.
  */
 export class Phase3Check extends VSDDCheck {
   /** Combine two reviewer verdicts into a Check Runs `conclusion`. Strict AND
@@ -65,9 +66,9 @@ export class Phase3Check extends VSDDCheck {
     this.displayName = cat.display;
   }
 
-  /** Override `submit` to accept either `{conclusion}` or `{gemini, claude}`.
-   *  The aggregate flavor combines verdicts via `Phase3Check.conclude`; the
-   *  per-reviewer flavor passes through to the inherited shape. */
+  /** Override `submit` to accept either `{conclusion}` (per-reviewer, parent
+   *  shape) or `{gemini, claude}` (aggregate, two-verdict combine). The
+   *  widened input type makes this a TS-valid override of the parent's. */
   override async submit(input: Phase3SubmitInput): Promise<this> {
     let conclusion: Conclusion;
     if (input.gemini !== undefined && input.claude !== undefined) {
@@ -81,17 +82,18 @@ export class Phase3Check extends VSDDCheck {
       throw new Error(`Phase3Check ${this.name}: submit requires either {conclusion} or {gemini, claude}`);
     }
 
-    const verdict = input.verdict ?? (
+    const { gemini: _g, claude: _c, conclusion: _cc, ...rest } = input;
+    const verdict = rest.verdict ?? (
       conclusion === "success" ? "pass"
         : conclusion === "failure" ? "fail" : "pending"
     );
 
-    return super.submit({ ...input, conclusion, verdict });
+    return super.submit({ ...rest, conclusion, verdict } as VSDDSubmitResult);
   }
 
   /** Mark the category inapplicable to this PR. Aggregate-flavor only.
-   *  `round` defaults to 1 for the typical "diff has no relevant content
-   *  from the start" case; pass higher for later-push inapplicability. */
+   *  `round` defaults to 1 for the typical "diff has no relevant content from
+   *  the start" case; pass higher for later-push inapplicability. */
   async markInapplicable(opts: { round?: number } = {}): Promise<this> {
     if (this.reviewerName !== undefined) {
       throw new Error(`Phase3Check ${this.name}: markInapplicable only valid on the aggregate flavor`);
@@ -99,12 +101,10 @@ export class Phase3Check extends VSDDCheck {
     const { round = 1 } = opts;
     return this.submit({
       conclusion: "success",
-      title: `round ${round}: pass (inapplicable)`,
-      summary: "Category not applicable to this PR.",
+      output: {
+        title: `round ${round}: pass (inapplicable)`,
+        summary: "Category not applicable to this PR.",
+      },
     });
   }
 }
-
-// Re-export so consumers who only import phase-3-check.ts can also reach
-// the start opts type without a second import line.
-export type { VSDDStartOpts as Phase3StartOpts };
