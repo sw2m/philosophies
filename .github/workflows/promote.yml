@@ -112,7 +112,7 @@ jobs:
             const [owner, name] = "${{ github.repository }}".split("/");
             const issue = ${{ github.event.issue.number }};
 
-              const { set: setOutput } = await import("./.github/scripts/github/output.ts");
+              const output = await import("./.github/scripts/github/output.ts");
             // Reference timestamp for freshness (per #93).
             const q = await github.graphql(
               `query($owner: String!, $name: String!, $num: Int!) {
@@ -128,7 +128,7 @@ jobs:
             const refAt = q.repository?.issue?.lastEditedAt || q.repository?.issue?.createdAt;
             if (!refAt) {
               core.setFailed(`Could not resolve body-edit timestamp for issue #${issue}; refusing to evaluate verdict freshness.`);
-              await setOutput("cleared", "false");
+              await output.set("cleared", "false");
               return;
             }
             const refEpoch = Math.floor(new Date(refAt).getTime() / 1000);
@@ -164,22 +164,22 @@ jobs:
               const v = latest(slug);
               if (!v) {
                 core.setFailed(`No Phase 1c review from ${slug} on this issue. Edit the issue body to re-trigger Phase 1c review.`);
-                await setOutput("cleared", "false");
+                await output.set("cleared", "false");
                 return;
               }
               if (!v.verdict) {
                 core.setFailed(`Phase 1c ${slug} comment found but verdict frontmatter is missing/unparseable; treating as fail.`);
-                await setOutput("cleared", "false");
+                await output.set("cleared", "false");
                 return;
               }
               if (v.epoch < refEpoch) {
                 core.setFailed(`Phase 1c ${slug} verdict (${v.verdict}) is stale — posted at ${v.created}, issue body last edited at ${refAt}. Edit the issue body to re-trigger Phase 1c.`);
-                await setOutput("cleared", "false");
+                await output.set("cleared", "false");
                 return;
               }
               if (v.verdict !== "pass") {
                 core.setFailed(`Phase 1c ${slug} verdict is '${v.verdict}'. Address the blocking concerns in the review comment, edit the issue, and re-run Phase 1c.`);
-                await setOutput("cleared", "false");
+                await output.set("cleared", "false");
                 return;
               }
               console.log(`✓ ${slug} verdict pass at ${v.created}`);
@@ -190,11 +190,11 @@ jobs:
             const orch = latest("orchestrator");
             if (orch && orch.epoch >= refEpoch && orch.verdict === "fail") {
               core.setFailed(`Phase 1c orchestrator verdict is 'fail' at ${orch.created}. See the orchestrator comment for blocking concerns.`);
-              await setOutput("cleared", "false");
+              await output.set("cleared", "false");
               return;
             }
 
-            await setOutput("cleared", "true");
+            await output.set("cleared", "true");
 
   promote-goal-to-tech:
     name: Decompose goal-spec into tech-spec sub-issues

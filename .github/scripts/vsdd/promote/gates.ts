@@ -19,7 +19,7 @@
 
 import { Claude } from "../../agents/claude.ts";
 import { read as readPhase2 } from "../phase-2/frontmatter.ts";
-import { set as setOutput } from "../../github/output.ts";
+import * as output from "../../github/output.ts";
 
 const RUNNER_TEMP = Deno.env.get("RUNNER_TEMP") ?? "/tmp";
 const BRANCH = Deno.env.get("BRANCH")!;
@@ -230,9 +230,9 @@ export async function redGate(): Promise<void> {
       "```",
     ].join("\n");
     await Deno.writeTextFile(`${RUNNER_TEMP}/red-bail.md`, bail);
-    await setOutput("bailed", "true");
+    await output.set("bailed", "true");
   } else {
-    await setOutput("bailed", "false");
+    await output.set("bailed", "false");
   }
 }
 
@@ -316,9 +316,9 @@ export async function greenGate(): Promise<void> {
       lines.push("Last regression-tests output:", "```", await tail(`${RUNNER_TEMP}/green-reg.log`, 100), "```");
     }
     await Deno.writeTextFile(`${RUNNER_TEMP}/green-bail.md`, lines.join("\n"));
-    await setOutput("bailed", "true");
+    await output.set("bailed", "true");
   } else {
-    await setOutput("bailed", "false");
+    await output.set("bailed", "false");
   }
 }
 

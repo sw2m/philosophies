@@ -43,7 +43,7 @@ jobs:
             // (marker-present=false).
             const { marked } = await import("./.github/scripts/vsdd/brand.ts");
             const { Comment } = await import("./.github/scripts/github/comment.ts");
-            const { set: setOutput } = await import("./.github/scripts/github/output.ts");
+            const output = await import("./.github/scripts/github/output.ts");
             const pr = ${{ inputs.pr-number }};
             const [owner, repo] = "${{ github.repository }}".split("/");
 
@@ -67,7 +67,7 @@ jobs:
                   const status2 = (e2 as { status?: number })?.status;
                   if (status2 === 403) {
                     core.notice("Rate-limited twice; failing-closed (marker-present=false).");
-                    await setOutput("marker-present", "false");
+                    await output.set("marker-present", "false");
                     return "absent";
                   }
                   throw e2;
@@ -78,5 +78,5 @@ jobs:
             }
 
             const present = result === "found" ? "true" : "false";
-            await setOutput("marker-present", present);
+            await output.set("marker-present", present);
             return result;

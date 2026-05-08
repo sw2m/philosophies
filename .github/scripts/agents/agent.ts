@@ -29,11 +29,13 @@ export type AgentOpts = {
   log: string;
 };
 
-/** Exit-code semantics. The base class synthesizes `timeout` from a
- *  SIGTERM signal (AbortController triggers the abort, the spawned
- *  process catches SIGTERM, status reports signal). Subclasses whose
- *  CLIs use different conventions override this constant. */
-export type Codes = { timeout: number };
+/** Exit-code semantics. Open record so subclasses can register any
+ *  named code their CLI emits (e.g. `oom: 137`, `auth: 401`). The base
+ *  class only requires `timeout`, which it synthesizes from a SIGTERM
+ *  signal (AbortController abort → process catches SIGTERM → status
+ *  reports signal). Subclasses whose CLIs use different conventions
+ *  override `codes` with their own keys/values. */
+export type Codes = { [name: string]: number };
 
 export class Agent {
   primary: string;

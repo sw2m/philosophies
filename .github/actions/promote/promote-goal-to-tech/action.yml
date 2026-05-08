@@ -43,9 +43,6 @@ runs:
     - name: Read orchestrator canonical tuple (#128)
       id: cardinality
       uses: ./.github/actions/script/github-deno
-      env:
-        REPO: ${{ github.repository }}
-        ISSUE: ${{ inputs.issue-number }}
       with:
         github-token: ${{ inputs.github-token }}
         workspace: ${{ github.action_path }}/../../..
@@ -56,12 +53,10 @@ runs:
           // LLM's default decomposition logic.
           const cardinality = await import("./scripts/vsdd/phase-1c/cardinality.ts");
           const { Comment } = await import("./scripts/github/comment.ts");
-          const { set: setOutput } = await import("./scripts/github/output.ts");
-          const repo = Deno.env.get("REPO");
-          const issue = Number(Deno.env.get("ISSUE"));
-          if (!repo || !issue) { await setOutput("min-cardinality", ""); return; }
-          const [owner, name] = repo.split("/");
-          const comments = new Comment({ api: github, owner, repo: name, issue_number: issue });
+          const output = await import("./scripts/github/output.ts");
+          const { owner, repo } = context.repo;
+          const issue = ${{ inputs.issue-number }};
+          const comments = new Comment({ api: github, owner, repo, issue_number: issue });
           const bot = await comments.list({ bot: true });
           let hit = null;
           for (const c of bot) {
@@ -73,16 +68,16 @@ runs:
           }
           if (!hit) {
             core.notice("No orchestrator pass comment found; falling back to default decomposition.");
-            await setOutput("min-cardinality", "");
+            await output.set("min-cardinality", "");
             return;
           }
           const { subjects, outcomes } = hit.r;
           if (subjects === undefined || outcomes === undefined) {
-            await setOutput("min-cardinality", "");
+            await output.set("min-cardinality", "");
             return;
           }
           const min = Math.min(subjects, outcomes);
-          await setOutput("min-cardinality", min);
+          await output.set("min-cardinality", min);
           console.log(`Canonical tuple: subjects=${subjects}, outcomes=${outcomes}, min=${min}`);
 
     - name: Build agent prompt
