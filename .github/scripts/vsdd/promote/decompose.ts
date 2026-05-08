@@ -16,7 +16,7 @@ import { Comment as Base, type Ctx } from "../comment.ts";
 import { marks } from "../frontmatter.ts";
 import { Spec } from "./spec.ts";
 
-const KEY = "vsdd-tech-spec";
+const KEY = "tech-spec";  // subkey under vsdd: namespace
 
 const TEMPLATE = await Deno.readTextFile(new URL("./decompose.mustache", import.meta.url));
 
@@ -34,7 +34,7 @@ export class Decompose extends Base {
   }
 
   /** Walk the raw agent output and split it into per-tech-spec sections.
-   *  Each `<!-- vsdd-tech-spec: { title } -->` marker introduces a section;
+   *  Each `<!-- vsdd: { tech-spec: { title } } -->` marker introduces a section;
    *  the section's body is the prose between this marker and the next
    *  marker (or end of file). Markers without a `title` field are skipped
    *  silently. Pure; does not call the GitHub API. */
@@ -43,7 +43,9 @@ export class Decompose extends Base {
     for (const m of marks(this.raw)) {
       const v = m.value;
       if (typeof v !== "object" || v === null || Array.isArray(v)) continue;
-      const inner = (v as Record<string, unknown>)[KEY];
+      const ns = (v as Record<string, unknown>).vsdd;
+      if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+      const inner = (ns as Record<string, unknown>)[KEY];
       if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
       const title = (inner as Record<string, unknown>).title;
       if (typeof title !== "string" || title.trim() === "") continue;

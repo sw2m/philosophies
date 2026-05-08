@@ -12,7 +12,7 @@ name: VSDD Non-test-blocker (ancestry enforcement)
 # Fail iff:
 #   - PR is non-whitelist AND has impl content AND no earned marker.
 #
-# The marker is the comment containing `<!-- vsdd-red-gate-cleared -->`
+# The marker is the comment containing `<!-- vsdd: red-gate-cleared -->`
 # authored by github-actions[bot]. Per #129 it's a one-way diode for
 # the bot (the bot never revokes), but its ABSENCE still blocks merge —
 # the diode property is about persistence after earning, not about

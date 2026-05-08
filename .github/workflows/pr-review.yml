@@ -49,8 +49,9 @@ env:
 
     ```
     <!--
-    vsdd-phase-3:
-      verdict: fail
+    vsdd:
+      phase-3:
+        verdict: fail
     -->
 
     - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
@@ -121,8 +122,9 @@ env:
     Begin your response with the HTML-comment frontmatter block, exactly this shape:
 
     <!--
-    vsdd-phase-3:
-      verdict: pass | fail
+    vsdd:
+      phase-3:
+        verdict: pass | fail
     -->
 
     The verdict answers "should this PR be approved?", **not** "are
@@ -536,9 +538,9 @@ jobs:
           script: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
             const raw = await Deno.readTextFile("review.md");
-            const { verdict, body } = extract(raw, "vsdd-phase-3");
+            const { verdict, body } = extract(raw, "phase-3");
             if (verdict !== "pass" && verdict !== "fail") {
-              core.setFailed("Gemini output had no extractable verdict (no vsdd-phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
+              core.setFailed("Gemini output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
             }
             const event = verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
             const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? "unparseable"}\`_\n\n`;
@@ -609,9 +611,9 @@ jobs:
           script: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
             const raw = await Deno.readTextFile("review.md");
-            const { verdict, body } = extract(raw, "vsdd-phase-3");
+            const { verdict, body } = extract(raw, "phase-3");
             if (verdict !== "pass" && verdict !== "fail") {
-              core.setFailed("Claude output had no extractable verdict (no vsdd-phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
+              core.setFailed("Claude output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
             }
             const event = verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
             const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? "unparseable"}\`_\n\n`;

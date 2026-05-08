@@ -30,8 +30,8 @@
 //
 // Sample expressions (per-block; pure jsonata, no iteration prefix):
 //   `foo`                          — every block's `foo` value (defined)
-//   `\`vsdd-tech-spec\`.title`     — every tech-spec marker's title
-//   `vsdd.pretesting`              — every pretesting block (post-#214)
+//   `vsdd.\`tech-spec\`.title`     — every tech-spec marker's title
+//   `vsdd.\`phase-2\``              — every Phase 2 metadata block
 //   `*[reviewer = 'gemini']`       — every block where reviewer is gemini
 //
 // Output: JSON array of file paths on stdout. Exit codes:

@@ -8,7 +8,9 @@
 
 import { parse as fm } from "./frontmatter.ts";
 
-export const TOKEN = "vsdd-red-gate-cleared";
+/** Subkey under `vsdd:` namespace. Inline-form marker:
+ *  `<!-- vsdd: red-gate-cleared -->` parses to `{vsdd: "red-gate-cleared"}`. */
+export const TOKEN = "red-gate-cleared";
 
 const ROOT_METADATA = new Set([
   ".gitignore",
@@ -40,11 +42,14 @@ export function branded(
   return Boolean(opts.whitelist || (opts.impl && !opts.marker));
 }
 
-/** True iff `body` contains a well-formed inline-scalar marker that
- *  parses to the literal `"vsdd-red-gate-cleared"`. Tolerates anywhere
- *  in the body — bot-authored comments place the marker on its own
- *  line; the parser handles both that and inline placements. */
+/** True iff `body` contains a well-formed inline-marker block whose
+ *  vsdd-namespace value matches `TOKEN`. Inline form:
+ *  `<!-- vsdd: red-gate-cleared -->` parses to `{vsdd: "red-gate-cleared"}`,
+ *  so the check is `block.vsdd === TOKEN`. */
 export function marked(body: unknown): boolean {
   if (typeof body !== "string" || body.length === 0) return false;
-  return fm(body).some((b) => b === TOKEN);
+  return fm(body).some((b) => {
+    if (typeof b !== "object" || b === null || Array.isArray(b)) return false;
+    return (b as Record<string, unknown>).vsdd === TOKEN;
+  });
 }

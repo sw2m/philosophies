@@ -1,17 +1,18 @@
 // Phase 2 (promote-tech-to-pr) agent-output frontmatter parser. Reads an
-// agent response file, finds the `vsdd-phase-2` kv-discriminated block,
+// agent response file, finds the `vsdd: { phase-2: ... }` block,
 // and emits a JSON metadata side-file the bash caller iterates over.
 //
 // Replaces .github/scripts/parse-phase2-frontmatter.py — ported to
 // TS+Deno, drops the legacy YAML `---\n...\n---` pathway in favor of
 // HTML-comment frontmatter (#210 unified parser). Agent prompt instructs
-// the new shape:
+// the namespaced shape:
 //
 //   <!--
-//   vsdd-phase-2:
-//     new_test_files: [...]
-//     new_test_command: "..."
-//     regression_test_command: "..."
+//   vsdd:
+//     phase-2:
+//       new_test_files: [...]
+//       new_test_command: "..."
+//       regression_test_command: "..."
 //   -->
 //
 // CLI: `vsdd/phase-2/frontmatter.ts <agent-output-file> [<meta-out-path>]`
@@ -28,7 +29,7 @@
 
 import { parse as fm } from "../frontmatter.ts";
 
-const KEY = "vsdd-phase-2";
+const KEY = "phase-2";  // subkey under vsdd: namespace
 
 type Meta = { files: string[]; new_cmd: string; reg_cmd: string };
 
@@ -39,7 +40,9 @@ function read(raw: string): Meta | null {
   let hit: Record<string, unknown> | null = null;
   for (const block of fm(raw)) {
     if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-    const inner = (block as Record<string, unknown>)[KEY];
+    const ns = (block as Record<string, unknown>).vsdd;
+    if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+    const inner = (ns as Record<string, unknown>)[KEY];
     if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
     hit = inner as Record<string, unknown>;
   }

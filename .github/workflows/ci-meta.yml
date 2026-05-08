@@ -197,12 +197,13 @@ jobs:
             Begin your output with an HTML-comment frontmatter block, then prose. The block MUST be the first thing — no leading whitespace, no preamble. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line).
 
             <!--
-            vsdd-ci-meta:
-              verdict: pass | fail
-              rationale: |
-                one paragraph summarizing the evaluation
-              gaps:
-                - title: "[ci-meta] short description (≤60 chars)"
+            vsdd:
+              ci-meta:
+                verdict: pass | fail
+                rationale: |
+                  one paragraph summarizing the evaluation
+                gaps:
+                  - title: "[ci-meta] short description (≤60 chars)"
                   body: |
                     Goal-spec form. Describe the problem only — what's missing,
                     what's broken, what symptom is observed, which §-reference
@@ -235,13 +236,15 @@ jobs:
             const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
             const raw = await Deno.readTextFile("gemini-output.txt");
 
-            // Find the vsdd-ci-meta block. Block content has
+            // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary
             // and write the JSON for downstream consensus consumption.
             let payload = null;
             for (const block of fm.parse(raw)) {
               if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-              const inner = (block as Record<string, unknown>)["vsdd-ci-meta"];
+              const ns = (block as Record<string, unknown>).vsdd;
+              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+              const inner = (ns as Record<string, unknown>)["ci-meta"];
               if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
               const v = (inner as Record<string, unknown>).verdict;
               if (v !== "pass" && v !== "fail") continue;
@@ -249,7 +252,7 @@ jobs:
               break;
             }
             if (!payload) {
-              console.error("::error::Could not extract a vsdd-ci-meta verdict from gemini output.");
+              console.error("::error::Could not extract a vsdd:ci-meta verdict from gemini output.");
               console.error("--- raw output ---");
               console.error(raw);
               core.setFailed("verdict extraction failed");
@@ -367,12 +370,13 @@ jobs:
             Write a single file at the path you were told to use as `output-file`. Begin the file with an HTML-comment frontmatter block. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line):
 
             <!--
-            vsdd-ci-meta:
-              verdict: pass | fail
-              rationale: |
-                one paragraph
-              gaps:
-                - title: "[ci-meta] short description ≤60 chars"
+            vsdd:
+              ci-meta:
+                verdict: pass | fail
+                rationale: |
+                  one paragraph
+                gaps:
+                  - title: "[ci-meta] short description ≤60 chars"
                   body: |
                     Goal-spec form. Describe the problem only — what's missing,
                     what's broken, what symptom is observed, which §-reference
@@ -403,13 +407,15 @@ jobs:
             const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
             const raw = await Deno.readTextFile("claude-eval.md");
 
-            // Find the vsdd-ci-meta block. Block content has
+            // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary
             // and write the JSON for downstream consensus consumption.
             let payload = null;
             for (const block of fm.parse(raw)) {
               if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-              const inner = (block as Record<string, unknown>)["vsdd-ci-meta"];
+              const ns = (block as Record<string, unknown>).vsdd;
+              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+              const inner = (ns as Record<string, unknown>)["ci-meta"];
               if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
               const v = (inner as Record<string, unknown>).verdict;
               if (v !== "pass" && v !== "fail") continue;
@@ -417,7 +423,7 @@ jobs:
               break;
             }
             if (!payload) {
-              console.error("::error::Could not extract a vsdd-ci-meta verdict from claude output.");
+              console.error("::error::Could not extract a vsdd:ci-meta verdict from claude output.");
               console.error("--- raw output ---");
               console.error(raw);
               core.setFailed("verdict extraction failed");

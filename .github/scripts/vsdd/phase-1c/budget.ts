@@ -5,21 +5,21 @@
 //
 // Replaces .github/scripts/phase-1c-budget.js — ported to TS+Deno, swaps
 // the per-reviewer regex parser for `vsdd/frontmatter.ts` (#210). The
-// frontmatter shape is now kv-discriminated:
+// frontmatter shape is namespaced under `vsdd:`:
 //
 //   <!--
-//   vsdd-phase-1c:
-//     reviewer: gemini | claude | orchestrator
-//     verdict: pass | fail
-//     [subjects: N]
-//     [outcomes: N]
+//   vsdd:
+//     phase-1c:
+//       reviewer: gemini | claude | orchestrator
+//       verdict: pass | fail
+//       [subjects: N]
+//       [outcomes: N]
 //   -->
 //
-// In-flight migration: legacy `<!-- vsdd-phase-1c\nreviewer:X\n... -->`
-// comments do NOT match the new utility's well-formed shapes, so round
-// counters reset to 0 for issues with only legacy comments. Force-passes
-// from older rounds remain force-passes; no data loss, just a counter
-// restart.
+// In-flight migration: legacy flat `<!-- vsdd-phase-1c\n... -->` comments
+// do NOT match the new namespaced shape, so round counters reset to 0
+// for issues with only legacy comments. Force-passes from older rounds
+// remain force-passes; no data loss, just a counter restart.
 //
 // Spec: sw2m/philosophies#88. Goal: sw2m/philosophies#87.
 
@@ -37,17 +37,19 @@ export const MARKER = /^(\s*[-*]\s*`?)\(blocking\)(`?)/gim;
  *  own line. */
 export const VERDICT = /^_Verdict:\s*`?(pass|fail)`?_\s*$/m;
 
-const KEY = "vsdd-phase-1c";
+const KEY = "phase-1c";  // subkey under vsdd: namespace
 
 export type Reviewer = "gemini" | "claude" | "orchestrator";
 export type Comment = { body?: string };
 
-/** True iff `body` contains a `vsdd-phase-1c` block whose `reviewer`
+/** True iff `body` contains a `vsdd: { phase-1c: ... }` block whose `reviewer`
  *  field matches `slug`. */
 export function authored(body: string, slug: Reviewer): boolean {
   for (const block of fm(body)) {
     if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-    const inner = (block as Record<string, unknown>)[KEY];
+    const ns = (block as Record<string, unknown>).vsdd;
+    if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+    const inner = (ns as Record<string, unknown>)[KEY];
     if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
     if ((inner as Record<string, unknown>).reviewer === slug) return true;
   }
@@ -55,7 +57,7 @@ export function authored(body: string, slug: Reviewer): boolean {
 }
 
 /** Round the next review will be: 1 + count of prior `comments` whose
- *  body contains a `vsdd-phase-1c` block authored by `slug`. */
+ *  body contains a `vsdd: { phase-1c: ... }` block authored by `slug`. */
 export function round(comments: Comment[], slug: Reviewer): number {
   let prior = 0;
   for (const c of comments) {

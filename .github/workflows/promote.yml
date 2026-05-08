@@ -140,7 +140,7 @@ jobs:
             );
             const bot = allComments.filter((c) => c.user?.login === "github-actions[bot]");
 
-            // Find the latest comment whose vsdd-phase-1c block matches
+            // Find the latest comment whose vsdd:phase-1c block matches
             // `slug`. Returns the comment's verdict + creation epoch, or
             // null when no matching comment exists.
             function latest(slug) {

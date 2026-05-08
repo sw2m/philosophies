@@ -9,7 +9,7 @@ description: |
   jsonata implicit-projection means queries are per-block — array
   iteration is automatic. A query of `foo.bar` writes one file per block
   where `foo.bar` resolves; undefined slots are skipped. No iteration
-  prefix needed. Hyphenated keys use backticks: `` `vsdd-tech-spec`.title ``.
+  prefix needed. Hyphenated keys use backticks: `` vsdd.`tech-spec`.title ``.
 
   Multiple matches → multiple files. The naming scheme is configurable:
     - `index`  — 0, 1, 2, ... (default; ordered, simple)

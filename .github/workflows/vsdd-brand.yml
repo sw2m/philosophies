@@ -9,7 +9,7 @@ name: VSDD opt-out brand
 #
 # Brand applied iff: whitelist-match OR (no marker AND has impl-content).
 # The brand is informational; it does not block merge. It is a bot-
-# authored comment containing the token `<!-- vsdd-opt-out-brand -->`
+# authored comment containing the token `<!-- vsdd: opt-out-brand -->`
 # (deliberately separate from the Red-gate-cleared token, and distinct
 # from labels because labels can be toggled by anyone with PR write
 # access; only github-actions[bot] can author comments under its own
@@ -218,7 +218,7 @@ jobs:
         run: |
           set -euo pipefail
           # The brand is a github-actions[bot] comment containing the
-          # token `<!-- vsdd-opt-out-brand -->`. Bot identity is the
+          # token `<!-- vsdd: opt-out-brand -->`. Bot identity is the
           # only spoof-resistant signal: external collaborators can flip
           # labels but cannot post under github-actions[bot]'s identity.
           #
@@ -235,7 +235,7 @@ jobs:
             "repos/${REPO}/issues/${PR}/comments" \
             --jq '.[]
                   | select(.user.login == "github-actions[bot]")
-                  | select(.body | contains("<!-- vsdd-opt-out-brand -->"))
+                  | select(.body | contains("<!-- vsdd: opt-out-brand -->"))
                   | .id')
           count=${#existing_ids[@]}
           echo "Found $count existing bot brand comment(s) on PR #${PR}."
@@ -248,7 +248,7 @@ jobs:
           if [ "$BRAND" = "true" ]; then
             if [ "$count" -eq 0 ]; then
               {
-                printf '%s\n' '<!-- vsdd-opt-out-brand -->'
+                printf '%s\n' '<!-- vsdd: opt-out-brand -->'
                 printf '\n'
                 printf '%s\n' '**VSDD opt-out / out-of-process** — this PR has been branded `vsdd:opt-out` by `github-actions[bot]`. Either every changed file is under `.github/` (whitelist-match, no test-discipline expected) OR the PR has impl content without an earned `Red-gate-cleared` marker (divergence from VSDD best-effort).'
                 printf '\n'

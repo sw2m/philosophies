@@ -3,22 +3,23 @@
 // (no I/O).
 //
 // Replaces .github/scripts/phase-1c-cardinality.js — ported to TS+Deno,
-// uses `vsdd/frontmatter.ts` (#210). Emits and consumes the new
-// kv-discriminated shape:
+// uses `vsdd/frontmatter.ts` (#210). Emits and consumes the namespaced
+// shape:
 //
 //   <!--
-//   vsdd-phase-1c:
-//     reviewer: orchestrator | gemini | claude
-//     verdict: pass | fail
-//     [subjects: N]
-//     [outcomes: N]
+//   vsdd:
+//     phase-1c:
+//       reviewer: orchestrator | gemini | claude
+//       verdict: pass | fail
+//       [subjects: N]
+//       [outcomes: N]
 //   -->
 //
 // Spec: sw2m/philosophies#128. Goal: sw2m/philosophies#125.
 
 import { parse as fm } from "../frontmatter.ts";
 
-const KEY = "vsdd-phase-1c";
+const KEY = "phase-1c";  // subkey under vsdd: namespace
 
 export type Tuple = { subjects: number; outcomes: number };
 export type Reviewer = "gemini" | "claude" | "orchestrator";
@@ -34,9 +35,9 @@ export function valid(value: unknown): boolean {
   return n >= 1;
 }
 
-/** Pick the single `vsdd-phase-1c` block from `body` whose `reviewer`
- *  field matches `slug`, or null if none. Multiple matching blocks: most
- *  recent (last in source order) wins. */
+/** Pick the single `vsdd: { phase-1c: ... }` block from `body` whose
+ *  `reviewer` field matches `slug`, or null if none. Multiple matching
+ *  blocks: most recent (last in source order) wins. */
 export function read(body: string, slug: Reviewer):
   & { reviewer: Reviewer; verdict?: string }
   & Partial<Tuple>
@@ -45,7 +46,9 @@ export function read(body: string, slug: Reviewer):
   let hit: Record<string, unknown> | null = null;
   for (const block of blocks) {
     if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-    const inner = (block as Record<string, unknown>)[KEY];
+    const ns = (block as Record<string, unknown>).vsdd;
+    if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+    const inner = (ns as Record<string, unknown>)[KEY];
     if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
     const r = (inner as Record<string, unknown>);
     if (r.reviewer !== slug) continue;
@@ -60,8 +63,8 @@ export function read(body: string, slug: Reviewer):
   return out as any;
 }
 
-/** Pull a `{subjects, outcomes}` tuple out of a `vsdd-phase-1c` block
- *  with the given `slug`. Returns null when missing or invalid. */
+/** Pull a `{subjects, outcomes}` tuple out of a `vsdd: { phase-1c: ... }`
+ *  block with the given `slug`. Returns null when missing or invalid. */
 export function tuple(body: string, slug: Reviewer): Tuple | null {
   const r = read(body, slug);
   if (!r) return null;
@@ -84,20 +87,21 @@ export function combine(a: Tuple, b: Tuple): Tuple {
   };
 }
 
-/** Emit the kv-discriminated `vsdd-phase-1c` block for the orchestrator
- *  verdict. `subjects` and `outcomes` are optional (omitted on a
- *  fail-without-tuple). */
+/** Emit the namespaced `vsdd: { phase-1c: ... }` block for the
+ *  orchestrator verdict. `subjects` and `outcomes` are optional
+ *  (omitted on a fail-without-tuple). */
 export function emit(
   opts: { verdict: "pass" | "fail"; subjects?: number; outcomes?: number },
 ): string {
   const lines = [
     "<!--",
-    `${KEY}:`,
-    `  reviewer: orchestrator`,
-    `  verdict: ${opts.verdict}`,
+    "vsdd:",
+    `  ${KEY}:`,
+    `    reviewer: orchestrator`,
+    `    verdict: ${opts.verdict}`,
   ];
-  if (opts.subjects !== undefined) lines.push(`  subjects: ${opts.subjects}`);
-  if (opts.outcomes !== undefined) lines.push(`  outcomes: ${opts.outcomes}`);
+  if (opts.subjects !== undefined) lines.push(`    subjects: ${opts.subjects}`);
+  if (opts.outcomes !== undefined) lines.push(`    outcomes: ${opts.outcomes}`);
   lines.push("-->");
   return lines.join("\n");
 }

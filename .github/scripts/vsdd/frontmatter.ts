@@ -22,9 +22,10 @@
 // parses multiline YAML (typically a mapping). Discrimination between
 // blocks is the caller's job — typically one of:
 //
-//   1. inline marker scalar: `<!-- vsdd-opt-out-brand -->` → "vsdd-opt-out-brand"
-//   2. kv-discrimination:    `<!-- vsdd-phase-3: { state: clear } -->`
-//                            → { "vsdd-phase-3": { state: "clear" } }
+//   1. inline kv-marker:     `<!-- vsdd: opt-out-brand -->`
+//                            → { vsdd: "opt-out-brand" }
+//   2. namespaced block:     `<!-- vsdd: { phase-3: { verdict: pass } } -->`
+//                            → { vsdd: { "phase-3": { verdict: "pass" } } }
 //   3. field-discrimination: `<!-- {phase: 3, kind: verdict, ...} -->`
 //                            → { phase: 3, kind: "verdict", ... }
 //
@@ -32,9 +33,10 @@
 //
 //   import * as frontmatter from "../vsdd/frontmatter.ts";
 //   const blocks = frontmatter.parse(body);
-//   const verdict = blocks.find(
-//     (b) => isMapping(b) && "vsdd-phase-3-aggregate" in b,
-//   )?.["vsdd-phase-3-aggregate"];
+//   const phase3 = blocks
+//     .map((b) => isMapping(b) ? b.vsdd : undefined)
+//     .find((ns) => isMapping(ns) && "phase-3" in ns)
+//     ?.["phase-3"];
 
 import { parse as yaml } from "jsr:@std/yaml@^1";
 

@@ -42,50 +42,55 @@ runs:
 
     - name: Read orchestrator canonical tuple (#128)
       id: cardinality
-      shell: bash
+      uses: ./.github/actions/script/github-deno
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
         REPO: ${{ github.repository }}
         ISSUE: ${{ inputs.issue-number }}
-      run: |
-        set -euo pipefail
-        # Find the chronologically-last orchestrator-authored Phase 1c
-        # comment with verdict: pass. Extract subjects/outcomes from its
-        # frontmatter as the canonical tuple. Absence of this comment is
-        # non-fatal — fall back to the LLM's existing decomposition logic.
-        if [ -z "${REPO:-}" ] || [ -z "${ISSUE:-}" ]; then
-          echo "min-cardinality=" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        comments=$(gh api -H "Accept: application/vnd.github+json" \
-          "repos/${REPO}/issues/${ISSUE}/comments?per_page=100" 2>/dev/null || echo '[]')
-        latest=$(jq -r '
-          [.[]
-            | select(.user.login == "github-actions[bot]")
-            | select(.body | test("<!-- vsdd-phase-1c[\\s\\S]*reviewer:\\s*orchestrator[\\s\\S]*verdict:\\s*pass[\\s\\S]*-->"))
-          ]
-          | sort_by(.created_at)
-          | last
-        ' <<<"$comments")
-        if [ "$latest" = "null" ] || [ -z "$latest" ]; then
-          echo "::notice::No orchestrator pass comment found; falling back to default decomposition."
-          echo "min-cardinality=" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        body=$(jq -r '.body' <<<"$latest")
-        subjects=$(printf '%s\n' "$body" | sed -n 's/^subjects:\s*\([0-9]\+\)\s*$/\1/p' | head -1)
-        outcomes=$(printf '%s\n' "$body" | sed -n 's/^outcomes:\s*\([0-9]\+\)\s*$/\1/p' | head -1)
-        if [ -z "$subjects" ] || [ -z "$outcomes" ]; then
-          echo "min-cardinality=" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        if [ "$subjects" -lt "$outcomes" ]; then
-          min=$subjects
-        else
-          min=$outcomes
-        fi
-        echo "min-cardinality=$min" >> "$GITHUB_OUTPUT"
-        echo "Canonical tuple: subjects=${subjects}, outcomes=${outcomes}, min=${min}"
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../..
+        script: |
+          // Find the chronologically-last orchestrator-authored Phase 1c
+          // comment with verdict: pass; extract subjects/outcomes via the
+          // canonical TS reader. Absence is non-fatal — fall back to the
+          // LLM's default decomposition logic.
+          const cardinality = await import("./scripts/vsdd/phase-1c/cardinality.ts");
+          const repo = Deno.env.get("REPO");
+          const issue = Number(Deno.env.get("ISSUE"));
+          if (!repo || !issue) {
+            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "min-cardinality=\n", { append: true });
+            return;
+          }
+          const [owner, name] = repo.split("/");
+          const all = await github.paginate(github.rest.issues.listComments, {
+            owner, repo: name, issue_number: issue, per_page: 100,
+          });
+          const bot = all.filter((c) => c.user?.login === "github-actions[bot]");
+          let hit = null;
+          for (const c of bot) {
+            const r = cardinality.read(c.body || "", "orchestrator");
+            if (!r || r.verdict !== "pass") continue;
+            if (!hit || new Date(c.created_at) > new Date(hit.c.created_at)) {
+              hit = { c, r };
+            }
+          }
+          if (!hit) {
+            core.notice("No orchestrator pass comment found; falling back to default decomposition.");
+            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "min-cardinality=\n", { append: true });
+            return;
+          }
+          const { subjects, outcomes } = hit.r;
+          if (subjects === undefined || outcomes === undefined) {
+            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "min-cardinality=\n", { append: true });
+            return;
+          }
+          const min = Math.min(subjects, outcomes);
+          await Deno.writeTextFile(
+            Deno.env.get("GITHUB_OUTPUT")!,
+            `min-cardinality=${min}\n`,
+            { append: true },
+          );
+          console.log(`Canonical tuple: subjects=${subjects}, outcomes=${outcomes}, min=${min}`);
 
     - name: Build agent prompt
       shell: bash
@@ -106,14 +111,14 @@ runs:
 
         Marker shape — the marker MUST be on its own line, exactly:
 
-            <!-- vsdd-tech-spec: { title: "[tech] short title" } -->
+            <!-- vsdd: { tech-spec: { title: "[tech] short title" } } -->
 
         Concrete example of an acceptable response:
 
         ```
         Optional preamble — short rationale describing the decomposition.
 
-        <!-- vsdd-tech-spec: { title: "[tech] Add ownership-gate job to pr-review.yml" } -->
+        <!-- vsdd: { tech-spec: { title: "[tech] Add ownership-gate job to pr-review.yml" } } -->
 
         **Problem.** pr-review.yml currently runs Phase 3 review on every
         non-draft PR regardless of who opened it. External-contributor
@@ -125,7 +130,7 @@ runs:
 
         **Section reference.** §I (Adversary), §II Phase 3.
 
-        <!-- vsdd-tech-spec: { title: "[tech] ..." } -->
+        <!-- vsdd: { tech-spec: { title: "[tech] ..." } } -->
 
         **Problem.** ...
 
@@ -133,7 +138,7 @@ runs:
         ```
 
         Parser semantics:
-        - Multiple `vsdd-tech-spec` markers are expected and required (one per spec).
+        - Multiple `vsdd: { tech-spec: ... }` markers are expected and required (one per spec).
         - A marker without a `title` field is silently skipped (won't open an issue).
         - The body for each tech-spec is the prose between this marker and the next marker (or end of file).
         - If you decide the goal cannot be cleanly decomposed, emit ZERO markers and write your rationale as free-form prose; the workflow will surface that rationale on the goal-spec.

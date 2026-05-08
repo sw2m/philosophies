@@ -7,12 +7,13 @@ with `<!--` and `-->` each on their own lines (no content sharing
 the wrapper line):
 
 <!--
-vsdd-phase-2:
-  new_test_files:
-    - path/to/new_test_file_1.ext
-    - path/to/new_test_file_2.ext
-  new_test_command: "exact command to run ONLY the new tests"
-  regression_test_command: "exact command to run ONLY the pre-existing tests"
+vsdd:
+  phase-2:
+    new_test_files:
+      - path/to/new_test_file_1.ext
+      - path/to/new_test_file_2.ext
+    new_test_command: "exact command to run ONLY the new tests"
+    regression_test_command: "exact command to run ONLY the pre-existing tests"
 -->
 
 Both commands must exit 0 on pass, non-zero on fail. They will be

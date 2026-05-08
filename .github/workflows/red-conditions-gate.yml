@@ -145,7 +145,7 @@ jobs:
           # deletes or edits. Idempotent: skip if any prior bot-authored
           # comment already contains the token.
           existing=$(gh api --paginate "repos/${{ github.repository }}/issues/${PR}/comments" \
-            --jq ".[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"<!-- vsdd-red-gate-cleared -->\"))" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\") | select(.body | contains(\"<!-- vsdd: red-gate-cleared -->\"))" \
             | head -c1) || true
           if [ -n "$existing" ]; then
             echo "Marker already posted on this PR; skipping (one-way diode)."
@@ -157,7 +157,7 @@ jobs:
           # scalar. This printf pipeline keeps every line at the YAML
           # indent and preserves the trailing `\n` via `printf '%s\n'`.
           {
-            printf '%s\n' '<!-- vsdd-red-gate-cleared -->'
+            printf '%s\n' '<!-- vsdd: red-gate-cleared -->'
             printf '\n'
             printf '%s\n' '_Phase 2 conditions met. This marker latches; the bot will not revoke it._'
           } | gh pr comment "$PR" --body-file -

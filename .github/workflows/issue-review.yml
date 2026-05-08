@@ -276,10 +276,11 @@ jobs:
             }
             const fm = [
               "<!--",
-              "vsdd-phase-1c:",
-              `  reviewer: ${SLUG}`,
-              `  verdict: ${result.verdict}`,
-              ...(subjects !== undefined ? [`  subjects: ${subjects}`, `  outcomes: ${outcomes}`] : []),
+              "vsdd:",
+              "  phase-1c:",
+              `    reviewer: ${SLUG}`,
+              `    verdict: ${result.verdict}`,
+              ...(subjects !== undefined ? [`    subjects: ${subjects}`, `    outcomes: ${outcomes}`] : []),
               "-->",
               "",
             ].join("\n");
@@ -356,10 +357,11 @@ jobs:
             }
             const fm = [
               "<!--",
-              "vsdd-phase-1c:",
-              `  reviewer: ${SLUG}`,
-              `  verdict: ${result.verdict}`,
-              ...(subjects !== undefined ? [`  subjects: ${subjects}`, `  outcomes: ${outcomes}`] : []),
+              "vsdd:",
+              "  phase-1c:",
+              `    reviewer: ${SLUG}`,
+              `    verdict: ${result.verdict}`,
+              ...(subjects !== undefined ? [`    subjects: ${subjects}`, `    outcomes: ${outcomes}`] : []),
               "-->",
               "",
             ].join("\n");
