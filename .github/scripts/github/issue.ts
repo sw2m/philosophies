@@ -10,6 +10,7 @@
 
 import type { context, getOctokit } from "npm:@actions/github@^6";
 import type { Endpoints } from "npm:@octokit/types@^14";
+import { Comment, type ListOpts } from "./comment.ts";
 
 type Github = ReturnType<typeof getOctokit>;
 type Context = typeof context;
@@ -27,7 +28,7 @@ export type Ctx = { api: Github; owner: string; repo: string };
 export type CreateOpts = Omit<CreateOp["parameters"], "owner" | "repo">;
 export type UpdateOpts = Omit<UpdateOp["parameters"], "owner" | "repo">;
 export type GetOpts    = Omit<GetOp["parameters"],    "owner" | "repo">;
-export type ListOpts   = Omit<ListOp["parameters"],   "owner" | "repo">;
+// (Comment.ListOpts imported above; issue list params use the shape inline below.)
 
 export class Issue implements IssueEntity {
   // --- scope (constructor-bound) ---
@@ -114,12 +115,32 @@ export class Issue implements IssueEntity {
   }
 
   /** Paginate issues on the bound repo. */
-  list(opts: ListOpts = {}) {
+  list(opts: Omit<ListOp["parameters"], "owner" | "repo"> = {}) {
     return this.api.paginate(this.api.rest.issues.listForRepo, {
       owner: this.owner,
       repo: this.repo,
       per_page: 100,
       ...opts,
     });
+  }
+
+  /** Shorthand: the issue's comment thread. Hydrates a `Comment` bound to
+   *  THIS issue and lists its comments. Requires `this.number` to be set
+   *  (call `get()`/`create()` first). Pass `{bot: true}` to filter to
+   *  github-actions[bot]-authored comments.
+   *
+   *  Named `thread()` not `comments()` because IssueEntity has a
+   *  `comments: number` field (the count) — a method shadowing it would
+   *  fail to satisfy `implements IssueEntity`. */
+  thread(opts: ListOpts = {}) {
+    if (!this.number) {
+      throw new Error("Issue.thread() requires this.number — call get() or create() first");
+    }
+    return new Comment({
+      api: this.api,
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: this.number,
+    }).list(opts);
   }
 }

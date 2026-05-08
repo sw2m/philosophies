@@ -12,17 +12,17 @@
 //   --allowed-tools "Bash Edit Write Read Glob Grep"
 //   --permission-mode bypassPermissions      (no per-call confirmation)
 
-import { Agent, type AgentOpts, type RunOpts } from "./agent.ts";
+import { Agent, type AgentOpts, type PipeOpts } from "./agent.ts";
 
-export type Opts = Partial<Pick<AgentOpts, "primary" | "fallback" | "timeoutSecs" | "errLog">>;
+export type Opts = Partial<Pick<AgentOpts, "primary" | "fallback" | "timeout" | "log">>;
 
 export class Claude extends Agent {
   constructor(opts: Opts = {}) {
     super({
       primary: opts.primary ?? "claude-opus-4-5",
       fallback: opts.fallback ?? "claude-sonnet-4-5",
-      timeoutSecs: opts.timeoutSecs ?? 900,
-      errLog: opts.errLog ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/claude-err.log`,
+      timeout: opts.timeout ?? 900,
+      log: opts.log ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/claude-err.log`,
     });
   }
 
@@ -43,4 +43,4 @@ export class Claude extends Agent {
   }
 }
 
-export type { RunOpts };
+export type { PipeOpts };

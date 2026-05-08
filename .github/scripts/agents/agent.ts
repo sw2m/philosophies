@@ -10,7 +10,7 @@
 // promote-tech-to-pr job for hours). The timeout is a hard cap that
 // trips primary→fallback escalation rather than waiting indefinitely.
 
-export type RunOpts = {
+export type PipeOpts = {
   /** Path to the file whose contents become the agent's stdin. */
   input: string;
   /** Path to write the agent's stdout to. Truncated on each invocation. */
@@ -23,23 +23,32 @@ export type AgentOpts = {
   /** Fallback model — tried iff primary exits non-zero or times out. */
   fallback: string;
   /** Wall-clock seconds before the invocation is aborted. */
-  timeoutSecs: number;
+  timeout: number;
   /** Path to redirect stderr to. Tailed on warnings; persists across calls
    *  (callers should rotate per attempt if they want isolated logs). */
-  errLog: string;
+  log: string;
 };
+
+/** Exit-code semantics. The base class synthesizes `timeout` from a
+ *  SIGTERM signal (AbortController triggers the abort, the spawned
+ *  process catches SIGTERM, status reports signal). Subclasses whose
+ *  CLIs use different conventions override this constant. */
+export type Codes = { timeout: number };
 
 export class Agent {
   primary: string;
   fallback: string;
-  timeoutSecs: number;
-  errLog: string;
+  timeout: number;
+  log: string;
+
+  /** Override per-agent if the CLI emits non-default exit-code semantics. */
+  protected codes: Codes = { timeout: 124 };
 
   constructor(opts: AgentOpts) {
     this.primary = opts.primary;
     this.fallback = opts.fallback;
-    this.timeoutSecs = opts.timeoutSecs;
-    this.errLog = opts.errLog;
+    this.timeout = opts.timeout;
+    this.log = opts.log;
   }
 
   /** Override per-agent: the binary name (`claude`, `gemini`, ...) on PATH. */
@@ -52,11 +61,13 @@ export class Agent {
     throw new Error("subclass must override `argsFor`");
   }
 
-  /** One invocation, one model. Returns the exit code. 124 indicates the
-   *  timeout aborted the call; >0 indicates the CLI failed normally. */
-  async runOnce(model: string, opts: RunOpts): Promise<number> {
+  /** One invocation, one model. Returns the exit code. The codes.timeout
+   *  value (default 124, mirroring GNU coreutils `timeout(1)`) indicates
+   *  the wall-clock budget aborted the call; >0 indicates the CLI failed
+   *  on its own. */
+  async prompt(model: string, opts: PipeOpts): Promise<number> {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutSecs * 1000);
+    const timer = setTimeout(() => ctrl.abort(), this.timeout * 1000);
     try {
       const stdin = await Deno.open(opts.input, { read: true });
       const stdout = await Deno.open(opts.output, {
@@ -64,7 +75,7 @@ export class Agent {
         create: true,
         truncate: true,
       });
-      const stderr = await Deno.open(this.errLog, {
+      const stderr = await Deno.open(this.log, {
         write: true,
         create: true,
         truncate: true,
@@ -79,16 +90,15 @@ export class Agent {
           signal: ctrl.signal,
         }).spawn();
 
-        // Wire file → stdin, stdout → file, stderr → file.
         const pipe1 = stdin.readable.pipeTo(proc.stdin);
         const pipe2 = proc.stdout.pipeTo(stdout.writable);
         const pipe3 = proc.stderr.pipeTo(stderr.writable);
 
         const status = await proc.status;
         await Promise.allSettled([pipe1, pipe2, pipe3]);
-        return status.signal === "SIGTERM" ? 124 : (status.code ?? 1);
+        return status.signal === "SIGTERM" ? this.codes.timeout : (status.code ?? 1);
       } catch (e) {
-        if (ctrl.signal.aborted) return 124;
+        if (ctrl.signal.aborted) return this.codes.timeout;
         throw e;
       }
     } finally {
@@ -99,26 +109,26 @@ export class Agent {
   /** Try primary, then fallback on non-zero. Emits `::warning::`
    *  annotations + tails the err log on escalation, matching the bash
    *  invoke_claude shape. Returns the final exit code. */
-  async run(opts: RunOpts): Promise<number> {
-    let rc = await this.runOnce(this.primary, opts);
-    if (rc === 124) {
+  async run(opts: PipeOpts): Promise<number> {
+    let rc = await this.prompt(this.primary, opts);
+    if (rc === this.codes.timeout) {
       console.error(
-        `::warning::${this.cmd}: primary ${this.primary} timed out after ${this.timeoutSecs}s; falling back to ${this.fallback}`,
+        `::warning::${this.cmd}: primary ${this.primary} timed out after ${this.timeout}s; falling back to ${this.fallback}`,
       );
     } else if (rc !== 0) {
       console.error(
         `::warning::${this.cmd}: primary ${this.primary} exited ${rc}; falling back to ${this.fallback}`,
       );
-      await tail(this.errLog, 50);
+      await tail(this.log, 50);
     }
     if (rc !== 0) {
-      rc = await this.runOnce(this.fallback, opts);
-      if (rc === 124) {
+      rc = await this.prompt(this.fallback, opts);
+      if (rc === this.codes.timeout) {
         console.error(
-          `::warning::${this.cmd}: fallback ${this.fallback} also timed out after ${this.timeoutSecs}s`,
+          `::warning::${this.cmd}: fallback ${this.fallback} also timed out after ${this.timeout}s`,
         );
       } else if (rc !== 0) {
-        await tail(this.errLog, 50);
+        await tail(this.log, 50);
       }
     }
     return rc;

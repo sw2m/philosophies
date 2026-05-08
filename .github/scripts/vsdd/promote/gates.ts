@@ -144,7 +144,7 @@ async function buildPhase4Input(
 // Red gate (Phases 2-3): author tests, expect new fail + reg pass.
 // =========================================================================
 export async function redGate(): Promise<void> {
-  const claude = new Claude({ timeoutSecs: TIMEOUT });
+  const claude = new Claude({ timeout: TIMEOUT });
   const ATTEMPTS = MAX_RETRIES + 1;
   let passed = false;
   let lastFailure = "";
@@ -240,7 +240,7 @@ export async function redGate(): Promise<void> {
 // Green gate (Phases 4-5): implement, expect new pass + reg pass.
 // =========================================================================
 export async function greenGate(): Promise<void> {
-  const claude = new Claude({ timeoutSecs: TIMEOUT });
+  const claude = new Claude({ timeout: TIMEOUT });
   const noRunner = Deno.env.get("NO_RUNNER") === "true";
 
   let meta: { new_cmd: string; reg_cmd: string } | null = null;

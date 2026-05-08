@@ -42,22 +42,15 @@ jobs:
             // rate-limit: one 30s backoff retry, then fail-closed
             // (marker-present=false).
             const { marked } = await import("./.github/scripts/vsdd/brand.ts");
+            const { Comment } = await import("./.github/scripts/github/comment.ts");
+            const { set: setOutput } = await import("./.github/scripts/github/output.ts");
             const pr = ${{ inputs.pr-number }};
             const [owner, repo] = "${{ github.repository }}".split("/");
 
             async function scan() {
-              const it = github.paginate.iterator(
-                github.rest.issues.listComments,
-                { owner, repo, issue_number: pr, per_page: 100 },
-              );
-              for await (const { data } of it) {
-                for (const c of data) {
-                  if (c.user?.login === "github-actions[bot]" && marked(c.body || "")) {
-                    return "found";
-                  }
-                }
-              }
-              return "absent";
+              const c = new Comment({ api: github, owner, repo, issue_number: pr });
+              const bot = await c.list({ bot: true });
+              return bot.some((x) => marked(x.body || "")) ? "found" : "absent";
             }
 
             let result;
@@ -74,11 +67,7 @@ jobs:
                   const status2 = (e2 as { status?: number })?.status;
                   if (status2 === 403) {
                     core.notice("Rate-limited twice; failing-closed (marker-present=false).");
-                    await Deno.writeTextFile(
-                      Deno.env.get("GITHUB_OUTPUT")!,
-                      "marker-present=false\n",
-                      { append: true },
-                    );
+                    await setOutput("marker-present", "false");
                     return "absent";
                   }
                   throw e2;
@@ -89,9 +78,5 @@ jobs:
             }
 
             const present = result === "found" ? "true" : "false";
-            await Deno.writeTextFile(
-              Deno.env.get("GITHUB_OUTPUT")!,
-              `marker-present=${present}\n`,
-              { append: true },
-            );
+            await setOutput("marker-present", present);
             return result;
