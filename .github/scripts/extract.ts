@@ -112,35 +112,44 @@ function flatten(result: unknown): unknown[] {
   return [result];
 }
 
-if (import.meta.main) {
-  const a = args(Deno.args);
-
-  const raw = await Deno.readTextFile(a.bodyFile);
+/** Programmatic API for extract.ts. Call from inside a github-deno
+ *  script when you'd otherwise shell out to the CLI. Returns the array
+ *  of written file paths. */
+export async function extract(opts: Args): Promise<string[]> {
+  const raw = await Deno.readTextFile(opts.bodyFile);
   const blocks = parseBlocks(raw);
 
   let result: unknown;
   try {
-    result = await jsonata(a.query).evaluate(blocks);
+    result = await jsonata(opts.query).evaluate(blocks);
   } catch (e) {
-    console.error(`jsonata evaluation failed: ${(e as Error).message}`);
-    Deno.exit(1);
+    throw new Error(`jsonata evaluation failed: ${(e as Error).message}`);
   }
   const matches = flatten(result);
 
-  await Deno.mkdir(a.outDir, { recursive: true });
+  await Deno.mkdir(opts.outDir, { recursive: true });
 
   const paths: string[] = [];
   for (let i = 0; i < matches.length; i++) {
     const v = matches[i];
-    const content = a.format === "yaml" ? toYaml(v) : JSON.stringify(v, null, 2);
+    const content = opts.format === "yaml" ? toYaml(v) : JSON.stringify(v, null, 2);
     let stem: string;
-    if (a.naming === "index") stem = String(i);
-    else if (a.naming === "alpha") stem = alpha(i);
+    if (opts.naming === "index") stem = String(i);
+    else if (opts.naming === "alpha") stem = alpha(i);
     else stem = await sha(content);
-    const path = `${a.outDir.replace(/\/$/, "")}/${stem}.${a.format}`;
+    const path = `${opts.outDir.replace(/\/$/, "")}/${stem}.${opts.format}`;
     await Deno.writeTextFile(path, content);
     paths.push(path);
   }
+  return paths;
+}
 
-  console.log(JSON.stringify(paths));
+if (import.meta.main) {
+  try {
+    const paths = await extract(args(Deno.args));
+    console.log(JSON.stringify(paths));
+  } catch (e) {
+    console.error((e as Error).message);
+    Deno.exit(1);
+  }
 }

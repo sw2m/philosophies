@@ -30,7 +30,8 @@ export type UpdateOpts =
   & Omit<UpdateOp["parameters"], "owner" | "repo">;
 
 export type ListOpts =
-  & Omit<ListOp["parameters"], "owner" | "repo" | "issue_number">;
+  & Omit<ListOp["parameters"], "owner" | "repo" | "issue_number">
+  & { bot?: boolean };  // convenience: filter to github-actions[bot]-authored
 
 // deno-lint-ignore no-explicit-any
 export class Comment implements IssueComment {
@@ -98,16 +99,18 @@ export class Comment implements IssueComment {
     });
   }
 
-  /** Paginate every comment on the bound issue/PR. The element type is
-   *  what Octokit's `paginate` infers from listComments — structurally
-   *  the same as IssueComment for our purposes. */
-  list(opts: ListOpts = {}) {
-    return this.api.paginate(this.api.rest.issues.listComments, {
+  /** Paginate every comment on the bound issue/PR. Pass `bot: true` to
+   *  filter to github-actions[bot]-authored comments only — the common
+   *  case for verdict / orchestrator / brand-marker reads. */
+  async list(opts: ListOpts = {}) {
+    const { bot, ...rest } = opts;
+    const all = await this.api.paginate(this.api.rest.issues.listComments, {
       owner: this.owner,
       repo: this.repo,
       issue_number: this.issue_number,
       per_page: 100,
-      ...opts,
+      ...rest,
     });
+    return bot ? all.filter((c) => c.user?.login === "github-actions[bot]") : all;
   }
 }

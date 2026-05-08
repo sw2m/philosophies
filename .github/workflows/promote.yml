@@ -112,6 +112,7 @@ jobs:
             const [owner, name] = "${{ github.repository }}".split("/");
             const issue = ${{ github.event.issue.number }};
 
+              const { set: setOutput } = await import("./.github/scripts/github/output.ts");
             // Reference timestamp for freshness (per #93).
             const q = await github.graphql(
               `query($owner: String!, $name: String!, $num: Int!) {
@@ -127,18 +128,16 @@ jobs:
             const refAt = q.repository?.issue?.lastEditedAt || q.repository?.issue?.createdAt;
             if (!refAt) {
               core.setFailed(`Could not resolve body-edit timestamp for issue #${issue}; refusing to evaluate verdict freshness.`);
-              await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+              await setOutput("cleared", "false");
               return;
             }
             const refEpoch = Math.floor(new Date(refAt).getTime() / 1000);
             console.log(`Phase 1c verdict-freshness reference: ${refAt} (epoch ${refEpoch}); per #93 this is the body-edit timestamp.`);
 
-            // Pull all comments and find latest per reviewer.
-            const allComments = await github.paginate(
-              github.rest.issues.listComments,
-              { owner, repo: name, issue_number: issue, per_page: 100 },
-            );
-            const bot = allComments.filter((c) => c.user?.login === "github-actions[bot]");
+            // Pull all bot-authored comments to find latest per reviewer.
+            const { Comment } = await import("./.github/scripts/github/comment.ts");
+            const comments = new Comment({ api: github, owner, repo: name, issue_number: issue });
+            const bot = await comments.list({ bot: true });
 
             // Find the latest comment whose vsdd:phase-1c block matches
             // `slug`. Returns the comment's verdict + creation epoch, or
@@ -165,22 +164,22 @@ jobs:
               const v = latest(slug);
               if (!v) {
                 core.setFailed(`No Phase 1c review from ${slug} on this issue. Edit the issue body to re-trigger Phase 1c review.`);
-                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                await setOutput("cleared", "false");
                 return;
               }
               if (!v.verdict) {
                 core.setFailed(`Phase 1c ${slug} comment found but verdict frontmatter is missing/unparseable; treating as fail.`);
-                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                await setOutput("cleared", "false");
                 return;
               }
               if (v.epoch < refEpoch) {
                 core.setFailed(`Phase 1c ${slug} verdict (${v.verdict}) is stale — posted at ${v.created}, issue body last edited at ${refAt}. Edit the issue body to re-trigger Phase 1c.`);
-                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                await setOutput("cleared", "false");
                 return;
               }
               if (v.verdict !== "pass") {
                 core.setFailed(`Phase 1c ${slug} verdict is '${v.verdict}'. Address the blocking concerns in the review comment, edit the issue, and re-run Phase 1c.`);
-                await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+                await setOutput("cleared", "false");
                 return;
               }
               console.log(`✓ ${slug} verdict pass at ${v.created}`);
@@ -191,11 +190,11 @@ jobs:
             const orch = latest("orchestrator");
             if (orch && orch.epoch >= refEpoch && orch.verdict === "fail") {
               core.setFailed(`Phase 1c orchestrator verdict is 'fail' at ${orch.created}. See the orchestrator comment for blocking concerns.`);
-              await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=false\n", { append: true });
+              await setOutput("cleared", "false");
               return;
             }
 
-            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "cleared=true\n", { append: true });
+            await setOutput("cleared", "true");
 
   promote-goal-to-tech:
     name: Decompose goal-spec into tech-spec sub-issues

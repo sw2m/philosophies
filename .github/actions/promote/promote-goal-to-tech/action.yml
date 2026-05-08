@@ -55,17 +55,14 @@ runs:
           // canonical TS reader. Absence is non-fatal — fall back to the
           // LLM's default decomposition logic.
           const cardinality = await import("./scripts/vsdd/phase-1c/cardinality.ts");
+          const { Comment } = await import("./scripts/github/comment.ts");
+          const { set: setOutput } = await import("./scripts/github/output.ts");
           const repo = Deno.env.get("REPO");
           const issue = Number(Deno.env.get("ISSUE"));
-          if (!repo || !issue) {
-            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "min-cardinality=\n", { append: true });
-            return;
-          }
+          if (!repo || !issue) { await setOutput("min-cardinality", ""); return; }
           const [owner, name] = repo.split("/");
-          const all = await github.paginate(github.rest.issues.listComments, {
-            owner, repo: name, issue_number: issue, per_page: 100,
-          });
-          const bot = all.filter((c) => c.user?.login === "github-actions[bot]");
+          const comments = new Comment({ api: github, owner, repo: name, issue_number: issue });
+          const bot = await comments.list({ bot: true });
           let hit = null;
           for (const c of bot) {
             const r = cardinality.read(c.body || "", "orchestrator");
@@ -76,20 +73,16 @@ runs:
           }
           if (!hit) {
             core.notice("No orchestrator pass comment found; falling back to default decomposition.");
-            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "min-cardinality=\n", { append: true });
+            await setOutput("min-cardinality", "");
             return;
           }
           const { subjects, outcomes } = hit.r;
           if (subjects === undefined || outcomes === undefined) {
-            await Deno.writeTextFile(Deno.env.get("GITHUB_OUTPUT")!, "min-cardinality=\n", { append: true });
+            await setOutput("min-cardinality", "");
             return;
           }
           const min = Math.min(subjects, outcomes);
-          await Deno.writeTextFile(
-            Deno.env.get("GITHUB_OUTPUT")!,
-            `min-cardinality=${min}\n`,
-            { append: true },
-          );
+          await setOutput("min-cardinality", min);
           console.log(`Canonical tuple: subjects=${subjects}, outcomes=${outcomes}, min=${min}`);
 
     - name: Build agent prompt

@@ -4,7 +4,7 @@
 //
 // Replaces .github/scripts/consensus.py — ported to TS+Deno.
 
-export type Verdict = "pass" | "fail";
+import type { Verdict } from "../verdict.ts";
 
 /** Compute the process exit code from `verdict` and `opened`. Returns 0
  *  iff the verdict is `pass` AND no new gap issues were filed; 1

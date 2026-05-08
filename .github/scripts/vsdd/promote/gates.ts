@@ -19,9 +19,9 @@
 
 import { Claude } from "../../agents/claude.ts";
 import { read as readPhase2 } from "../phase-2/frontmatter.ts";
+import { set as setOutput } from "../../github/output.ts";
 
 const RUNNER_TEMP = Deno.env.get("RUNNER_TEMP") ?? "/tmp";
-const GITHUB_OUTPUT = Deno.env.get("GITHUB_OUTPUT")!;
 const BRANCH = Deno.env.get("BRANCH")!;
 const ISSUE = Deno.env.get("ISSUE_NUMBER")!;
 const MAX_RETRIES = Number(Deno.env.get("MAX_RETRIES") ?? "3");
@@ -73,10 +73,6 @@ async function techContext(): Promise<{ title: string; body: string }> {
     title: await Deno.readTextFile(`${RUNNER_TEMP}/tech-title.txt`),
     body: await Deno.readTextFile(`${RUNNER_TEMP}/tech-body.txt`),
   };
-}
-
-async function appendOutput(line: string): Promise<void> {
-  await Deno.writeTextFile(GITHUB_OUTPUT, line + "\n", { append: true });
 }
 
 /** Tail the last N lines of a file, returning the slice (best-effort). */
@@ -234,9 +230,9 @@ export async function redGate(): Promise<void> {
       "```",
     ].join("\n");
     await Deno.writeTextFile(`${RUNNER_TEMP}/red-bail.md`, bail);
-    await appendOutput("bailed=true");
+    await setOutput("bailed", "true");
   } else {
-    await appendOutput("bailed=false");
+    await setOutput("bailed", "false");
   }
 }
 
@@ -320,9 +316,9 @@ export async function greenGate(): Promise<void> {
       lines.push("Last regression-tests output:", "```", await tail(`${RUNNER_TEMP}/green-reg.log`, 100), "```");
     }
     await Deno.writeTextFile(`${RUNNER_TEMP}/green-bail.md`, lines.join("\n"));
-    await appendOutput("bailed=true");
+    await setOutput("bailed", "true");
   } else {
-    await appendOutput("bailed=false");
+    await setOutput("bailed", "false");
   }
 }
 
