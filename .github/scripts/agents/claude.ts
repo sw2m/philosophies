@@ -12,10 +12,10 @@
 //   --allowed-tools "Bash Edit Write Read Glob Grep"
 //   --permission-mode bypassPermissions      (no per-call confirmation)
 
-import { Agent, type AgentOpts, type PipeOpts } from "./agent.ts";
+import { Agent, type AgentOpts } from "./agent.ts";
 
 export type Opts =
-  & Partial<Pick<AgentOpts, "primary" | "fallback" | "timeout" | "log">>
+  & Partial<Pick<AgentOpts, "primary" | "fallback" | "timeout">>
   & {
     /** Space-separated list of tools claude is permitted to invoke (e.g.
      *  `"Bash Edit Write Read Glob Grep"`). Empty string = inference-only. */
@@ -34,7 +34,6 @@ export class Claude extends Agent {
       primary: opts.primary ?? "claude-opus-4-5",
       fallback: opts.fallback ?? "claude-sonnet-4-5",
       timeout: opts.timeout ?? 900,
-      log: opts.log ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/claude-err.log`,
     });
     this.tools = opts.tools ?? "Bash Edit Write Read Glob Grep";
     this.mode = opts.mode ?? "bypassPermissions";
@@ -51,4 +50,4 @@ export class Claude extends Agent {
   }
 }
 
-export type { PipeOpts };
+

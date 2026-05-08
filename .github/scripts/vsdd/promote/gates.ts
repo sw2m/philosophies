@@ -86,12 +86,13 @@ async function tail(path: string, n: number): Promise<string> {
   }
 }
 
-/** Build the Phase 2 agent input: prompt + DEFAULT_TEST_CMD + MEMORY.md +
- *  tech-spec title/body. Returns the path to the temp file. */
+/** Build the Phase 2 agent input as a string: prompt + DEFAULT_TEST_CMD +
+ *  MEMORY.md + tech-spec title/body. Caller wraps in a Blob().stream()
+ *  before passing to Claude. */
 async function buildPhase2Input(): Promise<string> {
   const ctx = await techContext();
   const memory = await Deno.readTextFile("MEMORY.md");
-  const body = [
+  return [
     RED_PROMPT,
     `DEFAULT_TEST_CMD=${Deno.env.get("DEFAULT_TEST_CMD") ?? ""}`,
     "",
@@ -104,12 +105,11 @@ async function buildPhase2Input(): Promise<string> {
     "--- TECH-SPEC ISSUE BODY ---",
     ctx.body,
   ].join("\n");
-  const path = await Deno.makeTempFile();
-  await Deno.writeTextFile(path, body);
-  return path;
 }
 
-/** Build the Phase 4 agent input. `meta` is null on the no-runner path. */
+/** Build the Phase 4 agent input as a string. `meta` is null on the
+ *  no-runner path. Caller wraps in a Blob().stream() before passing
+ *  to Claude. */
 async function buildPhase4Input(
   meta: { "red-green": string; regression: string } | null,
 ): Promise<string> {
@@ -135,9 +135,7 @@ async function buildPhase4Input(
       `Regression tests command (must end up exit 0): ${meta.regression}`,
     );
   }
-  const path = await Deno.makeTempFile();
-  await Deno.writeTextFile(path, lines.join("\n"));
-  return path;
+  return lines.join("\n");
 }
 
 // =========================================================================
@@ -153,10 +151,9 @@ export async function redGate(): Promise<void> {
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     console.log(`\n=== Phase 2 — Author tests (attempt ${attempt} of ${ATTEMPTS}) ===`);
 
-    const input = await buildPhase2Input();
-    const output = await Deno.makeTempFile();
-    const rc = await claude.run({ input, output });
-    if (rc !== 0) {
+    const body = await buildPhase2Input();
+    const r = await claude.run(new Blob([body]).stream());
+    if (r.rc !== 0) {
       lastFailure =
         `Phase 2 agent (attempt ${attempt}) exited non-zero on both primary and fallback models.`;
       console.error(`::warning::${lastFailure}`);
@@ -165,7 +162,7 @@ export async function redGate(): Promise<void> {
 
     let meta;
     try {
-      const raw = await Deno.readTextFile(output);
+      const raw = new TextDecoder().decode(r.output);
       meta = readPhase2(raw);
     } catch (e) {
       lastFailure = `Phase 2 frontmatter parse failed (attempt ${attempt}): ${(e as Error).message}`;
@@ -257,10 +254,9 @@ export async function greenGate(): Promise<void> {
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     console.log(`\n=== Phase 4 — Implement (attempt ${attempt} of ${ATTEMPTS}) ===`);
 
-    const input = await buildPhase4Input(meta);
-    const output = await Deno.makeTempFile();
-    const rc = await claude.run({ input, output });
-    if (rc !== 0) {
+    const body = await buildPhase4Input(meta);
+    const r = await claude.run(new Blob([body]).stream());
+    if (r.rc !== 0) {
       lastFailure =
         `Phase 4 agent (attempt ${attempt}) exited non-zero on both primary and fallback models.`;
       console.error(`::warning::${lastFailure}`);

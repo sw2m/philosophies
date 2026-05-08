@@ -6,9 +6,9 @@
 //   --skip-trust               (skip workspace-trust prompt)
 //   -m <model>
 
-import { Agent, type AgentOpts, type PipeOpts } from "./agent.ts";
+import { Agent, type AgentOpts } from "./agent.ts";
 
-export type Opts = Partial<Pick<AgentOpts, "primary" | "fallback" | "timeout" | "log">>;
+export type Opts = Partial<Pick<AgentOpts, "primary" | "fallback" | "timeout">>;
 
 export class Gemini extends Agent {
   constructor(opts: Opts = {}) {
@@ -16,7 +16,6 @@ export class Gemini extends Agent {
       primary: opts.primary ?? "gemini-2.5-pro",
       fallback: opts.fallback ?? "gemini-2.5-flash",
       timeout: opts.timeout ?? 900,
-      log: opts.log ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/gemini-err.log`,
     });
   }
 
@@ -28,5 +27,3 @@ export class Gemini extends Agent {
     return ["--yolo", "--skip-trust", "-m", model];
   }
 }
-
-export type { PipeOpts };

@@ -3,19 +3,12 @@
 //
 //   - primary→fallback escalation on non-zero exit
 //   - wall-clock timeout via AbortController (no `timeout` shell-out)
-//   - stderr capture to a log path callers can `tail` on diagnosis
+//   - in-memory stdin/stdout/stderr capture — no tempfiles, no log files
 //   - github-actions `::warning::` annotations on timeout / non-zero
 //
 // Stalled API calls are real (issue #175 — observed wedging the whole
 // promote-tech-to-pr job for hours). The timeout is a hard cap that
 // trips primary→fallback escalation rather than waiting indefinitely.
-
-export type PipeOpts = {
-  /** Path to the file whose contents become the agent's stdin. */
-  input: string;
-  /** Path to write the agent's stdout to. Truncated on each invocation. */
-  output: string;
-};
 
 export type AgentOpts = {
   /** Primary model identifier (string passed to the CLI's --model flag). */
@@ -24,9 +17,6 @@ export type AgentOpts = {
   fallback: string;
   /** Wall-clock seconds before the invocation is aborted. */
   timeout: number;
-  /** Path to redirect stderr to. Tailed on warnings; persists across calls
-   *  (callers should rotate per attempt if they want isolated logs). */
-  log: string;
 };
 
 /** Exit-code semantics. Open record so subclasses can register any
@@ -37,11 +27,19 @@ export type AgentOpts = {
  *  override `codes` with their own keys/values. */
 export type Codes = { [name: string]: number };
 
+/** What `prompt()` and `run()` return. `output` and `err` are the raw
+ *  stdout/stderr byte buffers — caller decodes via `TextDecoder` if
+ *  text is wanted. */
+export type Result = {
+  rc: number;
+  output: Uint8Array;
+  err: Uint8Array;
+};
+
 export class Agent {
   primary: string;
   fallback: string;
   timeout: number;
-  log: string;
 
   /** Override per-agent if the CLI emits non-default exit-code semantics. */
   protected codes: Codes = { timeout: 124 };
@@ -50,7 +48,6 @@ export class Agent {
     this.primary = opts.primary;
     this.fallback = opts.fallback;
     this.timeout = opts.timeout;
-    this.log = opts.log;
   }
 
   /** Override per-agent: the binary name (`claude`, `gemini`, ...) on PATH. */
@@ -65,44 +62,35 @@ export class Agent {
     throw new Error("subclass must override `args`");
   }
 
-  /** One invocation, one model. Returns the exit code. The codes.timeout
-   *  value (default 124, mirroring GNU coreutils `timeout(1)`) indicates
-   *  the wall-clock budget aborted the call; >0 indicates the CLI failed
-   *  on its own. */
-  async prompt(model: string, opts: PipeOpts): Promise<number> {
+  /** One invocation, one model, with input bytes pre-buffered. Pure
+   *  helper used by `prompt()` and `run()`. */
+  private async spawn(model: string, input: Uint8Array): Promise<Result> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeout * 1000);
     try {
-      const stdin = await Deno.open(opts.input, { read: true });
-      const stdout = await Deno.open(opts.output, {
-        write: true,
-        create: true,
-        truncate: true,
-      });
-      const stderr = await Deno.open(this.log, {
-        write: true,
-        create: true,
-        truncate: true,
-      });
-
+      const proc = new Deno.Command(this.cmd, {
+        args: this.args({ model }),
+        stdin: "piped",
+        stdout: "piped",
+        stderr: "piped",
+        signal: ctrl.signal,
+      }).spawn();
       try {
-        const proc = new Deno.Command(this.cmd, {
-          args: this.args({ model }),
-          stdin: "piped",
-          stdout: "piped",
-          stderr: "piped",
-          signal: ctrl.signal,
-        }).spawn();
+        const writer = proc.stdin.getWriter();
+        await writer.write(input);
+        await writer.close();
 
-        const pipe1 = stdin.readable.pipeTo(proc.stdin);
-        const pipe2 = proc.stdout.pipeTo(stdout.writable);
-        const pipe3 = proc.stderr.pipeTo(stderr.writable);
-
+        const [output, err] = await Promise.all([
+          new Response(proc.stdout).bytes(),
+          new Response(proc.stderr).bytes(),
+        ]);
         const status = await proc.status;
-        await Promise.allSettled([pipe1, pipe2, pipe3]);
-        return status.signal === "SIGTERM" ? this.codes.timeout : (status.code ?? 1);
+        const rc = status.signal === "SIGTERM" ? this.codes.timeout : (status.code ?? 1);
+        return { rc, output, err };
       } catch (e) {
-        if (ctrl.signal.aborted) return this.codes.timeout;
+        if (ctrl.signal.aborted) {
+          return { rc: this.codes.timeout, output: new Uint8Array(), err: new Uint8Array() };
+        }
         throw e;
       }
     } finally {
@@ -110,44 +98,46 @@ export class Agent {
     }
   }
 
+  /** One invocation, one model. Buffers the input stream once so
+   *  callers can pass any ReadableStream backing. */
+  async prompt(model: string, input: ReadableStream<Uint8Array>): Promise<Result> {
+    return this.spawn(model, await new Response(input).bytes());
+  }
+
   /** Try primary, then fallback on non-zero. Emits `::warning::`
-   *  annotations + tails the err log on escalation, matching the bash
-   *  invoke_claude shape. Returns the final exit code. */
-  async run(opts: PipeOpts): Promise<number> {
-    let rc = await this.prompt(this.primary, opts);
-    if (rc === this.codes.timeout) {
+   *  annotations + tails stderr to the runner log on escalation,
+   *  matching the bash invoke_claude shape. Returns the final
+   *  attempt's result. */
+  async run(input: ReadableStream<Uint8Array>): Promise<Result> {
+    const bytes = await new Response(input).bytes();
+    let r = await this.spawn(this.primary, bytes);
+    if (r.rc === this.codes.timeout) {
       console.error(
         `::warning::${this.cmd}: primary ${this.primary} timed out after ${this.timeout}s; falling back to ${this.fallback}`,
       );
-    } else if (rc !== 0) {
+    } else if (r.rc !== 0) {
       console.error(
-        `::warning::${this.cmd}: primary ${this.primary} exited ${rc}; falling back to ${this.fallback}`,
+        `::warning::${this.cmd}: primary ${this.primary} exited ${r.rc}; falling back to ${this.fallback}`,
       );
-      await tail(this.log, 50);
+      console.error(tail(r.err, 50));
     }
-    if (rc !== 0) {
-      rc = await this.prompt(this.fallback, opts);
-      if (rc === this.codes.timeout) {
+    if (r.rc !== 0) {
+      r = await this.spawn(this.fallback, bytes);
+      if (r.rc === this.codes.timeout) {
         console.error(
           `::warning::${this.cmd}: fallback ${this.fallback} also timed out after ${this.timeout}s`,
         );
-      } else if (rc !== 0) {
-        await tail(this.log, 50);
+      } else if (r.rc !== 0) {
+        console.error(tail(r.err, 50));
       }
     }
-    return rc;
+    return r;
   }
 }
 
-/** Tail the last N lines of a log file to stderr. Best-effort — silent
- *  on read errors so log emission never masks the upstream failure. */
-async function tail(path: string, n: number): Promise<void> {
-  try {
-    const text = await Deno.readTextFile(path);
-    const lines = text.split("\n");
-    const slice = lines.slice(Math.max(0, lines.length - n));
-    for (const line of slice) console.error(line);
-  } catch {
-    // ignore
-  }
+/** Last N lines of a byte buffer, decoded as UTF-8. */
+function tail(bytes: Uint8Array, n: number): string {
+  const text = new TextDecoder().decode(bytes);
+  const lines = text.split("\n");
+  return lines.slice(Math.max(0, lines.length - n)).join("\n");
 }

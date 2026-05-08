@@ -14,26 +14,66 @@ function path(): string {
   return p;
 }
 
-/** Append a `name=value\n` line to $GITHUB_OUTPUT. Throws if the env
- *  var isn't set — running outside a GitHub Actions step is almost
- *  always a bug we want surfaced, not silently swallowed. */
+/** Append a `name=value` (or heredoc-form for multiline) entry to
+ *  $GITHUB_OUTPUT. Throws if the env var isn't set — running outside
+ *  a GitHub Actions step is almost always a bug we want surfaced.
+ *
+ *  Multiline values are emitted with the heredoc syntax GitHub Actions
+ *  documents:
+ *
+ *    name<<DELIM
+ *    line 1
+ *    line 2
+ *    DELIM
+ *
+ *  The delimiter is a UUID-derived random string so it cannot collide
+ *  with content in `value`. Single-line values fall through to the
+ *  classic `name=value` form. */
 export async function set(name: string, value: string | number | boolean): Promise<void> {
-  await Deno.writeTextFile(path(), `${name}=${value}\n`, { append: true });
+  const v = String(value);
+  let line: string;
+  if (v.includes("\n")) {
+    const delim = `eof-${crypto.randomUUID().replaceAll("-", "")}`;
+    line = `${name}<<${delim}\n${v}\n${delim}\n`;
+  } else {
+    line = `${name}=${v}\n`;
+  }
+  await Deno.writeTextFile(path(), line, { append: true });
 }
 
-/** Re-read $GITHUB_OUTPUT for the LAST `name=...` line that was written
- *  in the current step (append-only, last write wins). Returns the value
- *  or undefined when the name isn't found. Symmetric with set(). */
+/** Re-read $GITHUB_OUTPUT for the LAST entry under `name` that was
+ *  written in the current step (append-only, last write wins).
+ *  Handles both shapes set() emits — single-line `name=value` and the
+ *  heredoc `name<<DELIM\n...\nDELIM`. Returns the value or undefined
+ *  when the name isn't found. */
 export async function get(name: string): Promise<string | undefined> {
   let text: string;
   try { text = await Deno.readTextFile(path()); }
   catch { return undefined; }
   const lines = text.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
+  // Walk forward, tracking the latest matching entry. Last-write-wins.
+  let last: string | undefined = undefined;
+  let i = 0;
+  while (i < lines.length) {
     const line = lines[i];
     const eq = line.indexOf("=");
-    if (eq === -1) continue;
-    if (line.slice(0, eq) === name) return line.slice(eq + 1);
+    const lt = line.indexOf("<<");
+    if (lt > 0 && line.slice(0, lt) === name) {
+      const delim = line.slice(lt + 2);
+      const buf: string[] = [];
+      let j = i + 1;
+      while (j < lines.length && lines[j] !== delim) {
+        buf.push(lines[j]);
+        j++;
+      }
+      last = buf.join("\n");
+      i = j + 1;
+      continue;
+    }
+    if (eq > 0 && line.slice(0, eq) === name) {
+      last = line.slice(eq + 1);
+    }
+    i++;
   }
-  return undefined;
+  return last;
 }

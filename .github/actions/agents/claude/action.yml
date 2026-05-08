@@ -152,32 +152,29 @@ runs:
             core.setFailed("No content to send to claude (both prompt and stdin-file were empty).");
             return;
           }
-          const input = await Deno.makeTempFile();
-          await Deno.writeTextFile(input, body);
           console.log(`input bytes: ${body.length}`);
 
-          const output = Deno.env.get("OUTPUT_FILE")!;
           const claude = new Claude({
             primary: "${{ inputs.model }}",
             fallback: "${{ inputs.fallback-model }}",
             tools: `${{ inputs.allowed-tools }}`,
             mode: "${{ inputs.permission-mode }}",
           });
-          const rc = await claude.run({ input, output });
-          if (rc !== 0) {
-            core.setFailed(`Claude exited ${rc} on both primary and fallback models.`);
-            // Surface output for human triage.
-            try {
-              const out = await Deno.readTextFile(output);
-              console.log("--- stdout ---");
-              console.log(out.slice(0, 2000));
-            } catch { /* ignore */ }
-            Deno.exit(rc);
+          const r = await claude.run(new Blob([body]).stream());
+          // The composite contract is "agent stdout lands at output-file";
+          // we still write the captured bytes there for the calling
+          // workflow to read after the action returns.
+          await Deno.writeFile(Deno.env.get("OUTPUT_FILE")!, r.output);
+          if (r.rc !== 0) {
+            const text = new TextDecoder().decode(r.output);
+            core.setFailed(`Claude exited ${r.rc} on both primary and fallback models.`);
+            console.log("--- stdout ---");
+            console.log(text.slice(0, 2000));
+            Deno.exit(r.rc);
           }
-          // Show short tails for human-readable run logs.
-          const out = await Deno.readTextFile(output);
+          const text = new TextDecoder().decode(r.output);
           console.log("stdout (first 500 chars):");
-          console.log(out.slice(0, 500));
+          console.log(text.slice(0, 500));
 
     - name: Verify output produced
       shell: bash

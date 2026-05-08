@@ -139,28 +139,24 @@ runs:
             core.setFailed("No content to send to gemini (both prompt and stdin-file were empty).");
             return;
           }
-          const input = await Deno.makeTempFile();
-          await Deno.writeTextFile(input, body);
           console.log(`input bytes: ${body.length}`);
 
-          const output = Deno.env.get("OUTPUT_FILE")!;
           const gemini = new Gemini({
             primary: "${{ inputs.model }}",
             fallback: "${{ inputs.fallback-model }}",
           });
-          const rc = await gemini.run({ input, output });
-          if (rc !== 0) {
-            core.setFailed(`Gemini exited ${rc} on both primary and fallback models.`);
-            try {
-              const out = await Deno.readTextFile(output);
-              console.log("--- stdout ---");
-              console.log(out.slice(0, 2000));
-            } catch { /* ignore */ }
-            Deno.exit(rc);
+          const r = await gemini.run(new Blob([body]).stream());
+          await Deno.writeFile(Deno.env.get("OUTPUT_FILE")!, r.output);
+          if (r.rc !== 0) {
+            const text = new TextDecoder().decode(r.output);
+            core.setFailed(`Gemini exited ${r.rc} on both primary and fallback models.`);
+            console.log("--- stdout ---");
+            console.log(text.slice(0, 2000));
+            Deno.exit(r.rc);
           }
-          const out = await Deno.readTextFile(output);
+          const text = new TextDecoder().decode(r.output);
           console.log("stdout (first 500 chars):");
-          console.log(out.slice(0, 500));
+          console.log(text.slice(0, 500));
 
     - name: Verify output produced
       shell: bash
