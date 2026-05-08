@@ -19,7 +19,7 @@
 //
 // Writes:
 //   - <meta-out-path> (default `phase2-meta.json` in cwd) — JSON object
-//     `{files: string[], new_cmd: string, reg_cmd: string}`
+//     `{files: string[], "red-green": string, regression: string}`
 //   - prints each file path on stdout, one per line, so the bash caller
 //     can iterate or verify non-emptiness
 //
@@ -31,9 +31,9 @@ import { parse as fm } from "../frontmatter.ts";
 
 const KEY = "phase-2";  // subkey under vsdd: namespace
 
-type Meta = { files: string[]; new_cmd: string; reg_cmd: string };
+type Meta = { files: string[]; "red-green": string; regression: string };
 
-function read(raw: string): Meta | null {
+export function read(raw: string): Meta | null {
   // Walk in source order; the agent emits the metadata block at the END
   // of its response (it uses tools first, summarizes after). Last
   // matching block wins.
@@ -48,11 +48,11 @@ function read(raw: string): Meta | null {
   }
   if (!hit) return null;
 
-  const files = hit.new_test_files;
+  const files = hit.files;
   if (!Array.isArray(files) || !files.every((f) => typeof f === "string")) return null;
-  const newCmd = typeof hit.new_test_command === "string" ? hit.new_test_command : "";
-  const regCmd = typeof hit.regression_test_command === "string" ? hit.regression_test_command : "";
-  return { files: files as string[], new_cmd: newCmd, reg_cmd: regCmd };
+  const rg = typeof hit["red-green"] === "string" ? hit["red-green"] as string : "";
+  const reg = typeof hit.regression === "string" ? hit.regression as string : "";
+  return { files: files as string[], "red-green": rg, regression: reg };
 }
 
 if (import.meta.main) {
@@ -75,4 +75,3 @@ if (import.meta.main) {
   for (const p of meta.files) console.log(p);
 }
 
-export { read };

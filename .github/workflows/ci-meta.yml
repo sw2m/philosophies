@@ -870,9 +870,9 @@ jobs:
           # tracked issue → opened_count == 0) pass cleanly even when the
           # underlying consensus is fail — the dedup signal IS the "already
           # known" signal.
-          # Note: consensus.py logic ported to vsdd/ci-meta/consensus.ts.
-          # Inlined here to keep the consensus-state writing in one Python
-          # block; equivalent semantics: rc = 0 iff verdict==pass AND opened_count==0.
+          # consensus exit-code: rc = 0 iff verdict==pass AND opened_count==0.
+          # If a future PR moves the surrounding state-write/dedup Python
+          # logic to TS, fold this into the unified consensus module then.
           verdict_str = 'fail' if fail else 'pass'
           rc = 1 if (verdict_str == 'fail' or opened_count > 0) else 0
           status = 'FAIL' if rc != 0 else 'PASS'

@@ -58,9 +58,11 @@ export class Agent {
     throw new Error("subclass must override `cmd`");
   }
 
-  /** Override per-agent: build the CLI args for the given model. */
-  protected argsFor(_model: string): string[] {
-    throw new Error("subclass must override `argsFor`");
+  /** Override per-agent: build the CLI args for one invocation. Takes
+   *  a destructurable opts object so subclasses can extend the shape
+   *  later (e.g. `args({ model, tools })`) without breaking signatures. */
+  protected args(_opts: { model: string }): string[] {
+    throw new Error("subclass must override `args`");
   }
 
   /** One invocation, one model. Returns the exit code. The codes.timeout
@@ -85,7 +87,7 @@ export class Agent {
 
       try {
         const proc = new Deno.Command(this.cmd, {
-          args: this.argsFor(model),
+          args: this.args({ model }),
           stdin: "piped",
           stdout: "piped",
           stderr: "piped",

@@ -111,7 +111,7 @@ async function buildPhase2Input(): Promise<string> {
 
 /** Build the Phase 4 agent input. `meta` is null on the no-runner path. */
 async function buildPhase4Input(
-  meta: { new_cmd: string; reg_cmd: string } | null,
+  meta: { "red-green": string; regression: string } | null,
 ): Promise<string> {
   const ctx = await techContext();
   const memory = await Deno.readTextFile("MEMORY.md");
@@ -131,8 +131,8 @@ async function buildPhase4Input(
     lines.push(
       "",
       "--- TEST RUN COMMANDS ---",
-      `New tests command (must end up exit 0): ${meta.new_cmd}`,
-      `Regression tests command (must end up exit 0): ${meta.reg_cmd}`,
+      `New tests command (must end up exit 0): ${meta["red-green"]}`,
+      `Regression tests command (must end up exit 0): ${meta.regression}`,
     );
   }
   const path = await Deno.makeTempFile();
@@ -172,21 +172,21 @@ export async function redGate(): Promise<void> {
       console.error(`::warning::${lastFailure}`);
       continue;
     }
-    if (!meta || !meta.files.length || !meta.new_cmd || !meta.reg_cmd) {
+    if (!meta || !meta.files.length || !meta["red-green"] || !meta.regression) {
       lastFailure =
-        `Phase 2 declared empty new_test_files / new_cmd / reg_cmd (attempt ${attempt}). ` +
+        `Phase 2 declared empty files / red-green / regression (attempt ${attempt}). ` +
         `The agent did not produce a usable test set.`;
       console.error(`::warning::${lastFailure}`);
       continue;
     }
 
     console.log("Phase 2 declared new test files:\n" + meta.files.join("\n"));
-    console.log(`Phase 2 new test command: ${meta.new_cmd}`);
-    console.log(`Phase 2 regression test command: ${meta.reg_cmd}`);
+    console.log(`Phase 2 new test command: ${meta["red-green"]}`);
+    console.log(`Phase 2 regression test command: ${meta.regression}`);
 
     console.log(`\n=== Phase 3 — Red gate (attempt ${attempt}) ===`);
-    const newRc = await shell(meta.new_cmd, `${RUNNER_TEMP}/red-new.log`);
-    const regRc = await shell(meta.reg_cmd, `${RUNNER_TEMP}/red-reg.log`);
+    const newRc = await shell(meta["red-green"], `${RUNNER_TEMP}/red-new.log`);
+    const regRc = await shell(meta.regression, `${RUNNER_TEMP}/red-reg.log`);
     console.log(`  new tests exit: ${newRc} (expect non-zero)`);
     console.log(`  regression tests exit: ${regRc} (expect zero)`);
 
@@ -243,11 +243,11 @@ export async function greenGate(): Promise<void> {
   const claude = new Claude({ timeout: TIMEOUT });
   const noRunner = Deno.env.get("NO_RUNNER") === "true";
 
-  let meta: { new_cmd: string; reg_cmd: string } | null = null;
+  let meta: { "red-green": string; regression: string } | null = null;
   let ATTEMPTS = 1;
   if (!noRunner) {
     const j = JSON.parse(await Deno.readTextFile(`${RUNNER_TEMP}/phase2-meta-final.json`));
-    meta = { new_cmd: String(j.new_cmd), reg_cmd: String(j.reg_cmd) };
+    meta = { "red-green": String(j["red-green"]), regression: String(j.regression) };
     ATTEMPTS = MAX_RETRIES + 1;
   }
 
@@ -282,8 +282,8 @@ export async function greenGate(): Promise<void> {
     }
 
     console.log(`\n=== Phase 5 — Green gate (attempt ${attempt}) ===`);
-    const newRc = await shell(meta!.new_cmd, `${RUNNER_TEMP}/green-new.log`);
-    const regRc = await shell(meta!.reg_cmd, `${RUNNER_TEMP}/green-reg.log`);
+    const newRc = await shell(meta!["red-green"], `${RUNNER_TEMP}/green-new.log`);
+    const regRc = await shell(meta!.regression, `${RUNNER_TEMP}/green-reg.log`);
     console.log(`  new tests exit: ${newRc} (expect zero)`);
     console.log(`  regression tests exit: ${regRc} (expect zero)`);
 

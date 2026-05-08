@@ -44,10 +44,10 @@ export class Claude extends Agent {
     return "claude";
   }
 
-  protected override argsFor(model: string): string[] {
-    const args = ["--print", "--model", model, "--allowed-tools", this.tools];
-    if (this.mode) args.push("--permission-mode", this.mode);
-    return args;
+  protected override args({ model }: { model: string }): string[] {
+    const out = ["--print", "--model", model, "--allowed-tools", this.tools];
+    if (this.mode) out.push("--permission-mode", this.mode);
+    return out;
   }
 }
 

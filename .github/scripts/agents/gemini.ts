@@ -24,7 +24,7 @@ export class Gemini extends Agent {
     return "gemini";
   }
 
-  protected override argsFor(model: string): string[] {
+  protected override args({ model }: { model: string }): string[] {
     return ["--yolo", "--skip-trust", "-m", model];
   }
 }

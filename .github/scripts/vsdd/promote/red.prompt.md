@@ -9,11 +9,11 @@ the wrapper line):
 <!--
 vsdd:
   phase-2:
-    new_test_files:
+    files:
       - path/to/new_test_file_1.ext
       - path/to/new_test_file_2.ext
-    new_test_command: "exact command to run ONLY the new tests"
-    regression_test_command: "exact command to run ONLY the pre-existing tests"
+    red-green: "exact command to run ONLY the new tests"
+    regression: "exact command to run ONLY the pre-existing tests"
 -->
 
 Both commands must exit 0 on pass, non-zero on fail. They will be
@@ -40,9 +40,9 @@ MEMORY.md §VIII (4-Result Rule) for context. Your job:
 
 Constraints:
 - One technical problem per tech-spec (per §VII). If the issue
-  covers more than one, STOP and write a single-line frontmatter
-  with empty `new_test_files` and a comment in the response body
-  explaining why; the pipeline will bail.
+  covers more than one, STOP and emit an empty `files: []` list
+  with a comment in the response body explaining why; the pipeline
+  will bail.
 - The default test command detected for this repo is in env var
   DEFAULT_TEST_CMD; you may use it as a hint but must produce the
   two specific commands above.

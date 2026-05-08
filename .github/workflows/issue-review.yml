@@ -238,8 +238,9 @@ jobs:
         uses: ./.github/actions/script/github-deno
         with:
           script: |
-            const budget = await import("./.github/scripts/vsdd/phase-1c/budget.ts");
+            const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
             const cardinality = await import("./.github/scripts/vsdd/phase-1c/cardinality.ts");
+            const budget = new budgetMod.Budget({ key: "phase-1c" });
             const SLUG = "gemini";
             const reviewBody = await Deno.readTextFile("review.md");
             // Round counting: paginate through all issue comments, count
@@ -319,8 +320,9 @@ jobs:
         uses: ./.github/actions/script/github-deno
         with:
           script: |
-            const budget = await import("./.github/scripts/vsdd/phase-1c/budget.ts");
+            const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
             const cardinality = await import("./.github/scripts/vsdd/phase-1c/cardinality.ts");
+            const budget = new budgetMod.Budget({ key: "phase-1c" });
             const SLUG = "claude";
             const reviewBody = await Deno.readTextFile("review.md");
             // Round counting: paginate through all issue comments, count
