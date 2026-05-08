@@ -112,56 +112,55 @@ runs:
       run: npm install -g @google/gemini-cli@latest
 
     - name: Invoke gemini (primary, then fallback on error)
-      shell: bash
+      uses: ./.github/actions/script/github-deno
       env:
         GEMINI_API_KEY: ${{ inputs.api-key }}
         PROMPT: ${{ inputs.prompt }}
         STDIN_FILE: ${{ inputs.stdin-file }}
-        MODEL: ${{ inputs.model }}
-        FALLBACK: ${{ inputs.fallback-model }}
-        OUTPUT: ${{ inputs.output-file }}
-      run: |
-        set -euo pipefail
-        : > combined-input.txt
-        if [ -n "$PROMPT" ]; then
-          printf '%s\n\n' "$PROMPT" >> combined-input.txt
-        fi
-        if [ -n "$STDIN_FILE" ]; then
-          if [ ! -f "$STDIN_FILE" ]; then
-            echo "::error::stdin-file '$STDIN_FILE' does not exist."
-            exit 1
-          fi
-          cat "$STDIN_FILE" >> combined-input.txt
-        fi
-        if [ ! -s combined-input.txt ]; then
-          echo "::error::No content to send to gemini (both prompt and stdin-file were empty)."
-          exit 1
-        fi
-        echo "input lines: $(wc -l < combined-input.txt)"
-        echo "input bytes: $(wc -c < combined-input.txt)"
+        OUTPUT_FILE: ${{ inputs.output-file }}
+      with:
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
 
-        set +e
-        gemini --yolo --skip-trust -m "$MODEL" < combined-input.txt > "$OUTPUT" 2>gemini-stderr.log
-        rc=$?
-        if [ $rc -ne 0 ]; then
-          echo "::warning::Primary model '$MODEL' exited $rc; falling back to '$FALLBACK'."
-          echo "--- primary stderr ---"
-          cat gemini-stderr.log
-          gemini --yolo --skip-trust -m "$FALLBACK" < combined-input.txt > "$OUTPUT" 2>gemini-stderr.log
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "::error::Fallback model '$FALLBACK' also exited $rc."
-            echo "--- fallback stderr ---"
-            cat gemini-stderr.log
-            echo "--- fallback stdout ---"
-            cat "$OUTPUT"
-            exit $rc
-          fi
-        fi
-        set -e
-        echo "stdout (first 500 chars):"
-        head -c 500 "$OUTPUT"
-        echo ""
+          const prompt = Deno.env.get("PROMPT") ?? "";
+          const stdinFile = Deno.env.get("STDIN_FILE") ?? "";
+          let body = "";
+          if (prompt) body += prompt + "\n\n";
+          if (stdinFile) {
+            try {
+              body += await Deno.readTextFile(stdinFile);
+            } catch {
+              core.setFailed(`stdin-file '${stdinFile}' does not exist.`);
+              return;
+            }
+          }
+          if (!body) {
+            core.setFailed("No content to send to gemini (both prompt and stdin-file were empty).");
+            return;
+          }
+          const input = await Deno.makeTempFile();
+          await Deno.writeTextFile(input, body);
+          console.log(`input bytes: ${body.length}`);
+
+          const output = Deno.env.get("OUTPUT_FILE")!;
+          const gemini = new Gemini({
+            primary: "${{ inputs.model }}",
+            fallback: "${{ inputs.fallback-model }}",
+          });
+          const rc = await gemini.run({ input, output });
+          if (rc !== 0) {
+            core.setFailed(`Gemini exited ${rc} on both primary and fallback models.`);
+            try {
+              const out = await Deno.readTextFile(output);
+              console.log("--- stdout ---");
+              console.log(out.slice(0, 2000));
+            } catch { /* ignore */ }
+            Deno.exit(rc);
+          }
+          const out = await Deno.readTextFile(output);
+          console.log("stdout (first 500 chars):");
+          console.log(out.slice(0, 500));
 
     - name: Verify output produced
       shell: bash

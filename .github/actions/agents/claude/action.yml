@@ -123,75 +123,61 @@ runs:
       run: npm install -g @anthropic-ai/claude-code@latest
 
     - name: Invoke claude (--print, with fallback model on error)
-      shell: bash
+      uses: ./.github/actions/script/github-deno
       env:
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
         PROMPT: ${{ inputs.prompt }}
         STDIN_FILE: ${{ inputs.stdin-file }}
-        MODEL: ${{ inputs.model }}
-        FALLBACK: ${{ inputs.fallback-model }}
-        OUTPUT: ${{ inputs.output-file }}
-        TOOLS: ${{ inputs.allowed-tools }}
-        PMODE: ${{ inputs.permission-mode }}
-      run: |
-        set -euo pipefail
-        : > combined-input.txt
-        if [ -n "$PROMPT" ]; then
-          printf '%s\n\n' "$PROMPT" >> combined-input.txt
-        fi
-        if [ -n "$STDIN_FILE" ]; then
-          if [ ! -f "$STDIN_FILE" ]; then
-            echo "::error::stdin-file '$STDIN_FILE' does not exist."
-            exit 1
-          fi
-          cat "$STDIN_FILE" >> combined-input.txt
-        fi
-        if [ ! -s combined-input.txt ]; then
-          echo "::error::No content to send to claude (both prompt and stdin-file were empty)."
-          exit 1
-        fi
-        echo "input bytes: $(wc -c < combined-input.txt)"
+        OUTPUT_FILE: ${{ inputs.output-file }}
+      with:
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const { Claude } = await import("./.github/scripts/agents/claude.ts");
 
-        # Build the flag list. `--allowed-tools ""` (the default) is the
-        # original inference-only contract. When TOOLS is non-empty,
-        # callers (e.g. promote-tech-to-pr) get filesystem + shell access
-        # for agentic phases. `--permission-mode plan` was rejected
-        # earlier — plan mode produces a "what I would do" summary
-        # instead of doing it; promote-tech-to-pr needs `bypassPermissions`
-        # so non-interactive runs don't stall on tool prompts.
-        FLAGS=(--print --model "$MODEL" --allowed-tools "$TOOLS")
-        if [ -n "$PMODE" ]; then
-          FLAGS+=(--permission-mode "$PMODE")
-        fi
-        FALLBACK_FLAGS=(--print --model "$FALLBACK" --allowed-tools "$TOOLS")
-        if [ -n "$PMODE" ]; then
-          FALLBACK_FLAGS+=(--permission-mode "$PMODE")
-        fi
+          // Build combined input from optional inline prompt + optional
+          // stdin-file. At least one must contribute content.
+          const prompt = Deno.env.get("PROMPT") ?? "";
+          const stdinFile = Deno.env.get("STDIN_FILE") ?? "";
+          let body = "";
+          if (prompt) body += prompt + "\n\n";
+          if (stdinFile) {
+            try {
+              body += await Deno.readTextFile(stdinFile);
+            } catch {
+              core.setFailed(`stdin-file '${stdinFile}' does not exist.`);
+              return;
+            }
+          }
+          if (!body) {
+            core.setFailed("No content to send to claude (both prompt and stdin-file were empty).");
+            return;
+          }
+          const input = await Deno.makeTempFile();
+          await Deno.writeTextFile(input, body);
+          console.log(`input bytes: ${body.length}`);
 
-        set +e
-        claude "${FLAGS[@]}" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
-        rc=$?
-        if [ $rc -ne 0 ]; then
-          echo "::warning::Primary model '$MODEL' exited $rc; falling back to '$FALLBACK'."
-          echo "--- primary stderr ---"
-          cat claude-stderr.log
-          claude "${FALLBACK_FLAGS[@]}" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "::error::Fallback model '$FALLBACK' also exited $rc."
-            echo "--- fallback stderr ---"
-            cat claude-stderr.log
-            echo "--- fallback stdout ---"
-            cat "$OUTPUT"
-            exit $rc
-          fi
-        fi
-        set -e
-        echo "stdout (first 500 chars):"
-        head -c 500 "$OUTPUT"
-        echo ""
-        echo "stderr (last 20 lines):"
-        tail -20 claude-stderr.log || true
+          const output = Deno.env.get("OUTPUT_FILE")!;
+          const claude = new Claude({
+            primary: "${{ inputs.model }}",
+            fallback: "${{ inputs.fallback-model }}",
+            tools: `${{ inputs.allowed-tools }}`,
+            mode: "${{ inputs.permission-mode }}",
+          });
+          const rc = await claude.run({ input, output });
+          if (rc !== 0) {
+            core.setFailed(`Claude exited ${rc} on both primary and fallback models.`);
+            // Surface output for human triage.
+            try {
+              const out = await Deno.readTextFile(output);
+              console.log("--- stdout ---");
+              console.log(out.slice(0, 2000));
+            } catch { /* ignore */ }
+            Deno.exit(rc);
+          }
+          // Show short tails for human-readable run logs.
+          const out = await Deno.readTextFile(output);
+          console.log("stdout (first 500 chars):");
+          console.log(out.slice(0, 500));
 
     - name: Verify output produced
       shell: bash

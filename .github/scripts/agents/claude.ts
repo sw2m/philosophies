@@ -14,9 +14,21 @@
 
 import { Agent, type AgentOpts, type PipeOpts } from "./agent.ts";
 
-export type Opts = Partial<Pick<AgentOpts, "primary" | "fallback" | "timeout" | "log">>;
+export type Opts =
+  & Partial<Pick<AgentOpts, "primary" | "fallback" | "timeout" | "log">>
+  & {
+    /** Space-separated list of tools claude is permitted to invoke (e.g.
+     *  `"Bash Edit Write Read Glob Grep"`). Empty string = inference-only. */
+    tools?: string;
+    /** Permission mode flag passed to claude (e.g. `bypassPermissions`).
+     *  Empty = omit the flag, claude uses its default. */
+    mode?: string;
+  };
 
 export class Claude extends Agent {
+  tools: string;
+  mode: string;
+
   constructor(opts: Opts = {}) {
     super({
       primary: opts.primary ?? "claude-opus-4-5",
@@ -24,6 +36,8 @@ export class Claude extends Agent {
       timeout: opts.timeout ?? 900,
       log: opts.log ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/claude-err.log`,
     });
+    this.tools = opts.tools ?? "Bash Edit Write Read Glob Grep";
+    this.mode = opts.mode ?? "bypassPermissions";
   }
 
   protected override get cmd(): string {
@@ -31,15 +45,9 @@ export class Claude extends Agent {
   }
 
   protected override argsFor(model: string): string[] {
-    return [
-      "--print",
-      "--model",
-      model,
-      "--allowed-tools",
-      "Bash Edit Write Read Glob Grep",
-      "--permission-mode",
-      "bypassPermissions",
-    ];
+    const args = ["--print", "--model", model, "--allowed-tools", this.tools];
+    if (this.mode) args.push("--permission-mode", this.mode);
+    return args;
   }
 }
 
