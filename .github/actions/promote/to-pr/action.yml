@@ -175,8 +175,7 @@ runs:
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
       with:
         workspace: ${{ github.action_path }}/../..
-        script: |
-          (await import("./scripts/vsdd/promote/to-pr/gates.ts")).red();
+        script: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).red();
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
       uses: ./.github/actions/script/github-deno
@@ -210,8 +209,7 @@ runs:
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
       with:
         workspace: ${{ github.action_path }}/../..
-        script: |
-          (await import("./scripts/vsdd/promote/to-pr/gates.ts")).green();
+        script: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).green();
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
       uses: ./.github/actions/script/github-deno
