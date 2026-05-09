@@ -134,24 +134,23 @@ runs:
           await output.set("branch", branch);
 
           // Open or reuse draft PR.
-          const existing = await github.rest.pulls.list({ owner: repoOwner, repo, head: `${repoOwner}:${branch}`, state: "open" });
-          if (existing.data.length > 0) {
-            const pr = existing.data[0].number;
-            await output.set("pr-number", pr);
-            console.log(`Reusing existing PR #${pr}`);
+          const { Pull } = await import("./.github/scripts/github/pr.ts");
+          const shared = await import("./.github/scripts/github/shared.ts");
+          const pull = new Pull({ api: github, owner: repoOwner, repo });
+          const found = await pull.find({ head: branch });
+          if (found) {
+            await output.set("pr-number", pull.number);
+            console.log(`Reusing existing PR #${pull.number}`);
           } else {
-            const title = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/tech-title.txt`);
-            const techBody = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/tech-body.txt`);
-            const template = await Deno.readTextFile(
-              new URL("./scaffold.mustache", `file://${Deno.env.get("GITHUB_ACTION_PATH")}/../../scripts/vsdd/promote/to-pr/`).href
+            const title = await shared.get("tech-title") ?? "";
+            const techBody = await shared.get("tech-body") ?? "";
+            const body = await template(
+              new URL("./scripts/vsdd/promote/to-pr/scaffold.mustache", `file://${Deno.cwd()}/.github/`),
+              { issue, owner, body: techBody },
             );
-            const body = Mustache.render(template, { issue, owner, body: techBody });
-            const pr = await github.rest.pulls.create({
-              owner: repoOwner, repo, head: branch, base, title: title.trim(),
-              body, draft: true,
-            });
-            await output.set("pr-number", pr.data.number);
-            console.log(`Opened draft PR #${pr.data.number}: ${pr.data.html_url}`);
+            await pull.create({ head: branch, base, title: title.trim(), body, draft: true });
+            await output.set("pr-number", pull.number);
+            console.log(`Opened draft PR #${pull.number}: ${pull.html_url}`);
           }
     - uses: actions/setup-node@v6
       with:
