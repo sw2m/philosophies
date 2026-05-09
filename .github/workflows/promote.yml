@@ -108,7 +108,7 @@ jobs:
             // verdict comment was posted AFTER the issue's last body
             // edit (per #93 — body edit is the only thing that
             // invalidates a verdict).
-            const cardinality = await import("./.github/scripts/vsdd/phase-1c/cardinality.ts");
+            const cardinality = await import("./.github/scripts/vsdd/promote/to-spec/cardinality.ts");
             const [owner, name] = "${{ github.repository }}".split("/");
             const issue = ${{ github.event.issue.number }};
 

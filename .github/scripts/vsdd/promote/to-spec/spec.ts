@@ -4,7 +4,7 @@
 // pipeline phase. All formatting lives in the mustache template; the
 // caller passes the data, calls `post()`.
 
-import { Issue as Base, type Ctx } from "../issue.ts";
+import { Issue as Base, type Ctx } from "../../issue.ts";
 
 const TEMPLATE = await Deno.readTextFile(new URL("./spec.mustache", import.meta.url));
 

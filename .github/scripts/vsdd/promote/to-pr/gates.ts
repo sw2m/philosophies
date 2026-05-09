@@ -17,9 +17,9 @@
 //   - Red also persists meta to ${RUNNER_TEMP}/phase2-meta-final.json
 //     for the Green gate to read NEW_CMD/REG_CMD from.
 
-import { Claude } from "../../agents/claude.ts";
-import { read as readPhase2 } from "../phase-2/frontmatter.ts";
-import * as output from "../../github/output.ts";
+import { Claude } from "../../../agents/claude.ts";
+import { read as readPhase2 } from "../../phase-2/frontmatter.ts";
+import * as output from "../../../github/output.ts";
 
 const RUNNER_TEMP = Deno.env.get("RUNNER_TEMP") ?? "/tmp";
 const BRANCH = Deno.env.get("BRANCH")!;

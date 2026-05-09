@@ -17,7 +17,7 @@
 //
 // Spec: sw2m/philosophies#128. Goal: sw2m/philosophies#125.
 
-import { parse as fm } from "../frontmatter.ts";
+import { parse as fm } from "../../frontmatter.ts";
 
 const KEY = "phase-1c";  // subkey under vsdd: namespace
 

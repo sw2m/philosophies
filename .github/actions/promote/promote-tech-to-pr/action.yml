@@ -200,7 +200,7 @@ runs:
       with:
         workspace: ${{ github.action_path }}/../..
         script: |
-          const { redGate } = await import("./scripts/vsdd/promote/gates.ts");
+          const { redGate } = await import("./scripts/vsdd/promote/to-pr/gates.ts");
           await redGate();
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
@@ -251,7 +251,7 @@ runs:
       with:
         workspace: ${{ github.action_path }}/../..
         script: |
-          const { greenGate } = await import("./scripts/vsdd/promote/gates.ts");
+          const { greenGate } = await import("./scripts/vsdd/promote/to-pr/gates.ts");
           await greenGate();
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}

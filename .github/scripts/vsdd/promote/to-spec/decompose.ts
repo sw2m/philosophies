@@ -12,8 +12,8 @@
 // Spec from ./spec.ts (the sub-issue side). One state machine, two
 // outcomes (sub-issues + summary comment).
 
-import { Comment as Base, type Ctx } from "../comment.ts";
-import { marks } from "../frontmatter.ts";
+import { Comment as Base, type Ctx } from "../../comment.ts";
+import { marks } from "../../frontmatter.ts";
 import { Spec } from "./spec.ts";
 
 const KEY = "tech-spec";  // subkey under vsdd: namespace

@@ -3,7 +3,7 @@
 // Subclasses pin a specific template and field schema in their constructor.
 //
 // All VSDD comments, issue bodies, and PR bodies are mustache templates.
-// Concrete subclasses (`vsdd/promote/decompose.ts`, future `vsdd/phase-1c/*`,
+// Concrete subclasses (`vsdd/promote/to-spec/decompose.ts`, future `vsdd/phase-1c/*`,
 // future `vsdd/phase-3/*`) instantiate this with their fixed template and
 // add domain-specific render data construction.
 
