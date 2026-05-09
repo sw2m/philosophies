@@ -187,8 +187,8 @@ runs:
       with:
         workspace: ${{ github.action_path }}/../..
         script: |
-          const { redGate } = await import("./scripts/vsdd/promote/to-pr/gates.ts");
-          await redGate();
+          const gates = await import("./scripts/vsdd/promote/to-pr/gates.ts");
+          await gates.red();
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
       shell: bash
@@ -238,8 +238,8 @@ runs:
       with:
         workspace: ${{ github.action_path }}/../..
         script: |
-          const { greenGate } = await import("./scripts/vsdd/promote/to-pr/gates.ts");
-          await greenGate();
+          const gates = await import("./scripts/vsdd/promote/to-pr/gates.ts");
+          await gates.green();
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
       uses: ./.github/actions/script/github-deno

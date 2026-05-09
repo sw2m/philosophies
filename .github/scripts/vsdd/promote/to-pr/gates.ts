@@ -141,7 +141,7 @@ async function buildPhase4Input(
 // =========================================================================
 // Red gate (Phases 2-3): author tests, expect new fail + reg pass.
 // =========================================================================
-export async function redGate(): Promise<void> {
+export async function red(): Promise<void> {
   const claude = new Claude({ timeout: TIMEOUT });
   const ATTEMPTS = MAX_RETRIES + 1;
   let passed = false;
@@ -236,7 +236,7 @@ export async function redGate(): Promise<void> {
 // =========================================================================
 // Green gate (Phases 4-5): implement, expect new pass + reg pass.
 // =========================================================================
-export async function greenGate(): Promise<void> {
+export async function green(): Promise<void> {
   const claude = new Claude({ timeout: TIMEOUT });
   const noRunner = Deno.env.get("NO_RUNNER") === "true";
 
@@ -320,8 +320,8 @@ export async function greenGate(): Promise<void> {
 
 if (import.meta.main) {
   const which = Deno.args[0];
-  if (which === "red") await redGate();
-  else if (which === "green") await greenGate();
+  if (which === "red") await red();
+  else if (which === "green") await green();
   else {
     console.error("usage: gates.ts <red|green>");
     Deno.exit(2);
