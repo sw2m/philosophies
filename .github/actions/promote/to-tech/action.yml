@@ -28,17 +28,20 @@ runs:
   using: "composite"
   steps:
     - name: Read goal issue
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-      run: |
-        set -euo pipefail
-        gh issue view "$ISSUE_NUMBER" --json title,body,labels,number,url > goal.json
-        jq -r '.title' goal.json > goal-title.txt
-        jq -r '.body'  goal.json > goal-body.txt
-        echo "goal title: $(cat goal-title.txt)"
-        echo "goal body bytes: $(wc -c < goal-body.txt)"
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../..
+        script: |
+          const input = await import("./.github/scripts/github/input.ts");
+          const { owner, repo } = context.repo;
+          const issue = await github.rest.issues.get({
+            owner, repo, issue_number: ${{ inputs.issue-number }},
+          });
+          await input.set("goal-title", issue.data.title);
+          await input.set("goal-body", issue.data.body ?? "");
+          console.log(`goal title: ${issue.data.title}`);
+          console.log(`goal body bytes: ${(issue.data.body ?? "").length}`);
 
     - name: Read orchestrator canonical tuple (#128)
       id: cardinality
@@ -86,9 +89,10 @@ runs:
         workspace: ${{ github.action_path }}/../../..
         script: |
           const input = await import("./.github/scripts/github/input.ts");
+          const input = await import("./.github/scripts/github/input.ts");
           const memory = await Deno.readTextFile("MEMORY.md");
-          const title = await Deno.readTextFile("goal-title.txt");
-          const body = await Deno.readTextFile("goal-body.txt");
+          const title = await input.get("goal-title") ?? "";
+          const body = await input.get("goal-body") ?? "";
           const min = "${{ steps.cardinality.outputs.min-cardinality }}";
           const prompt = await template(
             new URL("./scripts/vsdd/promote/to-tech/prompt.mustache", `file://${Deno.cwd()}/` + ".github/"),
