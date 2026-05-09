@@ -1,29 +1,29 @@
 name: "Regression gate"
-description: "Run the regression test command and verify it passes."
+description: "Author regression tests + verify they pass. Existing behavior must hold."
 inputs:
-  command: { required: true, description: "The regression test command to run." }
+  anthropic-api-key: { required: true }
+  github-token: { required: true }
+  issue-number: { required: true }
+  branch: { required: true }
+  pr-number: { required: true }
+  max-retries: { required: false, default: "3" }
+  agent-timeout-seconds: { required: false, default: "900" }
 outputs:
-  passed: { value: "${{ steps.run.outputs.passed }}", description: "true if exit 0" }
-  log: { value: "${{ steps.run.outputs.log }}", description: "Test output (multiline)" }
+  bailed: { value: "${{ steps.run.outputs.bailed }}", description: "true if retries exhausted" }
+  bail: { value: "${{ steps.run.outputs.bail }}", description: "Diagnostic detail on bail (multiline)" }
 runs:
   using: composite
   steps:
     - id: run
       uses: ./.github/actions/script/github-deno
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        ISSUE_NUMBER: ${{ inputs.issue-number }}
+        BRANCH: ${{ inputs.branch }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
       with:
-        script: |
-          const output = await import("./.github/scripts/github/output.ts");
-          const proc = new Deno.Command("bash", {
-            args: ["-c", `${{ inputs.command }}`],
-            stdout: "piped", stderr: "piped",
-          }).spawn();
-          const [stdout, stderr] = await Promise.all([
-            new Response(proc.stdout).text(),
-            new Response(proc.stderr).text(),
-          ]);
-          const { code } = await proc.status;
-          const log = stdout + (stderr ? "\n--- stderr ---\n" + stderr : "");
-          await output.set("passed", code === 0 ? "true" : "false");
-          await output.set("log", log);
-          console.log(`exit: ${code}`);
-          if (code !== 0) console.log(log.slice(-2000));
+        workspace: ${{ github.action_path }}/../../..
+        script: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).regression();
