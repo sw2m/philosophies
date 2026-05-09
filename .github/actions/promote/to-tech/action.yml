@@ -33,7 +33,7 @@ runs:
         github-token: ${{ inputs.github-token }}
         workspace: ${{ github.action_path }}/../../..
         script: |
-          const input = await import("./.github/scripts/github/input.ts");
+          const input = await import("./.github/scripts/github/shared.ts");
           const { owner, repo } = context.repo;
           const issue = await github.rest.issues.get({
             owner, repo, issue_number: ${{ inputs.issue-number }},
@@ -88,8 +88,8 @@ runs:
       with:
         workspace: ${{ github.action_path }}/../../..
         script: |
-          const input = await import("./.github/scripts/github/input.ts");
-          const input = await import("./.github/scripts/github/input.ts");
+          const input = await import("./.github/scripts/github/shared.ts");
+          const input = await import("./.github/scripts/github/shared.ts");
           const memory = await Deno.readTextFile("MEMORY.md");
           const title = await input.get("goal-title") ?? "";
           const body = await input.get("goal-body") ?? "";

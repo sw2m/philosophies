@@ -1,7 +1,7 @@
 name: "Gemini agent"
 description: |
   Invokes gemini-cli with content from the input module
-  (directory-backed named inputs at $GITHUB_INPUT_DIR) plus an optional
+  (directory-backed named inputs at $GITHUB_SHARED_DIR) plus an optional
   inline `prompt`. Returns the agent's response as the `response` step
   output. Mirrors the claude composite so both agents have the same
   invocation contract.
@@ -70,8 +70,8 @@ runs:
       if: ${{ inputs.prompt != '' }}
       shell: bash
       run: |
-        mkdir -p "${GITHUB_INPUT_DIR:-${RUNNER_TEMP}/input}"
-        printf '%s' "${{ inputs.prompt }}" > "${GITHUB_INPUT_DIR:-${RUNNER_TEMP}/input}/prompt"
+        mkdir -p "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/input}"
+        printf '%s' "${{ inputs.prompt }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/input}/prompt"
 
     - name: Invoke gemini
       id: invoke
@@ -82,7 +82,7 @@ runs:
         workspace: ${{ github.action_path }}/../../../..
         script: |
           const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
-          const input = await import("./.github/scripts/github/input.ts");
+          const input = await import("./.github/scripts/github/shared.ts");
           const output = await import("./.github/scripts/github/output.ts");
 
           // Read every file in input dir (sorted), concatenate as sections.

@@ -2,13 +2,13 @@
 // output writes to $GITHUB_OUTPUT (step-scoped kv); input reads from
 // a directory where each file IS a named value (cross-step, any size).
 //
-// The directory path comes from $GITHUB_INPUT_DIR (set by the calling
+// The directory path comes from $GITHUB_SHARED_DIR (set by the calling
 // step or composite). If unset, falls back to $RUNNER_TEMP/input.
 //
 // Callers write inputs (bash):
-//   mkdir -p "$GITHUB_INPUT_DIR"
-//   cp MEMORY.md "$GITHUB_INPUT_DIR/memory"
-//   cat pr.diff > "$GITHUB_INPUT_DIR/diff"
+//   mkdir -p "$GITHUB_SHARED_DIR"
+//   cp MEMORY.md "$GITHUB_SHARED_DIR/memory"
+//   cat pr.diff > "$GITHUB_SHARED_DIR/diff"
 //
 // Consumers read inputs (TS):
 //   import input from "./.github/scripts/github/input.ts";
@@ -16,7 +16,7 @@
 //   const diff = await input.get("diff");
 
 function dir(): string {
-  return Deno.env.get("GITHUB_INPUT_DIR")
+  return Deno.env.get("GITHUB_SHARED_DIR")
     ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/input`;
 }
 
