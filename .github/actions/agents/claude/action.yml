@@ -90,7 +90,7 @@ runs:
         workspace: ${{ github.action_path }}/../../../..
         script: |
           const { Claude } = await import("./.github/scripts/agents/claude.ts");
-          const input = (await import("./.github/scripts/github/input.ts")).default;
+          const input = await import("./.github/scripts/github/input.ts");
           const output = await import("./.github/scripts/github/output.ts");
 
           // Read every file in input dir (sorted), concatenate as sections.

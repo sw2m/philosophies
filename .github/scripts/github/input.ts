@@ -49,4 +49,4 @@ async function list(): Promise<string[]> {
   }
 }
 
-export default { get, set, list } as const;
+export { get, set, list };
