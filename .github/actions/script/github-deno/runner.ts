@@ -18,6 +18,8 @@ import { retry } from "npm:@octokit/plugin-retry@^7";
 import { requestLog } from "npm:@octokit/plugin-request-log@^5";
 import { createRequire } from "node:module";
 import Mustache from "npm:mustache@^4";
+// deno-lint-ignore no-explicit-any
+const simpleGit = (await import("npm:simple-git@^3")).default as any;
 
 // Match actions/github-script's top-level handler so async rejection inside
 // the user script doesn't crash the Deno runtime silently. Explicit Deno.exit
@@ -146,6 +148,7 @@ try {
     require,
     Mustache,
     template,
+    git: simpleGit(),
   });
 
   // Encoding contract matches actions/github-script:
