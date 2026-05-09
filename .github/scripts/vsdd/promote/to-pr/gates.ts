@@ -12,8 +12,7 @@
 //   NO_RUNNER (Green gate), RUNNER_TEMP, GITHUB_OUTPUT.
 //
 // Writes outputs via GITHUB_OUTPUT:
-//   - Red:   bailed=true|false; on bail, ${RUNNER_TEMP}/red-bail.md
-//   - Green: bailed=true|false; on bail, ${RUNNER_TEMP}/green-bail.md
+//   - Red/Green: bailed=true|false; on bail, bail=<detail> (multiline via heredoc)
 //   - Red also persists meta to ${RUNNER_TEMP}/phase2-meta-final.json
 //     for the Green gate to read NEW_CMD/REG_CMD from.
 
@@ -226,7 +225,7 @@ export async function red(): Promise<void> {
       await tail(`${RUNNER_TEMP}/red-reg.log`, 100),
       "```",
     ].join("\n");
-    await Deno.writeTextFile(`${RUNNER_TEMP}/red-bail.md`, bail);
+    await output.set("bail", bail);
     await output.set("bailed", "true");
   } else {
     await output.set("bailed", "false");
@@ -311,7 +310,7 @@ export async function green(): Promise<void> {
       lines.push("Last new-tests output:", "```", await tail(`${RUNNER_TEMP}/green-new.log`, 100), "```", "");
       lines.push("Last regression-tests output:", "```", await tail(`${RUNNER_TEMP}/green-reg.log`, 100), "```");
     }
-    await Deno.writeTextFile(`${RUNNER_TEMP}/green-bail.md`, lines.join("\n"));
+    await output.set("bail", lines.join("\n"));
     await output.set("bailed", "true");
   } else {
     await output.set("bailed", "false");

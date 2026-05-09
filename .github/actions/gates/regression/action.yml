@@ -1,0 +1,29 @@
+name: "Regression gate"
+description: "Run the regression test command and verify it passes."
+inputs:
+  command: { required: true, description: "The regression test command to run." }
+outputs:
+  passed: { value: "${{ steps.run.outputs.passed }}", description: "true if exit 0" }
+  log: { value: "${{ steps.run.outputs.log }}", description: "Test output (multiline)" }
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: ./.github/actions/script/github-deno
+      with:
+        script: |
+          const output = await import("./.github/scripts/github/output.ts");
+          const proc = new Deno.Command("bash", {
+            args: ["-c", `${{ inputs.command }}`],
+            stdout: "piped", stderr: "piped",
+          }).spawn();
+          const [stdout, stderr] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+          ]);
+          const { code } = await proc.status;
+          const log = stdout + (stderr ? "\n--- stderr ---\n" + stderr : "");
+          await output.set("passed", code === 0 ? "true" : "false");
+          await output.set("log", log);
+          console.log(`exit: ${code}`);
+          if (code !== 0) console.log(log.slice(-2000));

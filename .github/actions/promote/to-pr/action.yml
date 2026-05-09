@@ -163,19 +163,16 @@ runs:
     - name: Phases 2-3 — Author tests + Red gate (with retry)
       id: red-gate
       if: ${{ steps.runner.outputs.no-runner == 'false' }}
-      uses: ./.github/actions/script/github-deno
-      env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        BRANCH: ${{ steps.scaffold.outputs.branch }}
-        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
-        DEFAULT_TEST_CMD: ${{ steps.runner.outputs.default-cmd }}
-        MAX_RETRIES: ${{ inputs.max-retries }}
-        AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
+      uses: ./.github/actions/gates/red
       with:
-        workspace: ${{ github.action_path }}/../..
-        script: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).red();
+        anthropic-api-key: ${{ inputs.anthropic-api-key }}
+        github-token: ${{ inputs.github-token }}
+        issue-number: ${{ inputs.issue-number }}
+        branch: ${{ steps.scaffold.outputs.branch }}
+        pr-number: ${{ steps.scaffold.outputs.pr-number }}
+        default-test-cmd: ${{ steps.runner.outputs.default-cmd }}
+        max-retries: ${{ inputs.max-retries }}
+        agent-timeout-seconds: ${{ inputs.agent-timeout-seconds }}
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
       uses: ./.github/actions/script/github-deno
@@ -184,7 +181,7 @@ runs:
         workspace: ${{ github.action_path }}/../../../..
         script: |
           const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
-          const detail = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/red-bail.md`).catch(() => "");
+          const detail = "${{ steps.red-gate.outputs.bail }}";
           await bail.run({
             api: github, core,
             gate: "red",
@@ -197,19 +194,16 @@ runs:
     - name: Phases 4-5 — Implement + Green gate (with retry)
       id: green-gate
       if: ${{ steps.red-gate.outputs.bailed != 'true' }}
-      uses: ./.github/actions/script/github-deno
-      env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        BRANCH: ${{ steps.scaffold.outputs.branch }}
-        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
-        NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
-        MAX_RETRIES: ${{ inputs.max-retries }}
-        AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
+      uses: ./.github/actions/gates/green
       with:
-        workspace: ${{ github.action_path }}/../..
-        script: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).green();
+        anthropic-api-key: ${{ inputs.anthropic-api-key }}
+        github-token: ${{ inputs.github-token }}
+        issue-number: ${{ inputs.issue-number }}
+        branch: ${{ steps.scaffold.outputs.branch }}
+        pr-number: ${{ steps.scaffold.outputs.pr-number }}
+        no-runner: ${{ steps.runner.outputs.no-runner }}
+        max-retries: ${{ inputs.max-retries }}
+        agent-timeout-seconds: ${{ inputs.agent-timeout-seconds }}
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
       uses: ./.github/actions/script/github-deno
@@ -218,7 +212,7 @@ runs:
         workspace: ${{ github.action_path }}/../../../..
         script: |
           const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
-          const detail = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/green-bail.md`).catch(() => "");
+          const detail = "${{ steps.green-gate.outputs.bail }}";
           await bail.run({
             api: github, core,
             gate: "green",
