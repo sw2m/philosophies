@@ -77,3 +77,26 @@ export async function get(name: string): Promise<string | undefined> {
   }
   return last;
 }
+
+/** List all output names written in this step. Parses $GITHUB_OUTPUT
+ *  for both `name=...` and `name<<DELIM` forms. Returns unique names
+ *  in write order (first occurrence). */
+export async function list(): Promise<string[]> {
+  let text: string;
+  try { text = await Deno.readTextFile(path()); }
+  catch { return []; }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of text.split("\n")) {
+    const eq = line.indexOf("=");
+    const lt = line.indexOf("<<");
+    let name: string | undefined;
+    if (lt > 0) name = line.slice(0, lt);
+    else if (eq > 0) name = line.slice(0, eq);
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}

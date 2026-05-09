@@ -24,10 +24,13 @@ async function has(path: string, pattern: RegExp): Promise<boolean> {
   }
 }
 
-async function json(path: string, key: string): Promise<boolean> {
+import jsonata from "npm:jsonata@^2";
+
+async function query(path: string, expr: string): Promise<boolean> {
   try {
-    const obj = JSON.parse(await Deno.readTextFile(path));
-    return obj?.[key] !== undefined;
+    const data = JSON.parse(await Deno.readTextFile(path));
+    const result = await jsonata(expr).evaluate(data);
+    return result !== undefined;
   } catch {
     return false;
   }
@@ -38,12 +41,9 @@ async function json(path: string, key: string): Promise<boolean> {
 export async function detect(): Promise<string | undefined> {
   if (await has("Makefile", /^test:/m)) return "make test";
 
-  if (await exists("package.json") && await json("package.json", "scripts")) {
-    const pkg = JSON.parse(await Deno.readTextFile("package.json"));
-    if (pkg?.scripts?.test) {
-      if (await exists("bun.lockb") || await exists("bun.lock")) return "bun test";
-      return "npm test";
-    }
+  if (await exists("package.json") && await query("package.json", "scripts.test")) {
+    if (await exists("bun.lockb") || await exists("bun.lock")) return "bun test";
+    return "npm test";
   }
 
   if (await exists("deno.json") || await exists("deno.jsonc")) return "deno test -A";

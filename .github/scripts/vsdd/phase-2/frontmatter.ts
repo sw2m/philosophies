@@ -29,7 +29,7 @@
 
 import { parse as fm } from "../frontmatter.ts";
 
-const KEY = "phase-2";  // subkey under vsdd: namespace
+const KEY = "phase-2";  // registered in symbols.yaml frontmatter.subkeys
 
 type Meta = { files: string[]; "red-green": string; regression: string };
 
