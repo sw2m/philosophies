@@ -32,6 +32,9 @@ const GREEN_PROMPT = await Deno.readTextFile(new URL("./green.prompt.md", HERE))
 const GREEN_NORUN_PROMPT = await Deno.readTextFile(
   new URL("./green-no-runner.prompt.md", HERE),
 );
+const REGRESSION_PROMPT = await Deno.readTextFile(
+  new URL("./regression.prompt.md", HERE),
+);
 
 /** Run a shell command, sending stdout+stderr to `log`. Returns exit code. */
 async function shell(cmd: string, log: string): Promise<number> {
@@ -317,10 +320,109 @@ export async function green(): Promise<void> {
   }
 }
 
+
+// =========================================================================
+// Regression gate: author regression tests, expect pass.
+// =========================================================================
+export async function regression(): Promise<void> {
+  const claude = new Claude({ timeout: TIMEOUT });
+  const ATTEMPTS = MAX_RETRIES + 1;
+  let passed = false;
+  let lastFailure = "";
+
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    console.log(`\n=== Regression — Author regression tests (attempt ${attempt} of ${ATTEMPTS}) ===`);
+
+    const ctx = await techContext();
+    const memory = await Deno.readTextFile("MEMORY.md");
+    const body = [
+      REGRESSION_PROMPT,
+      "--- MEMORY.md ---",
+      memory,
+      "",
+      "--- TECH-SPEC ISSUE TITLE ---",
+      ctx.title,
+      "",
+      "--- TECH-SPEC ISSUE BODY ---",
+      ctx.body,
+    ].join("\n");
+
+    const r = await claude.run(new Blob([body]).stream());
+    if (r.rc !== 0) {
+      lastFailure = `Regression agent (attempt ${attempt}) exited non-zero on both primary and fallback.`;
+      console.error(`::warning::${lastFailure}`);
+      continue;
+    }
+
+    const raw = new TextDecoder().decode(r.output);
+    // Parse the regression frontmatter block
+    let meta: { files: string[]; command: string } | null = null;
+    for (const block of (await import("../../frontmatter.ts")).parse(raw)) {
+      if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+      const ns = (block as Record<string, unknown>).vsdd;
+      if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+      const inner = (ns as Record<string, unknown>).regression;
+      if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
+      const files = (inner as Record<string, unknown>).files;
+      const command = (inner as Record<string, unknown>).command;
+      if (Array.isArray(files) && typeof command === "string") {
+        meta = { files: files as string[], command };
+      }
+    }
+
+    if (!meta || !meta.command) {
+      if (meta && meta.files.length === 0) {
+        console.log("No blast radius — regression gate skipped.");
+        passed = true;
+        break;
+      }
+      lastFailure = `Regression frontmatter parse failed (attempt ${attempt}).`;
+      console.error(`::warning::${lastFailure}`);
+      continue;
+    }
+
+    console.log(`Regression test files: ${meta.files.join(", ")}`);
+    console.log(`Regression command: ${meta.command}`);
+
+    console.log(`\n=== Regression — Run (attempt ${attempt}) ===`);
+    const rc = await shell(meta.command, `${RUNNER_TEMP}/regression.log`);
+    console.log(`  regression exit: ${rc} (expect zero)`);
+
+    if (rc === 0) {
+      console.log("✓ Regression gate passed.");
+      passed = true;
+      await commitPush(`test(promote): regression tests for #${ISSUE}`);
+      break;
+    }
+
+    lastFailure = `Regression gate FAIL: regression tests failed — change broke existing behavior. attempt ${attempt} of ${ATTEMPTS}.`;
+    console.error(`::warning::${lastFailure}`);
+    await git("checkout", "--", ".");
+    await git("clean", "-fd");
+  }
+
+  if (!passed) {
+    console.error(`::error::Regression gate exhausted retries. Last failure: ${lastFailure}`);
+    const bail = [
+      lastFailure,
+      "",
+      "Last regression output:",
+      "```",
+      await tail(`${RUNNER_TEMP}/regression.log`, 100),
+      "```",
+    ].join("\n");
+    await output.set("bail", bail);
+    await output.set("bailed", "true");
+  } else {
+    await output.set("bailed", "false");
+  }
+}
+
 if (import.meta.main) {
   const which = Deno.args[0];
   if (which === "red") await red();
   else if (which === "green") await green();
+  else if (which === "regression") await regression();
   else {
     console.error("usage: gates.ts <red|green>");
     Deno.exit(2);
