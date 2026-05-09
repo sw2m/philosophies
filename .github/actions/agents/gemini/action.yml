@@ -1,38 +1,26 @@
 name: "Gemini agent"
 description: |
-  Invokes gemini-cli with a stdin file (and optional inline prompt prepended),
-  retries on failure with a fallback model, and leaves stdout in an output
-  file the caller reads directly. Centralizes every gemini invocation in this
-  repo so 'where do agents touch the CI?' is a single grep.
+  Invokes gemini-cli with content from the input module
+  (directory-backed named inputs at $GITHUB_INPUT_DIR) plus an optional
+  inline `prompt`. Returns the agent's response as the `response` step
+  output. Mirrors the claude composite so both agents have the same
+  invocation contract.
 
 inputs:
   org:
-    description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
+    description: "GitHub org whose members are allowed to invoke this agent."
     required: false
     default: "sw2m"
   actor-override:
-    description: |
-      If set, validate this login against the org instead of the workflow
-      trigger sender. Used by callers that have already identified an
-      org-member owner via richer context (PR author + assignees) — for
-      example when a fork-PR `synchronize` event's sender is the external
-      pusher but the PR is owned by an org-member assignee. Empty string
-      (default) preserves the original sender-based check.
+    description: "Validate this login against the org instead of the trigger sender."
     required: false
     default: ""
   trust-github-actions-bot:
-    description: |
-      When 'true', accepts github-actions[bot] as a valid actor without
-      calling the org-member API. Used for safe contexts where the bot
-      is acting on behalf of an org-member-owned artifact. Default 'false'.
+    description: "When 'true', accepts github-actions[bot] without org-member check."
     required: false
     default: "false"
   prompt:
-    description: "Optional inline prompt prepended to stdin-file before piping to gemini."
-    required: false
-    default: ""
-  stdin-file:
-    description: "Path to a file whose contents are piped as stdin to gemini after `prompt`. Preferred over `prompt` for content larger than a few KB."
+    description: "Optional inline prompt prepended to the input body."
     required: false
     default: ""
   model:
@@ -46,15 +34,11 @@ inputs:
   api-key:
     description: "GEMINI_API_KEY value (caller passes via secret)."
     required: true
-  output-file:
-    description: "Where gemini stdout is written. Caller reads from this path after the action runs."
-    required: false
-    default: "gemini-output.txt"
 
 outputs:
-  output-file:
-    description: "Path to the file containing gemini stdout (echoes back the input for chaining)."
-    value: ${{ inputs.output-file }}
+  response:
+    description: "Agent's stdout as text (multi-line via heredoc)."
+    value: ${{ steps.invoke.outputs.response }}
 
 runs:
   using: "composite"
@@ -68,39 +52,22 @@ runs:
         ORG: ${{ inputs.org }}
         INPUT_TRUST_BOT: ${{ inputs.trust-github-actions-bot }}
       run: |
-        # Normalize trust-github-actions-bot input to a boolean shell variable.
-        # Uses tr for POSIX-compatible lowercase (macOS runners have Bash 3.2).
         case "$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')" in
           true) trust_bot=true ;;
           *)    trust_bot=false ;;
         esac
-        # Hard gate: agents must not be invocable by non-org-members.
-        # NOTE: the default GITHUB_TOKEN can only see PUBLIC org memberships.
-        # Members whose membership is private are invisible to this check
-        # and will trigger a hard fail. Make membership public on the org
-        # page (Settings → People → "Make public") to be recognized.
-        trust_bot=$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')
         ACTOR="${OVERRIDE:-$SENDER}"
         if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "$SENDER" ]; then
-          echo "actor-override active: validating '$OVERRIDE' (caller-provided owner) instead of trigger sender '$SENDER'."
+          echo "actor-override active: validating '$OVERRIDE' instead of '$SENDER'."
         fi
         if [ "${trust_bot}" = "true" ] && [ "${ACTOR}" = "github-actions[bot]" ]; then
-          echo "::notice::Accepting github-actions[bot] as actor under trust-github-actions-bot opt-in."
+          echo "::notice::Accepting github-actions[bot] under trust-github-actions-bot opt-in."
         else
           if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
-            echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
-            echo ""
-            echo "If you ARE a member but private: visit"
-            echo "https://github.com/orgs/$ORG/people and click 'Make public'"
-            echo "next to your row. The default workflow GITHUB_TOKEN cannot"
-            echo "see private memberships."
-            echo ""
-            echo "If you are not a member: agent invocations (Gemini) are"
-            echo "restricted to org members. An org member must open the PR"
-            echo "on your behalf or self-assign to take ownership."
+            echo "::error::$ACTOR is not a (publicly-visible) member of '$ORG'."
             exit 1
           fi
-          echo "✓ $ACTOR is a $ORG org member (public)."
+          echo "✓ $ACTOR is a $ORG org member."
         fi
 
     - uses: actions/setup-node@v6
@@ -111,34 +78,31 @@ runs:
       shell: bash
       run: npm install -g @google/gemini-cli@latest
 
-    - name: Invoke gemini (primary, then fallback on error)
+    - name: Invoke gemini
+      id: invoke
       uses: ./.github/actions/script/github-deno
       env:
         GEMINI_API_KEY: ${{ inputs.api-key }}
         PROMPT: ${{ inputs.prompt }}
-        STDIN_FILE: ${{ inputs.stdin-file }}
-        OUTPUT_FILE: ${{ inputs.output-file }}
       with:
         workspace: ${{ github.action_path }}/../../../..
         script: |
           const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
+          const input = (await import("./.github/scripts/github/input.ts")).default;
+          const output = await import("./.github/scripts/github/output.ts");
 
           const prompt = Deno.env.get("PROMPT") ?? "";
-          const stdinFile = Deno.env.get("STDIN_FILE") ?? "";
-          let body = "";
-          if (prompt) body += prompt + "\n\n";
-          if (stdinFile) {
-            try {
-              body += await Deno.readTextFile(stdinFile);
-            } catch {
-              core.setFailed(`stdin-file '${stdinFile}' does not exist.`);
-              return;
-            }
+          const parts: string[] = [];
+          if (prompt) parts.push(prompt);
+          for (const name of await input.list()) {
+            const content = await input.get(name);
+            if (content) parts.push(content);
           }
-          if (!body) {
-            core.setFailed("No content to send to gemini (both prompt and stdin-file were empty).");
+          if (!parts.length) {
+            core.setFailed("No content to send to gemini (prompt empty and no input files).");
             return;
           }
+          const body = parts.join("\n\n");
           console.log(`input bytes: ${body.length}`);
 
           const gemini = new Gemini({
@@ -146,25 +110,13 @@ runs:
             fallback: "${{ inputs.fallback-model }}",
           });
           const r = await gemini.run(new Blob([body]).stream());
-          await Deno.writeFile(Deno.env.get("OUTPUT_FILE")!, r.output);
+          const response = new TextDecoder().decode(r.output);
+          await output.set("response", response);
           if (r.rc !== 0) {
-            const text = new TextDecoder().decode(r.output);
-            core.setFailed(`Gemini exited ${r.rc} on both primary and fallback models.`);
+            core.setFailed(`Gemini exited ${r.rc} on both primary and fallback.`);
             console.log("--- stdout ---");
-            console.log(text.slice(0, 2000));
+            console.log(response.slice(0, 2000));
             Deno.exit(r.rc);
           }
-          const text = new TextDecoder().decode(r.output);
           console.log("stdout (first 500 chars):");
-          console.log(text.slice(0, 500));
-
-    - name: Verify output produced
-      shell: bash
-      env:
-        OUTPUT: ${{ inputs.output-file }}
-      run: |
-        if [ ! -s "$OUTPUT" ]; then
-          echo "::error::$OUTPUT is empty or missing — gemini exited 0 but produced no content."
-          exit 1
-        fi
-        echo "✓ $OUTPUT exists ($(wc -c < "$OUTPUT") bytes)"
+          console.log(response.slice(0, 500));

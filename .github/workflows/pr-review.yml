@@ -517,11 +517,11 @@ jobs:
           path: .vsdd-philosophies
 
       - name: Run Gemini (composite; org-member gate inside)
+        id: review
         uses: ./.github/actions/agents/gemini
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: gemini-stdin.txt
-          output-file: review.md
           # The owner login was identified by the ownership gate. Pass it
           # as actor-override so the action's inner gate validates against
           # the *PR owner*, not the workflow trigger sender (which on a
@@ -534,10 +534,12 @@ jobs:
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
         uses: ./.vsdd-philosophies/.github/actions/script/github-deno
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
         with:
           script: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
-            const raw = await Deno.readTextFile("review.md");
+            const raw = Deno.env.get("REVIEW") ?? "";
             const { verdict, body } = extract(raw, "phase-3");
             if (verdict !== "pass" && verdict !== "fail") {
               core.setFailed("Gemini output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
@@ -589,10 +591,10 @@ jobs:
           path: .vsdd-philosophies
 
       - name: Run Claude (composite; org-member gate inside)
+        id: review
         uses: ./.github/actions/agents/claude
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          output-file: review.md
           # Same stdin-file as Gemini — `gemini-stdin.txt` already starts
           # with `${{ env.PHASE_3_PROMPT }}`, followed by MEMORY.md, the PR /
           # linked-issue context, the full repo tree, and pr.diff. Do NOT
@@ -607,10 +609,12 @@ jobs:
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         uses: ./.vsdd-philosophies/.github/actions/script/github-deno
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
         with:
           script: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
-            const raw = await Deno.readTextFile("review.md");
+            const raw = Deno.env.get("REVIEW") ?? "";
             const { verdict, body } = extract(raw, "phase-3");
             if (verdict !== "pass" && verdict !== "fail") {
               core.setFailed("Claude output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");

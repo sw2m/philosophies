@@ -144,11 +144,11 @@ jobs:
           path: ./
 
       - name: Run Gemini
+        id: review
         uses: ./.github/actions/agents/gemini
         with:
           api-key: ${{ secrets.GEMINI_API_KEY }}
           stdin-file: eval-input.txt
-          output-file: gemini-output.txt
           # Per #112/#116 — opt in to bot trust on in-repo head branches only.
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           prompt: |
@@ -231,10 +231,12 @@ jobs:
       - name: Parse frontmatter
         id: parse
         uses: ./.github/actions/script/github-deno
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
         with:
           script: |
             const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
-            const raw = await Deno.readTextFile("gemini-output.txt");
+            const raw = Deno.env.get("REVIEW") ?? "";
 
             // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary
@@ -291,10 +293,10 @@ jobs:
           path: ./
 
       - name: Run Claude
+        id: review
         uses: ./.github/actions/agents/claude
         with:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          output-file: claude-eval.md
           # Same stdin-file pattern as Gemini — Claude has no filesystem
           # access via the Messages API, so we embed eval-input.txt
           # (canonical MEMORY.md + every workflow + every composite action)
@@ -402,10 +404,12 @@ jobs:
       - name: Parse frontmatter
         id: parse
         uses: ./.github/actions/script/github-deno
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
         with:
           script: |
             const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
-            const raw = await Deno.readTextFile("claude-eval.md");
+            const raw = Deno.env.get("REVIEW") ?? "";
 
             // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary

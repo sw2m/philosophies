@@ -1,38 +1,26 @@
 name: "Claude agent"
 description: |
-  Invokes the Claude Code CLI (`@anthropic-ai/claude-code`) with a stdin
-  file (and optional inline prompt prepended), leaves stdout in an output
-  file the caller reads directly. Mirrors the gemini composite action's
-  shape so 'where do agents touch the CI?' is a single grep AND so both
-  agents have the same invocation contract.
+  Invokes the Claude Code CLI with content from the input module
+  (directory-backed named inputs at $GITHUB_INPUT_DIR) plus an optional
+  inline `prompt`. Returns the agent's response as the `response` step
+  output. Mirrors the gemini composite so both agents have the same
+  invocation contract.
 
 inputs:
   org:
-    description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
+    description: "GitHub org whose members are allowed to invoke this agent."
     required: false
     default: "sw2m"
   actor-override:
-    description: |
-      If set, validate this login against the org instead of the workflow
-      trigger sender. Used by callers that have already identified an
-      org-member owner via richer context (PR author + assignees, issue
-      assignees, etc.). Empty string (default) preserves the original
-      sender-based check.
+    description: "Validate this login against the org instead of the trigger sender."
     required: false
     default: ""
   trust-github-actions-bot:
-    description: |
-      When 'true', accepts github-actions[bot] as a valid actor without
-      calling the org-member API. Used for safe contexts where the bot
-      is acting on behalf of an org-member-owned artifact. Default 'false'.
+    description: "When 'true', accepts github-actions[bot] without org-member check."
     required: false
     default: "false"
   prompt:
-    description: "Optional inline prompt prepended to stdin-file before piping to claude."
-    required: false
-    default: ""
-  stdin-file:
-    description: "Path to a file whose contents are appended to `prompt` and piped as stdin to claude. Preferred over `prompt` for content larger than a few KB."
+    description: "Optional inline prompt prepended to the input body."
     required: false
     default: ""
   model:
@@ -40,36 +28,25 @@ inputs:
     required: false
     default: "claude-opus-4-5"
   fallback-model:
-    description: "Model to retry with if primary errors (capacity, transient API failure, etc.)."
+    description: "Model to retry with if primary errors."
     required: false
     default: "claude-sonnet-4-5"
   api-key:
     description: "ANTHROPIC_API_KEY value (caller passes via secret)."
     required: true
-  output-file:
-    description: "Where claude's stdout is written. Caller reads from this path after the action runs."
-    required: false
-    default: "claude-output.txt"
   allowed-tools:
-    description: |
-      Tools claude is permitted to invoke. Default `""` disables every
-      tool (pure inference). Pass e.g. `"Bash Edit Write Read"` to allow
-      filesystem and shell access for agentic phases (used by the
-      promote-tech-to-pr pipeline). Space-separated list.
+    description: "Space-separated list of tools claude may invoke. Empty = inference-only."
     required: false
     default: ""
   permission-mode:
-    description: |
-      Permission mode passed to claude. `default` (claude's default) for
-      inference; `bypassPermissions` for non-interactive autonomous runs
-      where `allowed-tools` is non-empty. Leave empty to omit the flag.
+    description: "Permission mode flag (e.g. bypassPermissions). Empty = omit."
     required: false
     default: ""
 
 outputs:
-  output-file:
-    description: "Path to the file containing claude stdout (echoes back the input)."
-    value: ${{ inputs.output-file }}
+  response:
+    description: "Agent's stdout as text (multi-line via heredoc)."
+    value: ${{ steps.invoke.outputs.response }}
 
 runs:
   using: "composite"
@@ -83,35 +60,22 @@ runs:
         ORG: ${{ inputs.org }}
         INPUT_TRUST_BOT: ${{ inputs.trust-github-actions-bot }}
       run: |
-        # Normalize trust-github-actions-bot input to a boolean shell variable.
-        # Uses tr for POSIX-compatible lowercase (macOS runners have Bash 3.2).
         case "$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')" in
           true) trust_bot=true ;;
           *)    trust_bot=false ;;
         esac
-        # Hard gate: agents must not be invocable by non-org-members.
-        # NOTE: the default GITHUB_TOKEN can only see PUBLIC org memberships.
-        trust_bot=$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')
         ACTOR="${OVERRIDE:-$SENDER}"
         if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "$SENDER" ]; then
-          echo "actor-override active: validating '$OVERRIDE' (caller-provided owner) instead of trigger sender '$SENDER'."
+          echo "actor-override active: validating '$OVERRIDE' instead of '$SENDER'."
         fi
         if [ "${trust_bot}" = "true" ] && [ "${ACTOR}" = "github-actions[bot]" ]; then
-          echo "::notice::Accepting github-actions[bot] as actor under trust-github-actions-bot opt-in."
+          echo "::notice::Accepting github-actions[bot] under trust-github-actions-bot opt-in."
         else
           if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
-            echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
-            echo ""
-            echo "If you ARE a member but private: visit"
-            echo "https://github.com/orgs/$ORG/people and click 'Make public'"
-            echo "next to your row."
-            echo ""
-            echo "If you are not a member: agent invocations (Claude) are"
-            echo "restricted to org members. Self-assign on an issue or PR"
-            echo "to take ownership."
+            echo "::error::$ACTOR is not a (publicly-visible) member of '$ORG'."
             exit 1
           fi
-          echo "✓ $ACTOR is a $ORG org member (public)."
+          echo "✓ $ACTOR is a $ORG org member."
         fi
 
     - uses: actions/setup-node@v6
@@ -122,36 +86,33 @@ runs:
       shell: bash
       run: npm install -g @anthropic-ai/claude-code@latest
 
-    - name: Invoke claude (--print, with fallback model on error)
+    - name: Invoke claude
+      id: invoke
       uses: ./.github/actions/script/github-deno
       env:
         ANTHROPIC_API_KEY: ${{ inputs.api-key }}
         PROMPT: ${{ inputs.prompt }}
-        STDIN_FILE: ${{ inputs.stdin-file }}
-        OUTPUT_FILE: ${{ inputs.output-file }}
       with:
         workspace: ${{ github.action_path }}/../../../..
         script: |
           const { Claude } = await import("./.github/scripts/agents/claude.ts");
+          const input = (await import("./.github/scripts/github/input.ts")).default;
+          const output = await import("./.github/scripts/github/output.ts");
 
-          // Build combined input from optional inline prompt + optional
-          // stdin-file. At least one must contribute content.
+          // Build body from inline prompt + any named inputs in $GITHUB_INPUT_DIR.
           const prompt = Deno.env.get("PROMPT") ?? "";
-          const stdinFile = Deno.env.get("STDIN_FILE") ?? "";
-          let body = "";
-          if (prompt) body += prompt + "\n\n";
-          if (stdinFile) {
-            try {
-              body += await Deno.readTextFile(stdinFile);
-            } catch {
-              core.setFailed(`stdin-file '${stdinFile}' does not exist.`);
-              return;
-            }
+          const parts: string[] = [];
+          if (prompt) parts.push(prompt);
+          // Read every file in input dir (sorted), concatenate as sections.
+          for (const name of await input.list()) {
+            const content = await input.get(name);
+            if (content) parts.push(content);
           }
-          if (!body) {
-            core.setFailed("No content to send to claude (both prompt and stdin-file were empty).");
+          if (!parts.length) {
+            core.setFailed("No content to send to claude (prompt empty and no input files).");
             return;
           }
+          const body = parts.join("\n\n");
           console.log(`input bytes: ${body.length}`);
 
           const claude = new Claude({
@@ -161,28 +122,13 @@ runs:
             mode: "${{ inputs.permission-mode }}",
           });
           const r = await claude.run(new Blob([body]).stream());
-          // The composite contract is "agent stdout lands at output-file";
-          // we still write the captured bytes there for the calling
-          // workflow to read after the action returns.
-          await Deno.writeFile(Deno.env.get("OUTPUT_FILE")!, r.output);
+          const response = new TextDecoder().decode(r.output);
+          await output.set("response", response);
           if (r.rc !== 0) {
-            const text = new TextDecoder().decode(r.output);
-            core.setFailed(`Claude exited ${r.rc} on both primary and fallback models.`);
+            core.setFailed(`Claude exited ${r.rc} on both primary and fallback.`);
             console.log("--- stdout ---");
-            console.log(text.slice(0, 2000));
+            console.log(response.slice(0, 2000));
             Deno.exit(r.rc);
           }
-          const text = new TextDecoder().decode(r.output);
           console.log("stdout (first 500 chars):");
-          console.log(text.slice(0, 500));
-
-    - name: Verify output produced
-      shell: bash
-      env:
-        OUTPUT: ${{ inputs.output-file }}
-      run: |
-        if [ ! -s "$OUTPUT" ]; then
-          echo "::error::$OUTPUT is empty or missing."
-          exit 1
-        fi
-        echo "✓ $OUTPUT exists ($(wc -c < "$OUTPUT") bytes)"
+          console.log(response.slice(0, 500));
