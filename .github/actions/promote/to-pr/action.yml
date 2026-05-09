@@ -242,35 +242,22 @@ runs:
           await greenGate();
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
-        OWNER_LOGIN: ${{ inputs.owner-login }}
-      run: |
-        set -euo pipefail
-        gh issue edit "$ISSUE_NUMBER" --add-label needs-human || true
-        BODY=$(mktemp)
-        {
-          echo "**Promote-tech-to-pr bailed at Green gate (Phase 5).**"
-          echo ""
-          echo "_The implementation either could not pass the new tests"
-          echo "or broke regressions, even after the retry budget. Tests"
-          echo "(from Phase 2) are committed on the branch; the failed"
-          echo "Phase 4 implementation attempts have been discarded._"
-          echo ""
-          cat ${RUNNER_TEMP}/green-bail.md
-          echo ""
-          echo "@$OWNER_LOGIN — over to you. Either implement by hand on"
-          echo "branch \`${BRANCH:-the PR branch}\`, or refine the tech-spec"
-          echo "and re-trigger by re-assigning yourself."
-        } > "$BODY"
-        gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"
-        gh pr comment "$PR_NUMBER" --body-file "$BODY"
-        echo "::error::Green gate bailed; needs-human label applied."
-        exit 1
-
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
+          const detail = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/green-bail.md`).catch(() => "");
+          await bail.run({
+            api: github, core,
+            gate: "green",
+            issue: ${{ inputs.issue-number }},
+            pr: ${{ steps.scaffold.outputs.pr-number }},
+            owner: "${{ inputs.owner-login }}",
+            detail,
+            repo: context.repo,
+          });
     - name: Final summary comment on success
       if: ${{ steps.green-gate.outputs.bailed == 'false' }}
       shell: bash
