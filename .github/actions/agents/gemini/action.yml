@@ -71,7 +71,6 @@ runs:
       uses: ./.github/actions/script/github-deno
       env:
         GEMINI_API_KEY: ${{ inputs.api-key }}
-        PROMPT: ${{ inputs.prompt }}
       with:
         workspace: ${{ github.action_path }}/../../../..
         script: |
@@ -79,15 +78,18 @@ runs:
           const input = (await import("./.github/scripts/github/input.ts")).default;
           const output = await import("./.github/scripts/github/output.ts");
 
-          const prompt = Deno.env.get("PROMPT") ?? "";
+          // Write inline prompt to the input dir so all content is uniform.
+          const prompt = `${{ inputs.prompt }}`;
+          if (prompt) await input.set("prompt", prompt);
+
+          // Read every file in input dir (sorted), concatenate as sections.
           const parts: string[] = [];
-          if (prompt) parts.push(prompt);
           for (const name of await input.list()) {
             const content = await input.get(name);
             if (content) parts.push(content);
           }
           if (!parts.length) {
-            core.setFailed("No content to send to gemini (prompt empty and no input files).");
+            core.setFailed("No content to send to gemini (no input files).");
             return;
           }
           const body = parts.join("\n\n");
