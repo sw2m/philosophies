@@ -115,17 +115,43 @@ function getOctokit(token: string, additional: Partial<OctokitOpts> = {}) {
 // wrapped-require behaviour).
 const require = createRequire(import.meta.url);
 
-// Dynamic-import the user script's tempfile. Deno parses TS natively
-// (type assertions, `!` non-null, etc. all work), and relative imports
-// inside the user script resolve from the tempfile's actual location —
-// no `new Function` eval and no JS-only restriction. The action.yml
-// shim has wrapped the user's `script:` content as a default-export
-// async function whose single arg is a destructurable globals bag.
-const userMod = await import(path);
-const userFn = userMod.default;
-if (typeof userFn !== "function") {
-  core.setFailed("github-deno: user script tempfile did not default-export a function (action.yml shim should have wrapped it).");
-  Deno.exit(2);
+// Handle two shapes:
+// 1. Module file with `export default async function` (from action.yml shim)
+// 2. Raw script file (from `shell: octoscript {0}` — GitHub writes raw content)
+//
+// Detection: try importing. If mod.default is a function, use it.
+// Otherwise, wrap the raw content as a default-export module, write
+// to a .ts file in the workspace, and import that.
+const script = await Deno.readTextFile(path);
+let userFn: Function;
+
+// Try direct import first (pre-wrapped by action.yml)
+try {
+  const mod = await import(path.endsWith(".ts") ? path : `file://${await Deno.realPath(path)}`);
+  if (typeof mod.default === "function") {
+    userFn = mod.default;
+  } else {
+    throw new Error("not a module");
+  }
+} catch {
+  // Raw script — wrap as default-export module
+  const wrapped = [
+    "export default async function(_g: any) {",
+    "  const { github, octokit, getOctokit, context, core, exec, glob, io, require, Mustache, template, git } = _g;",
+    script,
+    "}",
+  ].join("\n");
+  const wsDir = Deno.env.get("GITHUB_WORKSPACE") ?? Deno.cwd();
+  const tmpBase = await Deno.makeTempFile({ dir: wsDir, prefix: ".octoscript-" });
+  const tmpTs = tmpBase + ".ts";
+  await Deno.rename(tmpBase, tmpTs);
+  await Deno.writeTextFile(tmpTs, wrapped);
+  try {
+    const mod = await import(`file://${await Deno.realPath(tmpTs)}`);
+    userFn = mod.default;
+  } finally {
+    await Deno.remove(tmpTs).catch(() => {});
+  }
 }
 
 try {
