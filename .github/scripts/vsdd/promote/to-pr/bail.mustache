@@ -1,0 +1,17 @@
+**Promote-tech-to-pr bailed at {{gate}} gate (Phase {{phase}}).**
+
+_The agent exhausted its retry budget {{#red}}trying to write tests
+that fail before implementation while keeping the regression
+set green. This usually means: the tech-spec covers more
+than one technical problem (§VII violation), or the change
+interacts with the regression set in a way the agent can't
+isolate._{{/red}}{{#green}}trying to produce an implementation
+that makes the new tests pass without breaking the regression
+set. This usually means: the change is too complex for a
+single automated pass, or the tests are over-constrained._{{/green}}
+
+{{{detail}}}
+
+@{{owner}} — over to you. Inspect the draft PR (#{{{pr}}}),
+either refine the tech-spec into smaller pieces or take over
+the implementation by hand.
