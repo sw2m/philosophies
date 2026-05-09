@@ -76,34 +76,21 @@ runs:
 
     - name: Detect test runner
       id: runner
-      shell: bash
-      run: |
-        set -euo pipefail
-        # First match wins. The detected default command is a hint to the
-        # agent in Phase 2; the agent may override with a more specific
-        # command in its frontmatter output.
-        CMD=""
-        if [ -f Makefile ] && grep -qE '^test:' Makefile; then
-          CMD="make test"
-        elif [ -f package.json ] && jq -e '.scripts.test' package.json >/dev/null 2>&1; then
-          if [ -f bun.lockb ] || [ -f bun.lock ]; then CMD="bun test"; else CMD="npm test"; fi
-        elif [ -f deno.json ] || [ -f deno.jsonc ]; then
-          CMD="deno test -A"
-        elif [ -f pyproject.toml ] || [ -f pytest.ini ] || [ -f setup.py ]; then
-          CMD="pytest"
-        elif [ -f Cargo.toml ]; then
-          CMD="cargo test"
-        elif [ -f go.mod ]; then
-          CMD="go test ./..."
-        fi
-        echo "default-cmd=$CMD" >> "$GITHUB_OUTPUT"
-        if [ -z "$CMD" ]; then
-          echo "no-runner=true" >> "$GITHUB_OUTPUT"
-          echo "::notice::No test runner detected. §VIII (4-Result Rule) is N/A; Phases 2/3/5 will be skipped."
-        else
-          echo "no-runner=false" >> "$GITHUB_OUTPUT"
-          echo "Detected test command: $CMD"
-        fi
+      uses: ./.github/actions/script/github-deno
+      with:
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const runner = await import("./.github/scripts/github/runner.ts");
+          const output = await import("./.github/scripts/github/output.ts");
+          const cmd = await runner.detect();
+          await output.set("default-cmd", cmd ?? "");
+          if (!cmd) {
+            await output.set("no-runner", "true");
+            core.notice("No test runner detected. §VIII (4-Result Rule) is N/A; Phases 2/3/5 will be skipped.");
+          } else {
+            await output.set("no-runner", "false");
+            console.log(`Detected test command: ${cmd}`);
+          }
 
     - name: Configure git
       shell: bash
