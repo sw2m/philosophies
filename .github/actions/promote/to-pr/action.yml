@@ -117,18 +117,19 @@ runs:
           const { owner: repoOwner, repo } = context.repo;
 
           // Idempotent branch: reuse if exists, else create + empty scaffold commit.
-          const cmd = (args: string[]) => new Deno.Command("git", { args, stdout: "inherit", stderr: "inherit" }).output();
-          await cmd(["fetch", "origin", base]);
-          const ls = await new Deno.Command("git", { args: ["ls-remote", "--exit-code", "--heads", "origin", branch], stdout: "null", stderr: "null" }).output();
-          if (ls.code === 0) {
-            await cmd(["fetch", "origin", branch]);
-            await cmd(["checkout", branch]);
+          await git.fetch("origin", base);
+          const branches = await git.branch(["-r"]);
+          if (branches.all.includes(`origin/${branch}`)) {
+            await git.fetch("origin", branch);
+            await git.checkout(branch);
             console.log(`Branch ${branch} already existed; resuming.`);
           } else {
-            await cmd(["checkout", "-b", branch, `origin/${base}`]);
-            await cmd(["commit", "--allow-empty", "-m",
-              `chore(promote): scaffold for #${issue}\n\nPromotion run for issue #${issue}\nOwner: @${owner}\nStarted: ${new Date().toISOString()}`]);
-            await cmd(["push", "-u", "origin", branch]);
+            await git.checkoutBranch(branch, `origin/${base}`);
+            await git.commit(
+              `chore(promote): scaffold for #${issue}\n\nPromotion run for issue #${issue}\nOwner: @${owner}\nStarted: ${new Date().toISOString()}`,
+              { "--allow-empty": null },
+            );
+            await git.push(["-u", "origin", branch]);
           }
           await output.set("branch", branch);
 
