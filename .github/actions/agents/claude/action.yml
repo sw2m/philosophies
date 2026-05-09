@@ -52,31 +52,19 @@ runs:
   using: "composite"
   steps:
     - name: Verify org membership
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        SENDER: ${{ github.event.sender.login || github.actor }}
-        OVERRIDE: ${{ inputs.actor-override }}
-        ORG: ${{ inputs.org }}
-        INPUT_TRUST_BOT: ${{ inputs.trust-github-actions-bot }}
-      run: |
-        case "$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')" in
-          true) trust_bot=true ;;
-          *)    trust_bot=false ;;
-        esac
-        ACTOR="${OVERRIDE:-$SENDER}"
-        if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "$SENDER" ]; then
-          echo "actor-override active: validating '$OVERRIDE' instead of '$SENDER'."
-        fi
-        if [ "${trust_bot}" = "true" ] && [ "${ACTOR}" = "github-actions[bot]" ]; then
-          echo "::notice::Accepting github-actions[bot] under trust-github-actions-bot opt-in."
-        else
-          if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
-            echo "::error::$ACTOR is not a (publicly-visible) member of '$ORG'."
-            exit 1
-          fi
-          echo "✓ $ACTOR is a $ORG org member."
-        fi
+      uses: ./.github/actions/script/github-deno
+      with:
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const org = await import("./.github/scripts/github/org.ts");
+          await org.verify({
+            api: github,
+            core,
+            org: "${{ inputs.org }}",
+            actor: "${{ inputs.actor-override }}",
+            sender: "${{ github.event.sender.login }}" || "${{ github.actor }}",
+            bot: "${{ inputs.trust-github-actions-bot }}" === "true",
+          });
 
     - uses: actions/setup-node@v6
       with:
