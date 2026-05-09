@@ -11,9 +11,9 @@
 //   cat pr.diff > "$GITHUB_SHARED_DIR/diff"
 //
 // Consumers read inputs (TS):
-//   import input from "./.github/scripts/github/input.ts";
-//   const memory = await input.get("memory");
-//   const diff = await input.get("diff");
+//   import * as shared from "./.github/scripts/github/shared.ts";
+//   const memory = await shared.get("memory");
+//   const diff = await shared.get("diff");
 
 function dir(): string {
   return Deno.env.get("GITHUB_SHARED_DIR")

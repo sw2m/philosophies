@@ -90,14 +90,14 @@ runs:
         workspace: ${{ github.action_path }}/../../../..
         script: |
           const { Claude } = await import("./.github/scripts/agents/claude.ts");
-          const input = await import("./.github/scripts/github/shared.ts");
+          const shared = await import("./.github/scripts/github/shared.ts");
           const output = await import("./.github/scripts/github/output.ts");
 
           // Read every file in input dir (sorted), concatenate as sections.
           // Prompt (if provided) is already staged as a file by a prior step.
           const parts: string[] = [];
-          for (const name of await input.list()) {
-            const content = await input.get(name);
+          for (const name of await shared.list()) {
+            const content = await shared.get(name);
             if (content) parts.push(content);
           }
           if (!parts.length) {

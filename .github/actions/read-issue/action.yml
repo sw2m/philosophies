@@ -1,0 +1,38 @@
+name: "Read issue"
+description: "Fetch an issue and write its fields to the shared module."
+inputs:
+  github-token: { required: true }
+  issue-number: { required: true }
+  prefix:
+    description: "Prefix for shared keys (e.g. 'tech' → tech-title, tech-body, tech-url)."
+    required: false
+    default: ""
+outputs:
+  title: { value: "${{ steps.read.outputs.title }}" }
+  body: { value: "${{ steps.read.outputs.body }}" }
+  url: { value: "${{ steps.read.outputs.url }}" }
+  number: { value: "${{ steps.read.outputs.number }}" }
+runs:
+  using: composite
+  steps:
+    - id: read
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { Issue } = await import("./.github/scripts/github/issue.ts");
+          const shared = await import("./.github/scripts/github/shared.ts");
+          const output = await import("./.github/scripts/github/output.ts");
+          const { owner, repo } = context.repo;
+          const issue = new Issue({ api: github, owner, repo });
+          await issue.get({ issue_number: ${{ inputs.issue-number }} });
+          const prefix = "${{ inputs.prefix }}";
+          const key = (name) => prefix ? `${prefix}-${name}` : name;
+          await shared.set(key("title"), issue.title);
+          await shared.set(key("body"), issue.body ?? "");
+          await shared.set(key("url"), issue.html_url);
+          await output.set("title", issue.title);
+          await output.set("body", issue.body ?? "");
+          await output.set("url", issue.html_url);
+          await output.set("number", issue.number);
+          console.log(`${key("title")}: ${issue.title}`);

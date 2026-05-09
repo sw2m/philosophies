@@ -62,20 +62,11 @@ runs:
           });
 
     - name: Read tech-spec issue
-      uses: ./.github/actions/script/github-deno
+      uses: ./.github/actions/read-issue
       with:
         github-token: ${{ inputs.github-token }}
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const input = await import("./.github/scripts/github/shared.ts");
-          const { owner, repo } = context.repo;
-          const issue = await github.rest.issues.get({
-            owner, repo, issue_number: ${{ inputs.issue-number }},
-          });
-          await input.set("tech-title", issue.data.title);
-          await input.set("tech-body", issue.data.body ?? "");
-          await input.set("tech-url", issue.data.html_url);
-          console.log(`tech-spec: ${issue.data.title}`);
+        issue-number: ${{ inputs.issue-number }}
+        prefix: tech
 
     - name: Detect test runner
       id: runner
