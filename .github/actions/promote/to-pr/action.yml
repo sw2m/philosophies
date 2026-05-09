@@ -49,17 +49,17 @@ runs:
   using: "composite"
   steps:
     - name: Verify org membership of the owner
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ORG: sw2m
-        OWNER: ${{ inputs.owner-login }}
-      run: |
-        if ! gh api "orgs/$ORG/members/$OWNER" >/dev/null 2>&1; then
-          echo "::error::owner-login '$OWNER' is not a public sw2m member; refusing to run."
-          exit 1
-        fi
-        echo "✓ owner $OWNER is a $ORG org member."
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const org = await import("./.github/scripts/github/org.ts");
+          await org.verify({
+            api: github,
+            core,
+            sender: "${{ inputs.owner-login }}",
+          });
 
     - name: Read tech-spec issue
       shell: bash
