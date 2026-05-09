@@ -15,7 +15,8 @@ export type Ctx = { api: Github; owner: string; repo: string };
 export type CreateOpts = Omit<CreateOp["parameters"], "owner" | "repo">;
 export type GetOpts    = Omit<GetOp["parameters"],    "owner" | "repo">;
 
-export class Pull implements PullEntity {
+// deno-lint-ignore no-explicit-any
+export class Pull {
   api!: Github;
   owner!: string;
   repo!: string;
@@ -34,7 +35,7 @@ export class Pull implements PullEntity {
   comments_url!: string;
   statuses_url!: string;
   number!: number;
-  state!: string;
+  state!: PullEntity["state"];
   locked!: boolean;
   title!: string;
   body!: string | null;
@@ -57,11 +58,11 @@ export class Pull implements PullEntity {
   author_association!: PullEntity["author_association"];
   auto_merge!: PullEntity["auto_merge"];
   draft?: boolean;
-  merged?: boolean;
-  mergeable?: boolean | null;
+  merged!: boolean;
+  mergeable!: boolean | null;
   rebaseable?: boolean | null;
-  mergeable_state?: string;
-  merged_by?: PullEntity["merged_by"];
+  mergeable_state!: string;
+  merged_by!: PullEntity["merged_by"];
   // deno-lint-ignore no-explicit-any
   [key: string]: any;
 

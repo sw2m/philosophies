@@ -17,6 +17,7 @@ import * as io from "npm:@actions/io@^1";
 import { retry } from "npm:@octokit/plugin-retry@^7";
 import { requestLog } from "npm:@octokit/plugin-request-log@^5";
 import { createRequire } from "node:module";
+import Mustache from "npm:mustache@^4";
 
 // Match actions/github-script's top-level handler so async rejection inside
 // the user script doesn't crash the Deno runtime silently. Explicit Deno.exit
@@ -126,6 +127,13 @@ if (typeof userFn !== "function") {
 }
 
 try {
+  // template(path, data) — load a .mustache file and render it.
+  // Injected alongside the other globals so user scripts can
+  // `const body = await template(url, data)` without importing.
+  async function template(path: string | URL, data: Record<string, unknown>): Promise<string> {
+    return Mustache.render(await Deno.readTextFile(path), data);
+  }
+
   const result = await userFn({
     github,
     octokit: github,
@@ -136,6 +144,8 @@ try {
     glob,
     io,
     require,
+    Mustache,
+    template,
   });
 
   // Encoding contract matches actions/github-script:

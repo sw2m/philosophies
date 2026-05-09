@@ -81,111 +81,26 @@ runs:
           console.log(`Canonical tuple: subjects=${subjects}, outcomes=${outcomes}, min=${min}`);
 
     - name: Build agent prompt
-      shell: bash
-      env:
-        MIN_CARDINALITY: ${{ steps.cardinality.outputs.min-cardinality }}
-      run: |
-        set -euo pipefail
-        cat > stdin.txt <<'PROMPT_EOF'
-        # CRITICAL OUTPUT FORMAT (read this FIRST)
-
-        Decompose the goal into N tech-specs by interleaving inline
-        marker comments with the tech-spec prose. Each tech-spec begins
-        with an inline-form HTML-comment marker carrying ONLY the title
-        in flow YAML; the prose that follows (until the next marker, or
-        end of file) is that tech-spec's body. Free-form text BEFORE the
-        first marker is treated as a summary (only used when zero
-        tech-specs are produced).
-
-        Marker shape — the marker MUST be on its own line, exactly:
-
-            <!-- vsdd: { tech-spec: { title: "[tech] short title" } } -->
-
-        Concrete example of an acceptable response:
-
-        ```
-        Optional preamble — short rationale describing the decomposition.
-
-        <!-- vsdd: { tech-spec: { title: "[tech] Add ownership-gate job to pr-review.yml" } } -->
-
-        **Problem.** pr-review.yml currently runs Phase 3 review on every
-        non-draft PR regardless of who opened it. External-contributor
-        PRs consume agent budget without ownership.
-
-        **Done when.** A new `ownership` job runs first; downstream
-        jobs `needs: [ownership]` and skip when no org-member author
-        or assignee is present.
-
-        **Section reference.** §I (Adversary), §II Phase 3.
-
-        <!-- vsdd: { tech-spec: { title: "[tech] ..." } } -->
-
-        **Problem.** ...
-
-        **Done when.** ...
-        ```
-
-        Parser semantics:
-        - Multiple `vsdd: { tech-spec: ... }` markers are expected and required (one per spec).
-        - A marker without a `title` field is silently skipped (won't open an issue).
-        - The body for each tech-spec is the prose between this marker and the next marker (or end of file).
-        - If you decide the goal cannot be cleanly decomposed, emit ZERO markers and write your rationale as free-form prose; the workflow will surface that rationale on the goal-spec.
-
-        # TASK
-
-        You are decomposing a goal-spec issue into tech-spec sub-issues
-        per MEMORY.md §VII (Spec Discipline).
-
-        Rules:
-        - One technical problem per tech-spec. No bundling. If the goal
-          has N distinct technical problems, output N tech-specs.
-        - Tech-spec bodies describe **what** is broken/missing and **what
-          "done" looks like** — not the implementation. Do NOT propose
-          code, APIs, function names, or design. Phase 3 of the tech→PR
-          pipeline does the implementation.
-        - Each tech-spec title must be self-explanatory (≤60 chars).
-        - If the goal-spec is already a single technical problem, output
-          one tech-spec.
-        - If the goal-spec is too vague to decompose, output zero
-          tech-specs and explain in the free-form summary; the human
-          will refine the goal first.
-
-        Inputs are EMBEDDED below — do not look for files on disk.
-        Cite only what is in the embedded text.
-
-        --- MEMORY.md ---
-        PROMPT_EOF
-        cat MEMORY.md >> stdin.txt
-        # Per #128: when the orchestrator emitted a canonical tuple with
-        # min == 1, append a hard constraint to the prompt so the LLM
-        # emits exactly one tech-spec (matching the goal's atomic shape).
-        if [ "${MIN_CARDINALITY:-}" = "1" ]; then
-          cat >> stdin.txt <<'CARD_EOF'
-
-        --- CARDINALITY CONSTRAINT (per #128) ---
-
-        The Phase 1c cardinality orchestrator determined this goal is at
-        single-tech-spec granularity (`min(subjects, outcomes) == 1`). You
-        MUST emit exactly ONE tech-spec covering the whole goal. Do not
-        decompose into multiple siblings — the goal's shape is atomic;
-        any decomposition would split coupled work that is only meaningful
-        together.
-        CARD_EOF
-        fi
-        {
-          printf '\n--- GOAL ISSUE TITLE ---\n'
-          cat goal-title.txt
-          printf '\n--- GOAL ISSUE BODY ---\n'
-          cat goal-body.txt
-        } >> stdin.txt
-        echo "stdin.txt bytes: $(wc -c < stdin.txt)"
-
+      uses: ./.github/actions/script/github-deno
+      with:
+        workspace: ${{ github.action_path }}/../../..
+        script: |
+          const input = await import("./.github/scripts/github/input.ts");
+          const memory = await Deno.readTextFile("MEMORY.md");
+          const title = await Deno.readTextFile("goal-title.txt");
+          const body = await Deno.readTextFile("goal-body.txt");
+          const min = "${{ steps.cardinality.outputs.min-cardinality }}";
+          const prompt = await template(
+            new URL("./scripts/vsdd/promote/to-tech/prompt.mustache", `file://${Deno.cwd()}/` + ".github/"),
+            { memory, title, body, atomic: min === "1" },
+          );
+          await input.set("prompt", prompt);
+          console.log(`stdin bytes: ${prompt.length}`);
     - name: Run Claude (org-member gate inside)
       uses: ./.github/actions/agents/claude
       with:
         api-key: ${{ inputs.anthropic-api-key }}
         actor-override: ${{ inputs.owner-login }}
-        stdin-file: stdin.txt
         output-file: tech-specs.md
 
     - name: Parse tech-specs and open sub-issues
