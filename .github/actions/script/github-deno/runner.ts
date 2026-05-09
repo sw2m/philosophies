@@ -18,6 +18,9 @@ import { retry } from "npm:@octokit/plugin-retry@^7";
 import { requestLog } from "npm:@octokit/plugin-request-log@^5";
 import { createRequire } from "node:module";
 import Mustache from "npm:mustache@^4";
+import * as inputs from "../../../scripts/github/inputs.ts";
+import * as shared from "../../../scripts/github/shared.ts";
+import * as output from "../../../scripts/github/output.ts";
 // deno-lint-ignore no-explicit-any
 const simpleGit = (await import("npm:simple-git@^3")).default as any;
 
@@ -137,7 +140,7 @@ try {
   // Raw script — wrap as default-export module
   const wrapped = [
     "export default async function(_g: any) {",
-    "  const { github, octokit, getOctokit, context, core, exec, glob, io, require, Mustache, template, git } = _g;",
+    "  const { github, octokit, getOctokit, context, core, exec, glob, io, require, Mustache, template, git, inputs, shared, output } = _g;",
     script,
     "}",
   ].join("\n");
@@ -175,6 +178,9 @@ try {
     Mustache,
     template,
     git: simpleGit(),
+    inputs,
+    shared,
+    output,
   });
 
   // Encoding contract matches actions/github-script:
