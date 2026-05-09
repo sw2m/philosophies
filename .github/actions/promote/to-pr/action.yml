@@ -62,17 +62,20 @@ runs:
           });
 
     - name: Read tech-spec issue
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-      run: |
-        set -euo pipefail
-        gh issue view "$ISSUE_NUMBER" --json title,body,number,url > ${RUNNER_TEMP}/tech.json
-        jq -r '.title' ${RUNNER_TEMP}/tech.json > ${RUNNER_TEMP}/tech-title.txt
-        jq -r '.body'  ${RUNNER_TEMP}/tech.json > ${RUNNER_TEMP}/tech-body.txt
-        jq -r '.url'   ${RUNNER_TEMP}/tech.json > ${RUNNER_TEMP}/tech-url.txt
-        echo "tech-spec: $(cat ${RUNNER_TEMP}/tech-title.txt)"
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const input = await import("./.github/scripts/github/input.ts");
+          const { owner, repo } = context.repo;
+          const issue = await github.rest.issues.get({
+            owner, repo, issue_number: ${{ inputs.issue-number }},
+          });
+          await input.set("tech-title", issue.data.title);
+          await input.set("tech-body", issue.data.body ?? "");
+          await input.set("tech-url", issue.data.html_url);
+          console.log(`tech-spec: ${issue.data.title}`);
 
     - name: Detect test runner
       id: runner
@@ -94,75 +97,61 @@ runs:
 
     - name: Configure git
       shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
       run: |
-        git config user.name  "promote-tech-to-pr[bot]"
+        git config user.name "promote-tech-to-pr[bot]"
         git config user.email "promote-tech-to-pr@users.noreply.github.com"
 
     - name: Phase 1 — Scaffold (branch + draft PR)
       id: scaffold
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        OWNER_LOGIN: ${{ inputs.owner-login }}
-        BASE_BRANCH: ${{ inputs.base-branch }}
-      run: |
-        set -euo pipefail
-        BRANCH="feat/issue-$ISSUE_NUMBER-promote"
-        # Idempotent: if the branch already exists upstream from a prior
-        # run, check it out instead of creating fresh. Half-implemented
-        # state from an interrupted run is still useful context for the
-        # agent.
-        git fetch origin "$BASE_BRANCH"
-        if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
-          git fetch origin "$BRANCH"
-          git checkout "$BRANCH"
-          echo "Branch $BRANCH already existed; resuming."
-        else
-          git checkout -b "$BRANCH" "origin/$BASE_BRANCH"
-          # Empty scaffold commit so the branch can be pushed and a PR
-          # opened. The commit MESSAGE is the durable "this branch
-          # came from the promote pipeline" discriminant — any
-          # downstream check that needs to detect promote-pipeline
-          # branches greps `git log --grep='^chore(promote): scaffold'`.
-          # The actual implementation lands in subsequent phases.
-          git commit --allow-empty -m "chore(promote): scaffold for #$ISSUE_NUMBER
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const Mustache = (await import("npm:mustache@^4")).default;
+          const output = await import("./.github/scripts/github/output.ts");
+          const issue = ${{ inputs.issue-number }};
+          const owner = "${{ inputs.owner-login }}";
+          const base = "${{ inputs.base-branch }}";
+          const branch = `feat/issue-${issue}-promote`;
+          const { owner: repoOwner, repo } = context.repo;
 
-          Promotion run for issue #$ISSUE_NUMBER
-          Owner: @$OWNER_LOGIN
-          Started: $(date -u +%FT%TZ)"
-          git push -u origin "$BRANCH"
-        fi
-        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          // Idempotent branch: reuse if exists, else create + empty scaffold commit.
+          const cmd = (args: string[]) => new Deno.Command("git", { args, stdout: "inherit", stderr: "inherit" }).output();
+          await cmd(["fetch", "origin", base]);
+          const ls = await new Deno.Command("git", { args: ["ls-remote", "--exit-code", "--heads", "origin", branch], stdout: "null", stderr: "null" }).output();
+          if (ls.code === 0) {
+            await cmd(["fetch", "origin", branch]);
+            await cmd(["checkout", branch]);
+            console.log(`Branch ${branch} already existed; resuming.`);
+          } else {
+            await cmd(["checkout", "-b", branch, `origin/${base}`]);
+            await cmd(["commit", "--allow-empty", "-m",
+              `chore(promote): scaffold for #${issue}\n\nPromotion run for issue #${issue}\nOwner: @${owner}\nStarted: ${new Date().toISOString()}`]);
+            await cmd(["push", "-u", "origin", branch]);
+          }
+          await output.set("branch", branch);
 
-        # Open or reuse the draft PR.
-        EXISTING_PR=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
-        if [ -n "$EXISTING_PR" ]; then
-          echo "pr-number=$EXISTING_PR" >> "$GITHUB_OUTPUT"
-          echo "Reusing existing PR #$EXISTING_PR for branch $BRANCH"
-        else
-          TITLE=$(cat ${RUNNER_TEMP}/tech-title.txt)
-          BODY_FILE=$(mktemp)
-          {
-            echo "Closes #$ISSUE_NUMBER"
-            echo ""
-            echo "_Draft PR scaffolded by \`promote-tech-to-pr\` after @$OWNER_LOGIN"
-            echo "self-assigned the tech-spec. The 5-phase pipeline (Phase 1 scaffold →"
-            echo "Phase 2 author tests → Phase 3 Red gate → Phase 4 implement → Phase 5"
-            echo "Green gate) drives this PR to completion or bails with \`needs-human\`._"
-            echo ""
-            echo "## Embedded tech-spec"
-            echo ""
-            cat ${RUNNER_TEMP}/tech-body.txt
-          } > "$BODY_FILE"
-          PR_URL=$(gh pr create --draft --base "$BASE_BRANCH" --head "$BRANCH" --title "$TITLE" --body-file "$BODY_FILE")
-          PR_NUMBER=$(basename "$PR_URL")
-          echo "pr-number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "Opened draft PR #$PR_NUMBER: $PR_URL"
-        fi
-
+          // Open or reuse draft PR.
+          const existing = await github.rest.pulls.list({ owner: repoOwner, repo, head: `${repoOwner}:${branch}`, state: "open" });
+          if (existing.data.length > 0) {
+            const pr = existing.data[0].number;
+            await output.set("pr-number", pr);
+            console.log(`Reusing existing PR #${pr}`);
+          } else {
+            const title = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/tech-title.txt`);
+            const techBody = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/tech-body.txt`);
+            const template = await Deno.readTextFile(
+              new URL("./scaffold.mustache", `file://${Deno.env.get("GITHUB_ACTION_PATH")}/../../scripts/vsdd/promote/to-pr/`).href
+            );
+            const body = Mustache.render(template, { issue, owner, body: techBody });
+            const pr = await github.rest.pulls.create({
+              owner: repoOwner, repo, head: branch, base, title: title.trim(),
+              body, draft: true,
+            });
+            await output.set("pr-number", pr.data.number);
+            console.log(`Opened draft PR #${pr.data.number}: ${pr.data.html_url}`);
+          }
     - uses: actions/setup-node@v6
       with:
         node-version: "20"
@@ -191,37 +180,22 @@ runs:
           await gates.red();
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
-        OWNER_LOGIN: ${{ inputs.owner-login }}
-      run: |
-        set -euo pipefail
-        gh issue edit "$ISSUE_NUMBER" --add-label needs-human || true
-        BODY=$(mktemp)
-        {
-          echo "**Promote-tech-to-pr bailed at Red gate (Phase 3).**"
-          echo ""
-          echo "_The agent exhausted its retry budget trying to write tests"
-          echo "that fail before implementation while keeping the regression"
-          echo "set green. This usually means: the tech-spec covers more"
-          echo "than one technical problem (§VII violation), or the change"
-          echo "interacts with the regression set in a way the agent can't"
-          echo "isolate._"
-          echo ""
-          cat ${RUNNER_TEMP}/red-bail.md
-          echo ""
-          echo "@$OWNER_LOGIN — over to you. Inspect the draft PR (#$PR_NUMBER), "
-          echo "either refine the tech-spec into smaller pieces or take over"
-          echo "the implementation by hand."
-        } > "$BODY"
-        gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"
-        gh pr comment "$PR_NUMBER" --body-file "$BODY"
-        echo "::error::Red gate bailed; needs-human label applied."
-        exit 1
-
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
+          const detail = await Deno.readTextFile(`${Deno.env.get("RUNNER_TEMP")}/red-bail.md`).catch(() => "");
+          await bail.run({
+            api: github, core,
+            gate: "red",
+            issue: ${{ inputs.issue-number }},
+            pr: ${{ steps.scaffold.outputs.pr-number }},
+            owner: "${{ inputs.owner-login }}",
+            detail,
+            repo: context.repo,
+          });
     - name: Phases 4-5 — Implement + Green gate (with retry)
       id: green-gate
       if: ${{ steps.red-gate.outputs.bailed != 'true' }}
@@ -260,30 +234,19 @@ runs:
           });
     - name: Final summary comment on success
       if: ${{ steps.green-gate.outputs.bailed == 'false' }}
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
-        OWNER_LOGIN: ${{ inputs.owner-login }}
-        NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
-      run: |
-        set -euo pipefail
-        BODY=$(mktemp)
-        if [ "$NO_RUNNER" = "true" ]; then
-          echo "**Promote-tech-to-pr completed (no-runner path).**" > "$BODY"
-          echo ""                                                  >> "$BODY"
-          echo "_§VIII (4-Result Rule) is N/A on this repo (no test runner detected)._" >> "$BODY"
-          echo "_Phase 4 implementation is committed on the draft PR._"  >> "$BODY"
-        else
-          echo "**Promote-tech-to-pr completed (5-phase path).**"  > "$BODY"
-          echo ""                                                  >> "$BODY"
-          echo "_Red gate ✓ &nbsp;·&nbsp; Green gate ✓_"            >> "$BODY"
-          echo "_4 results across 2 runs satisfied per §VIII._"     >> "$BODY"
-        fi
-        echo ""                                                    >> "$BODY"
-        echo "Draft PR: #$PR_NUMBER. Promoting from draft to ready" >> "$BODY"
-        echo "is a human decision — Phase 3 adversarial review (pr-review.yml)" >> "$BODY"
-        echo "runs after promotion."                                >> "$BODY"
-        gh pr comment "$PR_NUMBER" --body-file "$BODY"
-        gh issue comment "$ISSUE_NUMBER" --body-file "$BODY"
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const Mustache = (await import("npm:mustache@^4")).default;
+          const template = await Deno.readTextFile(
+            new URL("./success.mustache", `file://${Deno.env.get("GITHUB_ACTION_PATH")}/../../scripts/vsdd/promote/to-pr/`).href
+          );
+          const pr = ${{ steps.scaffold.outputs.pr-number }};
+          const issue = ${{ inputs.issue-number }};
+          const runner = "${{ steps.runner.outputs.no-runner }}" !== "true";
+          const body = Mustache.render(template, { pr, runner });
+          const { owner, repo } = context.repo;
+          await github.rest.issues.createComment({ owner, repo, issue_number: pr, body });
+          await github.rest.issues.createComment({ owner, repo, issue_number: issue, body });

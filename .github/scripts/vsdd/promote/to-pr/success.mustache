@@ -1,0 +1,16 @@
+{{#runner}}
+**Promote-tech-to-pr completed (5-phase path).**
+
+_Red gate ✓ &nbsp;·&nbsp; Green gate ✓_
+_4 results across 2 runs satisfied per §VIII._
+{{/runner}}
+{{^runner}}
+**Promote-tech-to-pr completed (no-runner path).**
+
+_§VIII (4-Result Rule) is N/A on this repo (no test runner detected)._
+_Phase 4 implementation is committed on the draft PR._
+{{/runner}}
+
+Draft PR: #{{{pr}}}. Promoting from draft to ready
+is a human decision — Phase 3 adversarial review (pr-review.yml)
+runs after promotion.
