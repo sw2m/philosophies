@@ -62,12 +62,39 @@ runs:
           });
 
     - name: Read tech-spec issue
-      uses: ./.github/actions/read-issue
+      id: read
+      uses: ./.github/actions/github/issue/read
       with:
         github-token: ${{ inputs.github-token }}
         issue-number: ${{ inputs.issue-number }}
         prefix: tech
 
+    - name: Build PR body from template
+      id: pr-body
+      uses: ./.github/actions/script/github-deno
+      with:
+        workspace: ${{ github.action_path }}/../../../..
+        script: |
+          const shared = await import("./.github/scripts/github/shared.ts");
+          const output = await import("./.github/scripts/github/output.ts");
+          const techBody = await shared.get("tech-body") ?? "";
+          const body = await template(
+            new URL("./.github/scripts/vsdd/promote/to-pr/scaffold.mustache", `file://${Deno.cwd()}/`),
+            { issue: ${{ inputs.issue-number }}, owner: "${{ inputs.owner-login }}", body: techBody },
+          );
+          await output.set("body", body);
+
+    - name: Phase 1 — Scaffold (branch + draft PR)
+      id: scaffold
+      uses: ./.github/actions/github/pr/create
+      with:
+        github-token: ${{ inputs.github-token }}
+        issue-number: ${{ inputs.issue-number }}
+        base-branch: ${{ inputs.base-branch }}
+        title: ${{ steps.read.outputs.title }}
+        body: ${{ steps.pr-body.outputs.body }}
+        bot-name: promote-tech-to-pr[bot]
+        bot-email: promote-tech-to-pr@users.noreply.github.com
     - name: Detect test runner
       id: runner
       uses: ./.github/actions/script/github-deno
@@ -86,63 +113,6 @@ runs:
             console.log(`Detected test command: ${cmd}`);
           }
 
-    - name: Configure git
-      shell: bash
-      run: |
-        git config user.name "promote-tech-to-pr[bot]"
-        git config user.email "promote-tech-to-pr@users.noreply.github.com"
-
-    - name: Phase 1 — Scaffold (branch + draft PR)
-      id: scaffold
-      uses: ./.github/actions/script/github-deno
-      with:
-        github-token: ${{ inputs.github-token }}
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const Mustache = (await import("npm:mustache@^4")).default;
-          const output = await import("./.github/scripts/github/output.ts");
-          const issue = ${{ inputs.issue-number }};
-          const owner = "${{ inputs.owner-login }}";
-          const base = "${{ inputs.base-branch }}";
-          const branch = `feat/issue-${issue}-promote`;
-          const { owner: repoOwner, repo } = context.repo;
-
-          // Idempotent branch: reuse if exists, else create + empty scaffold commit.
-          await git.fetch("origin", base);
-          const branches = await git.branch(["-r"]);
-          if (branches.all.includes(`origin/${branch}`)) {
-            await git.fetch("origin", branch);
-            await git.checkout(branch);
-            console.log(`Branch ${branch} already existed; resuming.`);
-          } else {
-            await git.checkoutBranch(branch, `origin/${base}`);
-            await git.commit(
-              `chore(promote): scaffold for #${issue}\n\nPromotion run for issue #${issue}\nOwner: @${owner}\nStarted: ${new Date().toISOString()}`,
-              { "--allow-empty": null },
-            );
-            await git.push(["-u", "origin", branch]);
-          }
-          await output.set("branch", branch);
-
-          // Open or reuse draft PR.
-          const { Pull } = await import("./.github/scripts/github/pr.ts");
-          const shared = await import("./.github/scripts/github/shared.ts");
-          const pull = new Pull({ api: github, owner: repoOwner, repo });
-          const found = await pull.find({ head: branch });
-          if (found) {
-            await output.set("pr-number", pull.number);
-            console.log(`Reusing existing PR #${pull.number}`);
-          } else {
-            const title = await shared.get("tech-title") ?? "";
-            const techBody = await shared.get("tech-body") ?? "";
-            const body = await template(
-              new URL("./scripts/vsdd/promote/to-pr/scaffold.mustache", `file://${Deno.cwd()}/.github/`),
-              { issue, owner, body: techBody },
-            );
-            await pull.create({ head: branch, base, title: title.trim(), body, draft: true });
-            await output.set("pr-number", pull.number);
-            console.log(`Opened draft PR #${pull.number}: ${pull.html_url}`);
-          }
     - uses: actions/setup-node@v6
       with:
         node-version: "20"

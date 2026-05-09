@@ -1,0 +1,46 @@
+name: "Create issue"
+description: "Open an issue via the Issue class. Writes fields to shared module."
+inputs:
+  github-token: { required: true }
+  title: { required: true }
+  body: { required: false, default: "" }
+  labels: { required: false, default: "", description: "Comma-separated label names." }
+  prefix: { required: false, default: "", description: "Shared-module key prefix." }
+outputs:
+  number: { value: "${{ steps.create.outputs.number }}" }
+  url: { value: "${{ steps.create.outputs.url }}" }
+  title: { value: "${{ steps.create.outputs.title }}" }
+runs:
+  using: composite
+  steps:
+    - id: create
+      uses: ./.github/actions/script/github-deno
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const { Issue } = await import("./.github/scripts/github/issue.ts");
+          const shared = await import("./.github/scripts/github/shared.ts");
+          const output = await import("./.github/scripts/github/output.ts");
+          const { owner, repo } = context.repo;
+          const issue = new Issue({ api: github, owner, repo });
+          const labels = "${{ inputs.labels }}".split(",").map(s => s.trim()).filter(Boolean);
+          try {
+            await issue.create({
+              title: `${{ inputs.title }}`,
+              body: `${{ inputs.body }}`,
+              labels: labels.length ? labels : undefined,
+            });
+          } catch {
+            await issue.create({
+              title: `${{ inputs.title }}`,
+              body: `${{ inputs.body }}`,
+            });
+          }
+          const prefix = "${{ inputs.prefix }}";
+          const key = (name) => prefix ? `${prefix}-${name}` : name;
+          await shared.set(key("title"), issue.title);
+          await shared.set(key("url"), issue.html_url);
+          await output.set("number", issue.number);
+          await output.set("url", issue.html_url);
+          await output.set("title", issue.title);
+          console.log(`opened: ${issue.html_url}`);

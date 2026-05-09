@@ -28,7 +28,7 @@ runs:
   using: "composite"
   steps:
     - name: Read goal issue
-      uses: ./.github/actions/read-issue
+      uses: ./.github/actions/github/issue/read
       with:
         github-token: ${{ inputs.github-token }}
         issue-number: ${{ inputs.issue-number }}
