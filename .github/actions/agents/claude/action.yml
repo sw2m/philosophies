@@ -74,6 +74,13 @@ runs:
       shell: bash
       run: npm install -g @anthropic-ai/claude-code@latest
 
+    - name: Stage prompt input
+      if: ${{ inputs.prompt != '' }}
+      shell: bash
+      run: |
+        mkdir -p "${GITHUB_INPUT_DIR:-${RUNNER_TEMP}/input}"
+        printf '%s' "${{ inputs.prompt }}" > "${GITHUB_INPUT_DIR:-${RUNNER_TEMP}/input}/prompt"
+
     - name: Invoke claude
       id: invoke
       uses: ./.github/actions/script/github-deno
@@ -86,11 +93,8 @@ runs:
           const input = (await import("./.github/scripts/github/input.ts")).default;
           const output = await import("./.github/scripts/github/output.ts");
 
-          // Write inline prompt to the input dir so all content is uniform.
-          const prompt = `${{ inputs.prompt }}`;
-          if (prompt) await input.set("prompt", prompt);
-
           // Read every file in input dir (sorted), concatenate as sections.
+          // Prompt (if provided) is already staged as a file by a prior step.
           const parts: string[] = [];
           for (const name of await input.list()) {
             const content = await input.get(name);
