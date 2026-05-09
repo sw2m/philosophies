@@ -70,8 +70,8 @@ runs:
       if: ${{ inputs.prompt != '' }}
       shell: bash
       run: |
-        mkdir -p "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/input}"
-        printf '%s' "${{ inputs.prompt }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/input}/prompt"
+        mkdir -p "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}"
+        printf '%s' "${{ inputs.prompt }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}/prompt"
 
     - name: Invoke gemini
       id: invoke
