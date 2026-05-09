@@ -241,7 +241,7 @@ jobs:
         with:
           script: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
-            const cardinality = await import("./.github/scripts/vsdd/promote/to-spec/cardinality.ts");
+            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
             const budget = new budgetMod.Budget({ key: "phase-1c" });
             const SLUG = "gemini";
             const reviewBody = Deno.env.get("REVIEW") ?? "";
@@ -325,7 +325,7 @@ jobs:
         with:
           script: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
-            const cardinality = await import("./.github/scripts/vsdd/promote/to-spec/cardinality.ts");
+            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
             const budget = new budgetMod.Budget({ key: "phase-1c" });
             const SLUG = "claude";
             const reviewBody = Deno.env.get("REVIEW") ?? "";
@@ -398,7 +398,7 @@ jobs:
         uses: ./.github/actions/script/github-deno
         with:
           script: |
-            const cardinality = await import("./.github/scripts/vsdd/promote/to-spec/cardinality.ts");
+            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
 
             const allComments = await github.paginate(
               github.rest.issues.listComments,

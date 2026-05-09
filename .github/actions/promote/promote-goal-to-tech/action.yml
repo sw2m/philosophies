@@ -51,7 +51,7 @@ runs:
           // comment with verdict: pass; extract subjects/outcomes via the
           // canonical TS reader. Absence is non-fatal — fall back to the
           // LLM's default decomposition logic.
-          const cardinality = await import("./scripts/vsdd/promote/to-spec/cardinality.ts");
+          const cardinality = await import("./scripts/vsdd/promote/to-tech/cardinality.ts");
           const { Comment } = await import("./scripts/github/comment.ts");
           const output = await import("./scripts/github/output.ts");
           const { owner, repo } = context.repo;
@@ -193,7 +193,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
-          const { Decompose } = await import("./.github/scripts/vsdd/promote/to-spec/decompose.ts");
+          const { Decompose } = await import("./.github/scripts/vsdd/promote/to-tech/decompose.ts");
           const [owner, repo] = "${{ github.repository }}".split("/");
           const dc = new Decompose({
             api: github,
