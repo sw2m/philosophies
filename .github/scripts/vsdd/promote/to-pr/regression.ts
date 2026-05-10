@@ -1,7 +1,7 @@
 import {
   Claude, output, sg,
   ISSUE, MAX_RETRIES, TIMEOUT, REGRESSION_PROMPT,
-  run, techContext, commitPush,
+  techContext, commitPush,
 } from "./helpers.ts";
 
 export async function regression(): Promise<void> {
@@ -65,7 +65,7 @@ export async function regression(): Promise<void> {
     console.log(`Regression command: ${meta.command}`);
 
     console.log(`\n=== Regression — Run (attempt ${attempt}) ===`);
-    const regRun = await run(meta.command);
+    const regRun = await shell(meta.command);
     const rc = regRun.code;
     console.log(`  regression exit: ${rc} (expect zero)`);
 

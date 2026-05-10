@@ -24,19 +24,6 @@ export const GREEN_PROMPT = await load("green.prompt.md");
 export const GREEN_NORUN_PROMPT = await load("green-no-runner.prompt.md");
 export const REGRESSION_PROMPT = await load("regression.prompt.md");
 
-export async function run(cmd: string): Promise<{ code: number; stdout: Uint8Array; stderr: Uint8Array }> {
-  const proc = new Deno.Command("bash", {
-    args: ["-c", cmd],
-    stdout: "piped",
-    stderr: "piped",
-  }).spawn();
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).bytes(),
-    new Response(proc.stderr).bytes(),
-  ]);
-  const { code } = await proc.status;
-  return { code, stdout, stderr };
-}
 
 export async function techContext(): Promise<{ title: string; body: string }> {
   return {

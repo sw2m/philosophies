@@ -1,7 +1,7 @@
 import {
   Claude, output, sg,
   RUNNER_TEMP, ISSUE, MAX_RETRIES, TIMEOUT,
-  run, buildPhase4Input, commitPush,
+  buildPhase4Input, commitPush,
 } from "./helpers.ts";
 
 export async function green(): Promise<void> {
@@ -48,8 +48,8 @@ export async function green(): Promise<void> {
     }
 
     console.log(`\n=== Phase 5 — Green gate (attempt ${attempt}) ===`);
-    const newResult = await run(meta!["red-green"]);
-    const regResult = await run(meta!.regression);
+    const newResult = await shell(meta!["red-green"]);
+    const regResult = await shell(meta!.regression);
     const newRc = newResult.code;
     const regRc = regResult.code;
     console.log(`  new tests exit: ${newRc} (expect zero)`);

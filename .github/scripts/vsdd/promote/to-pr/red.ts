@@ -1,7 +1,7 @@
 import {
   Claude, readPhase2, output, sg,
   RUNNER_TEMP, ISSUE, MAX_RETRIES, TIMEOUT,
-  run, buildPhase2Input, commitPush,
+  buildPhase2Input, commitPush,
 } from "./helpers.ts";
 
 export async function red(): Promise<void> {
@@ -46,8 +46,8 @@ export async function red(): Promise<void> {
     console.log(`Phase 2 regression test command: ${meta.regression}`);
 
     console.log(`\n=== Phase 3 — Red gate (attempt ${attempt}) ===`);
-    const newResult = await run(meta["red-green"]);
-    const regResult = await run(meta.regression);
+    const newResult = await shell(meta["red-green"]);
+    const regResult = await shell(meta.regression);
     const newRc = newResult.code;
     const regRc = regResult.code;
     console.log(`  new tests exit: ${newRc} (expect non-zero)`);
