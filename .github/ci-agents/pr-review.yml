@@ -3,8 +3,14 @@ categories:
     agent: gemini
     readonly: true
     schema: .github/ci-agents/schemas/phase-3.json
+    budgetQueries:
+      blocking: "concerns[severity='blocking']"
+    budgetOverflow: ./.github/scripts/vsdd/overflow.ts
   claude:
     agent: claude
     readonly: true
     schema: .github/ci-agents/schemas/phase-3.json
+    budgetQueries:
+      blocking: "concerns[severity='blocking']"
+    budgetOverflow: ./.github/scripts/vsdd/overflow.ts
 ruling: any-fail

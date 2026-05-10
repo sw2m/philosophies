@@ -156,6 +156,22 @@ jobs:
           await shared.set("review.claude", "prompt", prompt);
         shell: octoscript {0}
 
+      - name: Compute review round
+        id: round
+        run: |
+          const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
+          const budget = new budgetMod.Budget({ key: "phase-1c" });
+          const allComments = await github.paginate(
+            github.rest.issues.listComments,
+            { ...context.repo, issue_number: context.issue.number, per_page: 100 },
+          );
+          const gemRound = budget.round(allComments, "gemini");
+          const claRound = budget.round(allComments, "claude");
+          const round = Math.max(gemRound, claRound);
+          await output.set("round", String(round));
+          console.log("Review round: " + round + " (gemini=" + gemRound + ", claude=" + claRound + ")");
+        shell: octoscript {0}
+
       - name: Run panel
         id: panel
         uses: sw2m/ci-agents/panel@main
@@ -166,6 +182,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           org: sw2m
           actor: ${{ needs.ownership.outputs.owner }}
+          round: ${{ steps.round.outputs.round }}
 
       - name: Post reviews + orchestrate cardinality
         run: |
