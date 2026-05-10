@@ -1,18 +1,15 @@
 # CRITICAL OUTPUT FORMAT (read FIRST)
 
 At the END of your response, after you have used your tools to write
-the regression test files, output an HTML-comment frontmatter block
-summarizing what you did. The block must be the LAST thing in your
-response, with `<!--` and `-->` each on their own lines:
+the regression test files, output a JSON block summarizing what you
+did. The JSON must be the LAST thing in your response, on its own line:
 
-<!--
-vsdd:
-  regression:
-    files:
-      - path/to/regression_test_1.ext
-      - path/to/regression_test_2.ext
-    command: "exact command to run ONLY the regression tests"
--->
+```json
+{
+  "files": ["path/to/regression_test_1.ext", "path/to/regression_test_2.ext"],
+  "command": "exact command to run ONLY the regression tests"
+}
+```
 
 The command must exit 0 on pass, non-zero on fail.
 
@@ -34,7 +31,7 @@ pass after implementation). Regression tests prove OLD behavior works
    AS IT WORKS TODAY. These tests must PASS right now.
 4. Use your tools (Write, Edit, Bash) to create the regression test
    files. Do not commit — the pipeline commits if the gate passes.
-5. Output the frontmatter block at the END of your response.
+5. Output the JSON block at the END of your response.
 
 After implementation (Green gate), these same regression tests run
 again. If they fail then, the implementation broke existing behavior.

@@ -30,7 +30,6 @@ runs:
         INPUT_AGENT: claude
         INPUT_API_KEY: ${{ env.INPUT_ANTHROPIC_API_KEY }}
         INPUT_PROMPT: ${{ env.INPUT_PROMPT || '' }}
-        INPUT_FORMAT: frontmatter
         INPUT_RETRIES: ${{ env.INPUT_MAX_RETRIES || '3' }}
         INPUT_TIMEOUT: ${{ env.INPUT_AGENT_TIMEOUT_SECONDS || '900' }}
         INPUT_VALIDATOR: ./.github/scripts/vsdd/promote/to-pr/red.validator.ts

@@ -1,25 +1,22 @@
 export default async function(raw: string, _parsed: unknown): Promise<{ pass: boolean; error?: string }> {
-  const blocks = serde.parse(raw, "frontmatter");
-  let meta: { files: string[]; command: string } | null = null;
-  for (const block of (blocks as unknown[])) {
-    if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-    const ns = (block as Record<string, unknown>).vsdd;
-    if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
-    const inner = (ns as Record<string, unknown>).regression;
-    if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
-    const files = (inner as Record<string, unknown>).files;
-    const command = (inner as Record<string, unknown>).command;
-    if (Array.isArray(files) && typeof command === "string") {
-      meta = { files: files as string[], command };
-    }
+  const jsonMatch = raw.match(/\{[\s\S]*"files"[\s\S]*"command"[\s\S]*\}\s*$/);
+  if (!jsonMatch) {
+    return { pass: false, error: "No JSON metadata block found at end of output" };
   }
 
-  if (!meta || !meta.command) {
-    if (meta && meta.files.length === 0) {
+  let meta: { files: string[]; command: string };
+  try {
+    meta = JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    return { pass: false, error: "JSON parse failed: " + (e as Error).message };
+  }
+
+  if (!meta.command) {
+    if (meta.files.length === 0) {
       console.log("No blast radius — regression gate skipped.");
       return { pass: true };
     }
-    return { pass: false, error: "Regression frontmatter parse failed" };
+    return { pass: false, error: "Regression JSON missing command" };
   }
 
   console.log("Regression test files: " + meta.files.join(", "));

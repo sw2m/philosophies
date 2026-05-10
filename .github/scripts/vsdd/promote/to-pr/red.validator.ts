@@ -1,13 +1,16 @@
-import { read as readPhase2 } from "../../phase-2/frontmatter.ts";
-
 export default async function(raw: string, _parsed: unknown): Promise<{ pass: boolean; error?: string }> {
+  const jsonMatch = raw.match(/\{[\s\S]*"files"[\s\S]*"red-green"[\s\S]*"regression"[\s\S]*\}\s*$/);
+  if (!jsonMatch) {
+    return { pass: false, error: "No JSON metadata block found at end of output" };
+  }
+
   let meta;
   try {
-    meta = readPhase2(raw);
+    meta = JSON.parse(jsonMatch[0]);
   } catch (e) {
-    return { pass: false, error: "Frontmatter parse failed: " + (e as Error).message };
+    return { pass: false, error: "JSON parse failed: " + (e as Error).message };
   }
-  if (!meta || !meta.files.length || !meta["red-green"] || !meta.regression) {
+  if (!meta.files?.length || !meta["red-green"] || !meta.regression) {
     return { pass: false, error: "Agent declared empty files / red-green / regression" };
   }
 
@@ -21,7 +24,6 @@ export default async function(raw: string, _parsed: unknown): Promise<{ pass: bo
   console.log("  regression tests exit: " + regResult.code + " (expect zero)");
 
   if (newResult.code !== 0 && regResult.code === 0) {
-    // Pass — persist meta for green gate
     const RUNNER_TEMP = Deno.env.get("RUNNER_TEMP") ?? "/tmp";
     await Deno.writeTextFile(RUNNER_TEMP + "/phase2-meta-final.json", JSON.stringify(meta));
     const ISSUE = inputs.get("issue-number") ?? "";
