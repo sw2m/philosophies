@@ -400,18 +400,16 @@ jobs:
       - uses: sw2m/octoscript/action@main
 
       - name: Upload prep data
-        run: |
-          console.log("ACTIONS_RUNTIME_TOKEN present:", !!Deno.env.get("ACTIONS_RUNTIME_TOKEN"));
-          console.log("ACTIONS_RESULTS_URL present:", !!Deno.env.get("ACTIONS_RESULTS_URL"));
-          console.log("GITHUB_TOKEN present:", !!Deno.env.get("GITHUB_TOKEN"));
-          const memoryPath = await Deno.stat("MEMORY.md").then(() => "MEMORY.md").catch(() => ".vsdd-philosophies/MEMORY.md");
-          await artifact.set("prep", "memory", await Deno.readTextFile(memoryPath));
-          await artifact.set("prep", "diff", await Deno.readTextFile("pr.diff"));
-          await artifact.set("prep", "pr-context", await Deno.readTextFile("pr-context.txt"));
-          await artifact.set("prep", "manifest", await Deno.readTextFile("repo-manifest.txt"));
-          await artifact.set("prep", "repo-files", await Deno.readTextFile("repo-files.xml"));
-          console.log("Uploaded 5 prep artifacts");
-        shell: octoscript {0}
+        uses: sw2m/octoscript@main
+        with:
+          script: |
+            const memoryPath = await Deno.stat("MEMORY.md").then(() => "MEMORY.md").catch(() => ".vsdd-philosophies/MEMORY.md");
+            await artifact.set("prep", "memory", await Deno.readTextFile(memoryPath));
+            await artifact.set("prep", "diff", await Deno.readTextFile("pr.diff"));
+            await artifact.set("prep", "pr-context", await Deno.readTextFile("pr-context.txt"));
+            await artifact.set("prep", "manifest", await Deno.readTextFile("repo-manifest.txt"));
+            await artifact.set("prep", "repo-files", await Deno.readTextFile("repo-files.xml"));
+            console.log("Uploaded 5 prep artifacts");
 
   symbol-audit:
     name: §IX symbol audit (advisory)

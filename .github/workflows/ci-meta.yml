@@ -105,20 +105,21 @@ jobs:
       - uses: sw2m/octoscript/action@main
 
       - name: Upload eval context
-        run: |
-          const memory = await Deno.readTextFile("memory-canonical.md");
-          const { stdout } = await shell("find .github -type f | sort");
-          const paths = new TextDecoder().decode(stdout).trim().split("\n");
-          const parts = ["<vsdd-canonical>\n" + memory + "\n</vsdd-canonical>", ""];
-          for (const p of paths) {
-            const content = await Deno.readTextFile(p);
-            parts.push("<file path=\"" + p + "\">\n" + content + "\n</file>");
-          }
-          const evalInput = parts.join("\n");
-          await artifact.set("eval", "input", evalInput);
-          await artifact.set("eval", "memory", memory);
-          console.log("Uploaded eval artifacts (" + evalInput.length + " bytes)");
-        shell: octoscript {0}
+        uses: sw2m/octoscript@main
+        with:
+          script: |
+            const memory = await Deno.readTextFile("memory-canonical.md");
+            const { stdout } = await shell("find .github -type f | sort");
+            const paths = new TextDecoder().decode(stdout).trim().split("\n");
+            const parts = ["<vsdd-canonical>\n" + memory + "\n</vsdd-canonical>", ""];
+            for (const p of paths) {
+              const content = await Deno.readTextFile(p);
+              parts.push("<file path=\"" + p + "\">\n" + content + "\n</file>");
+            }
+            const evalInput = parts.join("\n");
+            await artifact.set("eval", "input", evalInput);
+            await artifact.set("eval", "memory", memory);
+            console.log("Uploaded eval artifacts (" + evalInput.length + " bytes)");
 
   gemini-eval:
     name: Gemini VSDD CI evaluation
@@ -256,11 +257,18 @@ jobs:
 
             const out = { ...payload, reviewer: "gemini", summary };
             const outJson = JSON.stringify(out, null, 2);
-            await artifact.set("eval", "gemini", outJson);
+            await shared.set("eval", "gemini", outJson);
             await output.set("verdict", String(payload.verdict));
             const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
-            console.log(`gemini verdict: ${payload.verdict}, gaps: ${gaps.length}`);
+            console.log("gemini verdict: " + payload.verdict + ", gaps: " + gaps.length);
         shell: octoscript {0}
+
+      - name: Upload gemini eval
+        uses: sw2m/octoscript@main
+        with:
+          script: |
+            const data = await shared.get("eval", "gemini");
+            if (data) await artifact.set("eval", "gemini", data);
 
   claude-eval:
     name: Claude VSDD CI evaluation
@@ -418,10 +426,18 @@ jobs:
 
             const out = { ...payload, reviewer: "claude", summary };
             const outJson = JSON.stringify(out, null, 2);
-            await artifact.set("eval", "claude", outJson);
+            await shared.set("eval", "claude", outJson);
             await output.set("verdict", String(payload.verdict));
             const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
-            console.log(`claude verdict: ${payload.verdict}, gaps: ${gaps.length}`);
+            console.log("claude verdict: " + payload.verdict + ", gaps: " + gaps.length);
+        shell: octoscript {0}
+
+      - name: Upload claude eval
+        uses: sw2m/octoscript@main
+        with:
+          script: |
+            const data = await shared.get("eval", "claude");
+            if (data) await artifact.set("eval", "claude", data);
 
   consensus:
     name: Consensus + open issues for gaps

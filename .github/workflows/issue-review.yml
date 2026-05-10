@@ -116,23 +116,24 @@ jobs:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           IS_GOAL_SPEC: ${{ steps.label-check.outputs.is-goal-spec }}
-        run: |
-          const memoryPath = await Deno.stat("MEMORY.md").then(() => "MEMORY.md").catch(() => ".vsdd-philosophies/MEMORY.md");
-          const memory = await Deno.readTextFile(memoryPath);
-          const promptTmpl = await Deno.readTextFile("./.github/scripts/vsdd/phase-1c/prompt.mustache");
-          const isGoal = Deno.env.get("IS_GOAL_SPEC") === "true";
-          const cardinalityTmpl = isGoal
-            ? await Deno.readTextFile("./.github/scripts/vsdd/phase-1c/cardinality.mustache")
-            : "";
-          const prompt = Mustache.render(promptTmpl, {
-            memory,
-            cardinality: cardinalityTmpl,
-            title: Deno.env.get("ISSUE_TITLE") ?? "",
-            body: Deno.env.get("ISSUE_BODY") ?? "",
-          });
-          await artifact.set("prep", "prompt", prompt);
-          console.log("Uploaded prep/prompt artifact");
-        shell: octoscript {0}
+        uses: sw2m/octoscript@main
+        with:
+          script: |
+            const memoryPath = await Deno.stat("MEMORY.md").then(() => "MEMORY.md").catch(() => ".vsdd-philosophies/MEMORY.md");
+            const memory = await Deno.readTextFile(memoryPath);
+            const promptTmpl = await Deno.readTextFile("./.github/scripts/vsdd/phase-1c/prompt.mustache");
+            const isGoal = Deno.env.get("IS_GOAL_SPEC") === "true";
+            const cardinalityTmpl = isGoal
+              ? await Deno.readTextFile("./.github/scripts/vsdd/phase-1c/cardinality.mustache")
+              : "";
+            const prompt = Mustache.render(promptTmpl, {
+              memory,
+              cardinality: cardinalityTmpl,
+              title: Deno.env.get("ISSUE_TITLE") ?? "",
+              body: Deno.env.get("ISSUE_BODY") ?? "",
+            });
+            await artifact.set("prep", "prompt", prompt);
+            console.log("Uploaded prep/prompt artifact");
 
   gemini-review:
     name: Gemini VSDD Phase 1c review
