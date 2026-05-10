@@ -480,17 +480,12 @@ jobs:
           cat symbol-audit.md
 
       - name: Post symbol-audit comment
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const body = fs.readFileSync('symbol-audit.md', 'utf8');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
+        run: |
+          const body = await Deno.readTextFile('symbol-audit.md');
+          await github.rest.issues.createComment({
+            ...context.repo, issue_number: context.issue.number, body,
+          });
+        shell: octoscript {0}
 
   gemini-review:
     name: Gemini adversarial review
@@ -533,11 +528,9 @@ jobs:
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
-        uses: ./.vsdd-philosophies/.github/actions/script/github-deno
         env:
           REVIEW: ${{ steps.review.outputs.response }}
-        with:
-          script: |
+        run: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
             const raw = Deno.env.get("REVIEW") ?? "";
             const { verdict, body } = extract(raw, "phase-3");
@@ -566,6 +559,7 @@ jobs:
                 body: header + body + footer,
               });
             }
+        shell: octoscript {0}
 
   claude-review:
     name: Claude adversarial review
@@ -608,11 +602,9 @@ jobs:
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
-        uses: ./.vsdd-philosophies/.github/actions/script/github-deno
         env:
           REVIEW: ${{ steps.review.outputs.response }}
-        with:
-          script: |
+        run: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
             const raw = Deno.env.get("REVIEW") ?? "";
             const { verdict, body } = extract(raw, "phase-3");
@@ -640,3 +632,4 @@ jobs:
                 body: header + body + footer,
               });
             }
+        shell: octoscript {0}

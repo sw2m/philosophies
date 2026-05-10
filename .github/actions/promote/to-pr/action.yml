@@ -1,65 +1,29 @@
 name: "Promote tech-spec to draft PR (5-phase pipeline)"
 description: |
-  Implements a tech-spec issue end-to-end via a 5-phase pipeline mapped
-  to MEMORY.md §VIII (Regression Sets and the 4-Result Rule):
-
-    Phase 1 — Scaffold     (CI: branch + draft PR with spec embedded)
-    Phase 2 — Author tests (agent writes new tests, declares regression set)
-    Phase 3 — Red gate     (CI runs tests, expects new=red + regression=green)
-                            mismatch → loop to Phase 2 (max 3 retries)
-    Phase 4 — Implement    (agent writes code)
-    Phase 5 — Green gate   (CI runs tests, expects new=green + regression=green)
-                            mismatch → loop to Phase 4 (max 3 retries)
-
-  On exhaustion of either retry budget the action labels the issue
-  `needs-human` and comments with the last test output. The PR stays
-  draft — a human takes over from there.
-
-  Repos with no detectable test runner (docs repos, e.g. sw2m/philosophies)
-  follow the §VIII N/A path: Phases 2/3/5 are skipped and Phase 4 runs
-  once. The draft PR is the artifact for human review.
+  5-phase pipeline: scaffold → author tests → Red gate → implement → Green gate.
+  On exhaustion, labels `needs-human` and bails. No-runner repos skip §VIII.
 
 inputs:
-  issue-number:
-    description: "Tech-spec issue to implement."
-    required: true
-  owner-login:
-    description: "Org-member login that took ownership by self-assigning."
-    required: true
-  anthropic-api-key:
-    description: "ANTHROPIC_API_KEY value."
-    required: true
-  github-token:
-    description: "Token used to read/edit the issue, push branch, open PR."
-    required: true
-  base-branch:
-    description: "Branch to fork the implementation branch from."
-    required: false
-    default: "main"
-  max-retries:
-    description: "Max retries per gate (Red, Green). 3 = up to 4 attempts each."
-    required: false
-    default: "3"
-  agent-timeout-seconds:
-    description: "Wall-clock timeout for each Claude Code CLI invocation. Hard cap that prevents indefinite hangs (e.g. an in-flight API call that never returns); on timeout the primary call is treated as failed and the fallback model retries. 900s = 15 min."
-    required: false
-    default: "900"
+  issue-number: { required: true }
+  owner-login: { required: true }
+  anthropic-api-key: { required: true }
+  github-token: { required: true }
+  base-branch: { required: false, default: "main" }
+  max-retries: { required: false, default: "3" }
+  agent-timeout-seconds: { required: false, default: "900" }
 
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: Verify org membership of the owner
-      uses: ./.github/actions/script/github-deno
-      with:
-        github-token: ${{ inputs.github-token }}
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const org = await import("./.github/scripts/github/org.ts");
-          await org.verify({
-            api: github,
-            core,
-            sender: "${{ inputs.owner-login }}",
-          });
+    - uses: sw2m/octoscript/action@main
+
+    - name: Verify org membership
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        const org = await import("./.github/scripts/github/org.ts");
+        await org.verify({ api: github, core, sender: "${{ inputs.owner-login }}" });
+      shell: octoscript {0}
 
     - name: Read tech-spec issue
       id: read
@@ -69,22 +33,20 @@ runs:
         issue-number: ${{ inputs.issue-number }}
         prefix: tech
 
-    - name: Build PR body from template
+    - name: Build PR body
       id: pr-body
-      uses: ./.github/actions/script/github-deno
-      with:
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const shared = await import("./.github/scripts/github/shared.ts");
-          const output = await import("./.github/scripts/github/output.ts");
-          const techBody = await shared.get("tech-body") ?? "";
-          const body = await template(
-            new URL("./.github/scripts/vsdd/promote/to-pr/scaffold.mustache", `file://${Deno.cwd()}/`),
-            { issue: ${{ inputs.issue-number }}, owner: "${{ inputs.owner-login }}", body: techBody },
-          );
-          await output.set("body", body);
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        const techBody = await shared.get("tech-body") ?? "";
+        const body = await template(
+          new URL("./.github/scripts/vsdd/promote/to-pr/scaffold.mustache", `file://${Deno.cwd()}/`),
+          { issue: ${{ inputs.issue-number }}, owner: "${{ inputs.owner-login }}", body: techBody },
+        );
+        await output.set("body", body);
+      shell: octoscript {0}
 
-    - name: Phase 1 — Scaffold (branch + draft PR)
+    - name: Phase 1 — Scaffold
       id: scaffold
       uses: ./.github/actions/github/pr/create
       with:
@@ -95,23 +57,23 @@ runs:
         body: ${{ steps.pr-body.outputs.body }}
         bot-name: promote-tech-to-pr[bot]
         bot-email: promote-tech-to-pr@users.noreply.github.com
+
     - name: Detect test runner
       id: runner
-      uses: ./.github/actions/script/github-deno
-      with:
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const runner = await import("./.github/scripts/github/runner.ts");
-          const output = await import("./.github/scripts/github/output.ts");
-          const cmd = await runner.detect();
-          await output.set("default-cmd", cmd ?? "");
-          if (!cmd) {
-            await output.set("no-runner", "true");
-            core.notice("No test runner detected. §VIII (4-Result Rule) is N/A; Phases 2/3/5 will be skipped.");
-          } else {
-            await output.set("no-runner", "false");
-            console.log(`Detected test command: ${cmd}`);
-          }
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        const runner = await import("./.github/scripts/github/runner.ts");
+        const cmd = await runner.detect();
+        await output.set("default-cmd", cmd ?? "");
+        if (!cmd) {
+          await output.set("no-runner", "true");
+          core.notice("No test runner detected. §VIII N/A.");
+        } else {
+          await output.set("no-runner", "false");
+          console.log(`Detected: ${cmd}`);
+        }
+      shell: octoscript {0}
 
     - uses: actions/setup-node@v6
       with:
@@ -121,7 +83,7 @@ runs:
       shell: bash
       run: npm install -g @anthropic-ai/claude-code@latest
 
-    - name: Phases 2-3 — Author tests + Red gate (with retry)
+    - name: Red gate
       id: red-gate
       if: ${{ steps.runner.outputs.no-runner == 'false' }}
       uses: ./.github/actions/gates/red
@@ -134,25 +96,24 @@ runs:
         default-test-cmd: ${{ steps.runner.outputs.default-cmd }}
         max-retries: ${{ inputs.max-retries }}
         agent-timeout-seconds: ${{ inputs.agent-timeout-seconds }}
+
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
-      uses: ./.github/actions/script/github-deno
-      with:
-        github-token: ${{ inputs.github-token }}
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
-          const detail = "${{ steps.red-gate.outputs.bail }}";
-          await bail.run({
-            api: github, core,
-            gate: "red",
-            issue: ${{ inputs.issue-number }},
-            pr: ${{ steps.scaffold.outputs.pr-number }},
-            owner: "${{ inputs.owner-login }}",
-            detail,
-            repo: context.repo,
-          });
-    - name: Phases 4-5 — Implement + Green gate (with retry)
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
+        await bail.run({
+          api: github, core, gate: "red",
+          issue: ${{ inputs.issue-number }},
+          pr: ${{ steps.scaffold.outputs.pr-number }},
+          owner: "${{ inputs.owner-login }}",
+          detail: "${{ steps.red-gate.outputs.bail }}",
+          repo: context.repo,
+        });
+      shell: octoscript {0}
+
+    - name: Green gate
       id: green-gate
       if: ${{ steps.red-gate.outputs.bailed != 'true' }}
       uses: ./.github/actions/gates/green
@@ -165,39 +126,36 @@ runs:
         no-runner: ${{ steps.runner.outputs.no-runner }}
         max-retries: ${{ inputs.max-retries }}
         agent-timeout-seconds: ${{ inputs.agent-timeout-seconds }}
+
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
-      uses: ./.github/actions/script/github-deno
-      with:
-        github-token: ${{ inputs.github-token }}
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
-          const detail = "${{ steps.green-gate.outputs.bail }}";
-          await bail.run({
-            api: github, core,
-            gate: "green",
-            issue: ${{ inputs.issue-number }},
-            pr: ${{ steps.scaffold.outputs.pr-number }},
-            owner: "${{ inputs.owner-login }}",
-            detail,
-            repo: context.repo,
-          });
-    - name: Final summary comment on success
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
+        await bail.run({
+          api: github, core, gate: "green",
+          issue: ${{ inputs.issue-number }},
+          pr: ${{ steps.scaffold.outputs.pr-number }},
+          owner: "${{ inputs.owner-login }}",
+          detail: "${{ steps.green-gate.outputs.bail }}",
+          repo: context.repo,
+        });
+      shell: octoscript {0}
+
+    - name: Summary on success
       if: ${{ steps.green-gate.outputs.bailed == 'false' }}
-      uses: ./.github/actions/script/github-deno
-      with:
-        github-token: ${{ inputs.github-token }}
-        workspace: ${{ github.action_path }}/../../../..
-        script: |
-          const Mustache = (await import("npm:mustache@^4")).default;
-          const template = await Deno.readTextFile(
-            new URL("./success.mustache", `file://${Deno.env.get("GITHUB_ACTION_PATH")}/../../scripts/vsdd/promote/to-pr/`).href
-          );
-          const pr = ${{ steps.scaffold.outputs.pr-number }};
-          const issue = ${{ inputs.issue-number }};
-          const runner = "${{ steps.runner.outputs.no-runner }}" !== "true";
-          const body = Mustache.render(template, { pr, runner });
-          const { owner, repo } = context.repo;
-          await github.rest.issues.createComment({ owner, repo, issue_number: pr, body });
-          await github.rest.issues.createComment({ owner, repo, issue_number: issue, body });
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        const pr = ${{ steps.scaffold.outputs.pr-number }};
+        const issue = ${{ inputs.issue-number }};
+        const hasRunner = "${{ steps.runner.outputs.no-runner }}" !== "true";
+        const body = await template(
+          new URL("./.github/scripts/vsdd/promote/to-pr/success.mustache", `file://${Deno.cwd()}/`),
+          { pr, runner: hasRunner },
+        );
+        const { owner, repo } = context.repo;
+        await github.rest.issues.createComment({ owner, repo, issue_number: pr, body });
+        await github.rest.issues.createComment({ owner, repo, issue_number: issue, body });
+      shell: octoscript {0}

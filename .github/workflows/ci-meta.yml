@@ -230,13 +230,11 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
-        uses: ./.github/actions/script/github-deno
         env:
           REVIEW: ${{ steps.review.outputs.response }}
-        with:
-          script: |
-            const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
-            const raw = Deno.env.get("REVIEW") ?? "";
+        run: |
+          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          const raw = Deno.env.get("REVIEW") ?? "";
 
             // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary
@@ -273,6 +271,7 @@ jobs:
             );
             const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
             console.log(`gemini verdict: ${payload.verdict}, gaps: ${gaps.length}`);
+        shell: octoscript {0}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -403,13 +402,11 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
-        uses: ./.github/actions/script/github-deno
         env:
           REVIEW: ${{ steps.review.outputs.response }}
-        with:
-          script: |
-            const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
-            const raw = Deno.env.get("REVIEW") ?? "";
+        run: |
+          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          const raw = Deno.env.get("REVIEW") ?? "";
 
             // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary
@@ -886,11 +883,8 @@ jobs:
 
       - name: Submit consensus PR review (APPROVE / REQUEST_CHANGES)
         if: always() && hashFiles('consensus-state.json') != '' && github.event_name == 'pull_request'
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const state = JSON.parse(fs.readFileSync('consensus-state.json', 'utf8'));
+        run: |
+          const state = JSON.parse(await Deno.readTextFile('consensus-state.json'));
             const event = state.verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
             const lines = [
               `**VSDD CI Meta-Review** _(advisory; status check is what gates merge)_  `,
@@ -946,3 +940,4 @@ jobs:
                 body: lines.join('\n'),
               });
             }
+        shell: octoscript {0}

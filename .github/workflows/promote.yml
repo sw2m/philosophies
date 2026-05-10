@@ -99,9 +99,7 @@ jobs:
       cleared: ${{ steps.check.outputs.cleared }}
     steps:
       - id: check
-        uses: ./.github/actions/script/github-deno
-        with:
-          script: |
+        run: |
             // Phase 1c clearance — both gemini AND claude must have a
             // fresh `pass` verdict on the issue, AND the orchestrator
             // must not have a fresh `fail` verdict. "Fresh" means the
@@ -195,6 +193,7 @@ jobs:
             }
 
             await output.set("cleared", "true");
+        shell: octoscript {0}
 
   promote-goal-to-tech:
     name: Decompose goal-spec into tech-spec sub-issues

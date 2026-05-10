@@ -43,46 +43,33 @@ jobs:
       head-sha:  ${{ steps.resolve.outputs.head-sha }}
       proceed:   ${{ steps.resolve.outputs.proceed }}
     steps:
-      - name: Resolve via actions/github-script (per #129 spec)
+      - name: Resolve PR event
         id: resolve
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const event = context.eventName;
-            const setOutput = (k, v) => core.setOutput(k, v);
-
-            if (event === 'pull_request') {
-              const pr = context.payload.pull_request;
-              setOutput('pr-number', String(pr.number));
-              setOutput('head-sha',  pr.head.sha);
-              setOutput('proceed',   'true');
-              core.info(`pull_request #${pr.number} head=${pr.head.sha}`);
+        run: |
+          const event = context.eventName;
+          if (event === 'pull_request') {
+            const pr = context.payload.pull_request;
+            await output.set('pr-number', String(pr.number));
+            await output.set('head-sha', pr.head.sha);
+            await output.set('proceed', 'true');
+            return;
+          }
+          if (event === 'issue_comment') {
+            const issue = context.payload.issue;
+            if (!issue || !issue.pull_request) {
+              await output.set('proceed', 'false');
               return;
             }
-
-            if (event === 'issue_comment') {
-              const issue = context.payload.issue;
-              if (!issue || !issue.pull_request) {
-                core.notice('issue_comment.deleted on a non-PR issue; nothing to brand.');
-                setOutput('proceed', 'false');
-                return;
-              }
-              // Fetch PR head/base via API since issue_comment payload
-              // doesn't carry it. Per spec: actions/github-script call.
-              const {data: pr} = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                pull_number: issue.number,
-              });
-              setOutput('pr-number', String(pr.number));
-              setOutput('head-sha',  pr.head.sha);
-              setOutput('proceed',   'true');
-              core.info(`issue_comment.deleted → PR #${pr.number} head=${pr.head.sha}`);
-              return;
-            }
-
-            core.notice(`Unhandled event: ${event}; skipping.`);
-            setOutput('proceed', 'false');
+            const {data: pr} = await github.rest.pulls.get({
+              ...context.repo, pull_number: issue.number,
+            });
+            await output.set('pr-number', String(pr.number));
+            await output.set('head-sha', pr.head.sha);
+            await output.set('proceed', 'true');
+            return;
+          }
+          await output.set('proceed', 'false');
+        shell: octoscript {0}
 
   marker:
     name: Marker presence
@@ -124,30 +111,21 @@ jobs:
 
       - name: Compute whitelist via brand.ts
         id: whitelist
-        uses: ./.github/actions/script/github-deno
         env:
           PR_FILES: pr-files.json
-        with:
-          result-encoding: string
-          script: |
-            // Route the path-prefix check through vsdd/brand.ts so the
-            // workflow and the pure module share one predicate.
-            const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
-            const arr = JSON.parse(await Deno.readTextFile(Deno.env.get("PR_FILES")!));
-            let out = "true";
-            if (arr.length === 0) out = "false";
-            else for (const f of arr) {
-              if (!whitelist(f.filename)) { out = "false"; break; }
-              if (f.previous_filename && !whitelist(f.previous_filename)) {
-                out = "false"; break;
-              }
+        run: |
+          const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
+          const arr = JSON.parse(await Deno.readTextFile(Deno.env.get("PR_FILES")!));
+          let out = "true";
+          if (arr.length === 0) out = "false";
+          else for (const f of arr) {
+            if (!whitelist(f.filename)) { out = "false"; break; }
+            if (f.previous_filename && !whitelist(f.previous_filename)) {
+              out = "false"; break;
             }
-            await Deno.writeTextFile(
-              Deno.env.get("GITHUB_OUTPUT")!,
-              `whitelist=${out}\n`,
-              { append: true },
-            );
-            return out;
+          }
+          await output.set("whitelist", out);
+        shell: octoscript {0}
 
       - name: Compute impl-content via classify-changes.sh
         id: impl
@@ -186,27 +164,19 @@ jobs:
 
       - name: Compute brand state via brand.ts
         id: brand-state
-        uses: ./.github/actions/script/github-deno
         env:
           WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
           IMPL: ${{ steps.impl.outputs.impl }}
           MARKER: ${{ needs.marker.outputs.marker-present }}
-        with:
-          result-encoding: string
-          script: |
-            // Brand iff (whitelist OR (impl AND no marker)).
-            const { branded } = await import("./.github/scripts/vsdd/brand.ts");
-            const out = branded({
-              whitelist: Deno.env.get("WHITELIST") === "true",
-              impl:      Deno.env.get("IMPL")      === "true",
-              marker:    Deno.env.get("MARKER")    === "true",
-            });
-            await Deno.writeTextFile(
-              Deno.env.get("GITHUB_OUTPUT")!,
-              `brand=${out}\n`,
-              { append: true },
-            );
-            return String(out);
+        run: |
+          const { branded } = await import("./.github/scripts/vsdd/brand.ts");
+          const out = branded({
+            whitelist: Deno.env.get("WHITELIST") === "true",
+            impl:      Deno.env.get("IMPL")      === "true",
+            marker:    Deno.env.get("MARKER")    === "true",
+          });
+          await output.set("brand", out);
+        shell: octoscript {0}
 
       - name: Post or delete vsdd:opt-out brand comment
         env:

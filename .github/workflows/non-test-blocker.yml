@@ -74,28 +74,21 @@ jobs:
 
       - name: Compute whitelist via brand.ts
         id: whitelist
-        uses: ./.github/actions/script/github-deno
         env:
           PR_FILES: pr-files.json
-        with:
-          result-encoding: string
-          script: |
-            const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
-            const arr = JSON.parse(await Deno.readTextFile(Deno.env.get("PR_FILES")!));
-            let out = "true";
-            if (arr.length === 0) out = "false";
-            else for (const f of arr) {
-              if (!whitelist(f.filename)) { out = "false"; break; }
-              if (f.previous_filename && !whitelist(f.previous_filename)) {
-                out = "false"; break;
-              }
+        run: |
+          const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
+          const arr = JSON.parse(await Deno.readTextFile(Deno.env.get("PR_FILES")!));
+          let out = "true";
+          if (arr.length === 0) out = "false";
+          else for (const f of arr) {
+            if (!whitelist(f.filename)) { out = "false"; break; }
+            if (f.previous_filename && !whitelist(f.previous_filename)) {
+              out = "false"; break;
             }
-            await Deno.writeTextFile(
-              Deno.env.get("GITHUB_OUTPUT")!,
-              `whitelist=${out}\n`,
-              { append: true },
-            );
-            return out;
+          }
+          await output.set("whitelist", out);
+        shell: octoscript {0}
 
       - name: Compute impl-content via classify-changes.sh
         id: impl

@@ -32,10 +32,7 @@ jobs:
 
       - name: Scan PR comments via brand.ts
         id: scan
-        uses: ./.github/actions/script/github-deno
-        with:
-          result-encoding: string
-          script: |
+        run: |
             // Paginated comment fetch with first-match short-circuit,
             // routing token-detection through vsdd/brand.ts so the
             // workflow and the pure module share one predicate. On
@@ -80,3 +77,4 @@ jobs:
             const present = result === "found" ? "true" : "false";
             await output.set("marker-present", present);
             return result;
+        shell: octoscript {0}
