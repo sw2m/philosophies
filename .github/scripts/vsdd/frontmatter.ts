@@ -38,7 +38,7 @@
 //     .find((ns) => isMapping(ns) && "phase-3" in ns)
 //     ?.["phase-3"];
 
-import { parse as yaml } from "jsr:@std/yaml@^1";
+import { parse as deserialize } from "../github/serde.ts";
 
 const OPEN = "<!--";
 const CLOSE = "-->";
@@ -103,7 +103,7 @@ class Parse {
   static content(raw: string): unknown {
     if (!raw.includes("\n")) {
       const trimmed = raw.trim();
-      return trimmed === "" ? null : yaml(trimmed);
+      return trimmed === "" ? null : deserialize(trimmed, "yaml");
     }
 
     const head = raw.indexOf("\n");
@@ -113,7 +113,7 @@ class Parse {
     if (raw.slice(tail + 1).trim() !== "") return null;
 
     const dedented = Parse.dedent(raw.slice(head + 1, tail));
-    return dedented === "" ? null : yaml(dedented);
+    return dedented === "" ? null : deserialize(dedented, "yaml");
   }
 
   /** Strip the leading indentation common to every non-blank line.
