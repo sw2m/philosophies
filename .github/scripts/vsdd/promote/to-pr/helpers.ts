@@ -1,6 +1,5 @@
 import * as inputs from "../../../github/inputs.ts";
 import * as shared from "../../../github/shared.ts";
-import Mustache from "npm:mustache@^4";
 
 export { inputs, shared };
 export { Claude } from "../../../agents/claude.ts";

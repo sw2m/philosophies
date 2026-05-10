@@ -6,7 +6,6 @@
 //   const bail = await import("./scripts/vsdd/promote/to-pr/bail.ts");
 //   await bail.run({ github, core, gate: "red", ... });
 
-import Mustache from "npm:mustache@^4";
 
 const TEMPLATE = await Deno.readTextFile(new URL("./bail.mustache", import.meta.url));
 

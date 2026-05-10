@@ -7,7 +7,6 @@
 // future `vsdd/phase-3/*`) instantiate this with their fixed template and
 // add domain-specific render data construction.
 
-import Mustache from "npm:mustache@^4";
 import { Comment as Base, type CreateOpts, type Ctx } from "../github/comment.ts";
 
 export type { Ctx };

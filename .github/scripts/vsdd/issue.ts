@@ -5,7 +5,6 @@
 // Same pattern as vsdd/comment.ts: opinionated body rendering atop the
 // unopinionated GitHub primitive.
 
-import Mustache from "npm:mustache@^4";
 import { Issue as Base, type CreateOpts, type Ctx } from "../github/issue.ts";
 
 export type { Ctx };
