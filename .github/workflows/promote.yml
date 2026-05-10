@@ -41,6 +41,8 @@ jobs:
       owner: ${{ steps.check.outputs.owner }}
       kind: ${{ steps.classify.outputs.kind }}
     steps:
+      - uses: actions/checkout@v6
+      - uses: sw2m/octoscript/action@main
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,6 +100,8 @@ jobs:
     outputs:
       cleared: ${{ steps.check.outputs.cleared }}
     steps:
+      - uses: actions/checkout@v6
+      - uses: sw2m/octoscript/action@main
       - id: check
         run: |
             // Phase 1c clearance — both gemini AND claude must have a

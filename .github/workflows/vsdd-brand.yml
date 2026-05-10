@@ -43,6 +43,7 @@ jobs:
       head-sha:  ${{ steps.resolve.outputs.head-sha }}
       proceed:   ${{ steps.resolve.outputs.proceed }}
     steps:
+      - uses: sw2m/octoscript/action@main
       - name: Resolve PR event
         id: resolve
         run: |
@@ -91,6 +92,7 @@ jobs:
           # `fetch-depth: 0` so classify-changes.sh's `--pr base...head`
           # has both refs locally for the git-diff walk.
           fetch-depth: 0
+      - uses: sw2m/octoscript/action@main
 
       - name: Fetch PR file list (single call; reused below)
         id: files

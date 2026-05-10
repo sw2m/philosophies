@@ -29,6 +29,7 @@ jobs:
       marker-present: ${{ steps.scan.outputs.marker-present }}
     steps:
       - uses: actions/checkout@v6
+      - uses: sw2m/octoscript/action@main
 
       - name: Scan PR comments via brand.ts
         id: scan
