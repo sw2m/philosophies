@@ -41,7 +41,6 @@ jobs:
             // (marker-present=false).
             const { marked } = await import("./.github/scripts/vsdd/brand.ts");
             const { Comment } = await import("./.github/scripts/github/comment.ts");
-            const output = await import("./.github/scripts/github/output.ts");
             const pr = ${{ inputs.pr-number }};
             const [owner, repo] = "${{ github.repository }}".split("/");
 

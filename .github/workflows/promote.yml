@@ -114,7 +114,6 @@ jobs:
             const [owner, name] = "${{ github.repository }}".split("/");
             const issue = ${{ github.event.issue.number }};
 
-              const output = await import("./.github/scripts/github/output.ts");
             // Reference timestamp for freshness (per #93).
             const q = await github.graphql(
               `query($owner: String!, $name: String!, $num: Int!) {

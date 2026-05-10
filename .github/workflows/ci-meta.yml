@@ -107,21 +107,17 @@ jobs:
       - name: Upload eval context
         run: |
           const memory = await Deno.readTextFile("memory-canonical.md");
-          const files = [];
-          for await (const entry of (await Deno.readDir(".github"))) {
-            // Handled recursively below
-          }
           const { stdout } = await shell("find .github -type f | sort");
           const paths = new TextDecoder().decode(stdout).trim().split("\n");
-          const parts = [`<vsdd-canonical>\n${memory}\n</vsdd-canonical>`, ""];
+          const parts = ["<vsdd-canonical>\n" + memory + "\n</vsdd-canonical>", ""];
           for (const p of paths) {
             const content = await Deno.readTextFile(p);
-            parts.push(`<file path="${p}">\n${content}\n</file>`);
+            parts.push("<file path=\"" + p + "\">\n" + content + "\n</file>");
           }
           const evalInput = parts.join("\n");
           await artifact.set("eval", "input", evalInput);
           await artifact.set("eval", "memory", memory);
-          console.log(\`Uploaded eval artifacts (\${evalInput.length} bytes)\`);
+          console.log("Uploaded eval artifacts (" + evalInput.length + " bytes)");
         shell: octoscript {0}
 
   gemini-eval:
