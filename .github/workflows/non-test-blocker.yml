@@ -57,10 +57,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: sw2m/octoscript/action@main
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
           fetch-depth: 0
+      - uses: sw2m/octoscript/action@main
 
       - name: Fetch PR file list
         env:
