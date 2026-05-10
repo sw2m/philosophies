@@ -14,5 +14,5 @@ runs:
         const sender = inputs.get("sender") || Deno.env.get("GITHUB_ACTOR") || "";
         const orgName = inputs.get("org") || "sw2m";
         const bot = inputs.get("trust-github-actions-bot") === "true";
-        return await org.verify({ api: github, core, org: orgName, actor, sender, bot });
+        const result = await org.verify({ api: github, core, org: orgName, actor, sender, bot });
       shell: octoscript {0}
