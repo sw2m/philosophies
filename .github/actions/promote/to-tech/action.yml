@@ -10,6 +10,7 @@ runs:
 
     - name: Read goal issue
       uses: ./.github/actions/github/issue/read
+      env:
         INPUT_PREFIX: goal
 
     - name: Read orchestrator canonical tuple (#128)
@@ -18,7 +19,7 @@ runs:
         const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
         const { Comment } = await import("./.github/scripts/github/comment.ts");
         const { owner, repo } = context.repo;
-        const issue = ${{ env.INPUT_ISSUE_NUMBER }};
+        const issue = inputs.get("issue-number");
         const comments = new Comment({ api: github, owner, repo, issue_number: issue });
         const bot = await comments.list({ bot: true });
         let hit = null;
@@ -68,9 +69,9 @@ runs:
         const response = "${{ steps.invoke.outputs.response }}" || await shared.get("agent", "response") || "";
         const dc = new Decompose({
           api: github, owner, repo,
-          issue_number: ${{ env.INPUT_ISSUE_NUMBER }},
+          issue_number: inputs.get("issue-number"),
           raw: response,
-          actor: "${{ env.INPUT_OWNER_LOGIN }}",
+          actor: inputs.get("owner-login"),
         });
         await dc.run();
       shell: octoscript {0}

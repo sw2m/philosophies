@@ -144,6 +144,7 @@ jobs:
       - name: Run Gemini
         id: review
         uses: ./.github/actions/agents/gemini
+        env:
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INPUT_STDIN_FILE: eval-input.txt
           # Per #112/#116 — opt in to bot trust on in-repo head branches only.
@@ -290,6 +291,7 @@ jobs:
       - name: Run Claude
         id: review
         uses: ./.github/actions/agents/claude
+        env:
           INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Same stdin-file pattern as Gemini — Claude has no filesystem
           # access via the Messages API, so we embed eval-input.txt
@@ -706,6 +708,7 @@ jobs:
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
         uses: ./.github/actions/agents/gemini
+        env:
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INPUT_STDIN_FILE: dedup-input.txt
           INPUT_OUTPUT_FILE: dedup-output.md

@@ -11,15 +11,15 @@ runs:
     - name: Configure git identity
       shell: bash
       run: |
-        git config user.name "${{ env.INPUT_BOT_NAME }}"
-        git config user.email "${{ env.INPUT_BOT_EMAIL }}"
+        git config user.name inputs.get("bot-name")
+        git config user.email inputs.get("bot-email")
     - id: scaffold
       run: |
         const { Pull } = await import("./.github/scripts/github/pr.ts");
         const { owner, repo } = context.repo;
-        const issue = ${{ env.INPUT_ISSUE_NUMBER }};
-        const base = "${{ env.INPUT_BASE_BRANCH }}";
-        const branch = "${{ env.INPUT_BRANCH_PREFIX }}" + issue + "-promote";
+        const issue = inputs.get("issue-number");
+        const base = inputs.get("base-branch");
+        const branch = inputs.get("branch-prefix") + issue + "-promote";
 
         await git.fetch("origin", base);
         const branches = await git.branch(["-r"]);
@@ -44,8 +44,8 @@ runs:
           await output.set("created", "false");
           console.log(`Reusing existing PR #${pull.number}`);
         } else {
-          const body = `${{ env.INPUT_BODY }}` || `Closes #${issue}`;
-          await pull.create({ head: branch, base, title: `${{ env.INPUT_TITLE }}`.trim(), body, draft: true });
+          const body = inputs.get("body")` || `Closes #${issue}`;
+          await pull.create({ head: branch, base, title: inputs.get("title")`.trim(), body, draft: true });
           await output.set("pr-number", pull.number);
           await output.set("created", "true");
           console.log(`Opened draft PR #${pull.number}: ${pull.html_url}`);

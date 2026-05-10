@@ -508,6 +508,7 @@ jobs:
       - name: Run Gemini (composite; org-member gate inside)
         id: review
         uses: ./.github/actions/agents/gemini
+        env:
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INPUT_STDIN_FILE: gemini-stdin.txt
           # The owner login was identified by the ownership gate. Pass it
@@ -579,6 +580,7 @@ jobs:
       - name: Run Claude (composite; org-member gate inside)
         id: review
         uses: ./.github/actions/agents/claude
+        env:
           INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Same stdin-file as Gemini — `gemini-stdin.txt` already starts
           # with `${{ env.PHASE_3_PROMPT }}`, followed by MEMORY.md, the PR /

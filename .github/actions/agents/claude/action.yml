@@ -15,6 +15,7 @@ runs:
 
     - name: Verify org membership
       uses: ./.github/actions/github/org/verify
+      env:
         INPUT_ACTOR_OVERRIDE: ${{ env.INPUT_ACTOR_OVERRIDE }}
         INPUT_SENDER: ${{ github.event.sender.login }}
         INPUT_ORG: ${{ env.INPUT_ORG }}
@@ -33,10 +34,10 @@ runs:
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);
         const claude = new Claude({
-          primary: "${{ env.INPUT_MODEL }}",
-          fallback: "${{ env.INPUT_FALLBACK_MODEL }}",
-          tools: `${{ env.INPUT_ALLOWED_TOOLS }}`,
-          mode: "${{ env.INPUT_PERMISSION_MODE }}",
+          primary: inputs.get("model"),
+          fallback: inputs.get("fallback-model"),
+          tools: inputs.get("allowed-tools")`,
+          mode: inputs.get("permission-mode"),
         });
         const r = await claude.run(new Blob([body]).stream());
         const response = new TextDecoder().decode(r.output);

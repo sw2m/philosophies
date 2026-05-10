@@ -15,6 +15,7 @@ runs:
 
     - name: Verify org membership
       uses: ./.github/actions/github/org/verify
+      env:
         INPUT_ACTOR_OVERRIDE: ${{ env.INPUT_ACTOR_OVERRIDE }}
         INPUT_SENDER: ${{ github.event.sender.login }}
         INPUT_ORG: ${{ env.INPUT_ORG }}
@@ -33,8 +34,8 @@ runs:
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);
         const gemini = new Gemini({
-          primary: "${{ env.INPUT_MODEL }}",
-          fallback: "${{ env.INPUT_FALLBACK_MODEL }}",
+          primary: inputs.get("model"),
+          fallback: inputs.get("fallback-model"),
         });
         const r = await gemini.run(new Blob([body]).stream());
         const response = new TextDecoder().decode(r.output);

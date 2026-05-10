@@ -13,13 +13,13 @@ runs:
         const { Issue } = await import("./.github/scripts/github/issue.ts");
         const { owner, repo } = context.repo;
         const issue = new Issue({ api: github, owner, repo });
-        const labels = "${{ env.INPUT_LABELS }}".split(",").map(s => s.trim()).filter(Boolean);
+        const labels = inputs.get("labels").split(",").map(s => s.trim()).filter(Boolean);
         try {
-          await issue.create({ title: `${{ env.INPUT_TITLE }}`, body: `${{ env.INPUT_BODY }}`, labels: labels.length ? labels : undefined });
+          await issue.create({ title: inputs.get("title")`, body: inputs.get("body")`, labels: labels.length ? labels : undefined });
         } catch {
-          await issue.create({ title: `${{ env.INPUT_TITLE }}`, body: `${{ env.INPUT_BODY }}` });
+          await issue.create({ title: inputs.get("title")`, body: inputs.get("body")` });
         }
-        const ns = "${{ env.INPUT_PREFIX }}" || "issue";
+        const ns = inputs.get("prefix") || "issue";
         await shared.set(ns, "title", issue.title);
         await shared.set(ns, "url", issue.html_url);
         await output.set("number", issue.number);

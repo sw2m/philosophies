@@ -225,6 +225,7 @@ jobs:
       - name: Run Gemini (composite action; org-member gate enforced inside)
         id: review
         uses: ./.github/actions/agents/gemini
+        env:
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INPUT_STDIN_FILE: stdin.txt
           INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
@@ -305,6 +306,7 @@ jobs:
       - name: Run Claude (composite action; org-member gate enforced inside)
         id: review
         uses: ./.github/actions/agents/claude
+        env:
           INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           INPUT_STDIN_FILE: stdin.txt
           INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}

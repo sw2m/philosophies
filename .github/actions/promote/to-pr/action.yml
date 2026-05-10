@@ -11,11 +11,13 @@ runs:
 
     - name: Verify org membership
       uses: ./.github/actions/github/org/verify
+      env:
         INPUT_SENDER: ${{ env.INPUT_OWNER_LOGIN }}
 
     - name: Read tech-spec issue
       id: read
       uses: ./.github/actions/github/issue/read
+      env:
         INPUT_PREFIX: tech
 
     - name: Build PR body
@@ -24,7 +26,7 @@ runs:
         const techBody = await shared.get("tech", "body") ?? "";
         const body = await template(
           new URL("./.github/scripts/vsdd/promote/to-pr/scaffold.mustache", `file://${Deno.cwd()}/`),
-          { issue: ${{ env.INPUT_ISSUE_NUMBER }}, owner: "${{ env.INPUT_OWNER_LOGIN }}", body: techBody },
+          { issue: inputs.get("issue-number"), owner: inputs.get("owner-login"), body: techBody },
         );
         await output.set("body", body);
       shell: octoscript {0}
@@ -32,6 +34,7 @@ runs:
     - name: Phase 1 — Scaffold
       id: scaffold
       uses: ./.github/actions/github/pr/create
+      env:
         INPUT_TITLE: ${{ steps.read.outputs.title }}
         INPUT_BODY: ${{ steps.pr-body.outputs.body }}
         INPUT_BOT_NAME: promote-tech-to-pr[bot]
@@ -57,12 +60,14 @@ runs:
       id: red-gate
       if: ${{ steps.runner.outputs.no-runner == 'false' }}
       uses: ./.github/actions/gates/red
+      env:
         INPUT_BRANCH: ${{ steps.scaffold.outputs.branch }}
         INPUT_PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
         INPUT_DEFAULT_TEST_CMD: ${{ steps.runner.outputs.default-cmd }}
 
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
+      env:
         INPUT_BAIL: ${{ steps.red-gate.outputs.bail }}
         INPUT_PR: ${{ steps.scaffold.outputs.pr-number }}
       run: |
@@ -81,12 +86,14 @@ runs:
       id: green-gate
       if: ${{ steps.red-gate.outputs.bailed != 'true' }}
       uses: ./.github/actions/gates/green
+      env:
         INPUT_BRANCH: ${{ steps.scaffold.outputs.branch }}
         INPUT_PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
         INPUT_NO_RUNNER: ${{ steps.runner.outputs.no-runner }}
 
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
+      env:
         INPUT_BAIL: ${{ steps.green-gate.outputs.bail }}
         INPUT_PR: ${{ steps.scaffold.outputs.pr-number }}
       run: |
@@ -105,7 +112,7 @@ runs:
       if: ${{ steps.green-gate.outputs.bailed == 'false' }}
       run: |
         const pr = ${{ steps.scaffold.outputs.pr-number }};
-        const issue = ${{ env.INPUT_ISSUE_NUMBER }};
+        const issue = inputs.get("issue-number");
         const hasRunner = "${{ steps.runner.outputs.no-runner }}" !== "true";
         const body = await template(
           new URL("./.github/scripts/vsdd/promote/to-pr/success.mustache", `file://${Deno.cwd()}/`),

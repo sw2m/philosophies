@@ -68,6 +68,7 @@ runs:
     - name: Resolve git content
       id: resolve
       shell: bash
+      env:
         GH_TOKEN: ${{ env.INPUT_GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         RUNNER_TEMP: ${{ runner.temp }}

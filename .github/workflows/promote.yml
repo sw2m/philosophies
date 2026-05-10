@@ -203,6 +203,7 @@ jobs:
 
       - name: Run promote-goal-to-tech (composite; org gate inside)
         uses: ./.github/actions/promote/to-tech
+        env:
           INPUT_ISSUE_NUMBER: ${{ github.event.issue.number }}
           INPUT_OWNER_LOGIN: ${{ needs.ownership.outputs.owner }}
           INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -226,6 +227,7 @@ jobs:
 
       - name: Run promote-tech-to-pr (composite; org gate inside)
         uses: ./.github/actions/promote/to-pr
+        env:
           INPUT_ISSUE_NUMBER: ${{ github.event.issue.number }}
           INPUT_OWNER_LOGIN: ${{ needs.ownership.outputs.owner }}
           INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
