@@ -33,6 +33,7 @@ permissions:
 # and output-format spec live in exactly one place. Reviewer-specific
 # framing (gemini's stdin intro, claude's anti-hallucination guard) stays
 # inline at the call site.
+env:
   # Single source of truth for the Phase 3 reviewer prompt. Both reviewers
   # (Gemini, Claude) receive this identical text — the only mechanical
   # difference is HOW the input substrate (MEMORY.md + repo tree + diff)
@@ -167,6 +168,7 @@ jobs:
       has-anthropic-key: ${{ steps.keys.outputs.has-anthropic-key }}
     steps:
       - id: check
+        env:
           GH_TOKEN: ${{ github.token }}
           ORG: sw2m
           AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -209,6 +211,7 @@ jobs:
         # GitHub silently rejects workflows that reference `secrets` in
         # `jobs.<id>.if`, which previously left this workflow registered with
         # name = file path and not firing on `pull_request` events.)
+        env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         shell: bash
@@ -240,6 +243,7 @@ jobs:
           path: .vsdd-philosophies
 
       - name: Compute diff against base
+        env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -278,6 +282,7 @@ jobs:
         # builder. Linked issues are resolved by parsing Closes/Fixes/
         # Resolves keywords plus bare `#N` references in the PR body.
         # (Refs: issues #3, #10.)
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_REPO: ${{ github.repository }}
@@ -341,6 +346,7 @@ jobs:
         # and tautological tests that depend on unmodified code. This step
         # emits a manifest of every tracked file plus the contents of each
         # file under PER_FILE_BUDGET, capped at TOTAL_BUDGET total payload.
+        env:
           # Per-file cap (bytes). Files larger than this are listed in the
           # manifest but their content is omitted with a `truncated="true"`
           # marker. 50 KiB comfortably covers source files while excluding
@@ -508,9 +514,9 @@ jobs:
       - name: Run Gemini (composite; org-member gate inside)
         id: review
         uses: ./.github/actions/agents/gemini
-        env:
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_STDIN_FILE: gemini-stdin.txt
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: gemini-stdin.txt
           # The owner login was identified by the ownership gate. Pass it
           # as actor-override so the action's inner gate validates against
           # the *PR owner*, not the workflow trigger sender (which on a
@@ -522,6 +528,7 @@ jobs:
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
+        env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
@@ -580,8 +587,8 @@ jobs:
       - name: Run Claude (composite; org-member gate inside)
         id: review
         uses: ./.github/actions/agents/claude
-        env:
-          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           # Same stdin-file as Gemini — `gemini-stdin.txt` already starts
           # with `${{ env.PHASE_3_PROMPT }}`, followed by MEMORY.md, the PR /
           # linked-issue context, the full repo tree, and pr.diff. Do NOT
@@ -595,6 +602,7 @@ jobs:
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
+        env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
             const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");

@@ -42,6 +42,7 @@ jobs:
       kind: ${{ steps.classify.outputs.kind }}
     steps:
       - id: check
+        env:
           GH_TOKEN: ${{ github.token }}
           ORG: sw2m
           ASSIGNEES_JSON: ${{ toJson(github.event.issue.assignees) }}
@@ -66,6 +67,7 @@ jobs:
           fi
 
       - id: classify
+        env:
           LABELS_JSON: ${{ toJson(github.event.issue.labels) }}
         shell: bash
         run: |
@@ -203,16 +205,17 @@ jobs:
 
       - name: Run promote-goal-to-tech (composite; org gate inside)
         uses: ./.github/actions/promote/to-tech
-        env:
-          INPUT_ISSUE_NUMBER: ${{ github.event.issue.number }}
-          INPUT_OWNER_LOGIN: ${{ needs.ownership.outputs.owner }}
-          INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_PROMOTE_TECH_TO_PR: 
-          INPUT_NAME: Implement tech-spec via 5-phase pipeline
-          INPUT_NEEDS: [ownership, phase-1c-clearance]
-          INPUT_IF: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.kind == 'tech' && needs.phase-1c-clearance.outputs.cleared == 'true' }}
-          INPUT_RUNS_ON: ubuntu-latest
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          owner-login: ${{ needs.ownership.outputs.owner }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  promote-tech-to-pr:
+    name: Implement tech-spec via 5-phase pipeline
+    needs: [ownership, phase-1c-clearance]
+    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.kind == 'tech' && needs.phase-1c-clearance.outputs.cleared == 'true' }}
+    runs-on: ubuntu-latest
     # Serialize per-issue runs to avoid race on branch creation if the
     # same tech-spec is unassigned and reassigned quickly. `cancel-in-progress`
     # = false: let the in-flight run finish — half-implemented PRs are
@@ -227,8 +230,8 @@ jobs:
 
       - name: Run promote-tech-to-pr (composite; org gate inside)
         uses: ./.github/actions/promote/to-pr
-        env:
-          INPUT_ISSUE_NUMBER: ${{ github.event.issue.number }}
-          INPUT_OWNER_LOGIN: ${{ needs.ownership.outputs.owner }}
-          INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          owner-login: ${{ needs.ownership.outputs.owner }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

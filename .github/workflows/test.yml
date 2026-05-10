@@ -121,6 +121,7 @@ jobs:
         uses: ./.github/actions/git/repo-shape
       - name: Detect runner + emit install/test commands
         id: runner
+        env:
           HAS_TESTS: ${{ steps.shape.outputs.has-tests }}
         shell: bash
         run: |
@@ -263,6 +264,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Assert PR body has Closes/Fixes/Resolves #N
+        env:
           PR_BODY: ${{ github.event.pull_request.body }}
         shell: bash
         run: |

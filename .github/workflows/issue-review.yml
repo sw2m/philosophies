@@ -33,6 +33,7 @@ jobs:
       has-anthropic-key: ${{ steps.keys.outputs.has-anthropic-key }}
     steps:
       - id: check
+        env:
           GH_TOKEN: ${{ github.token }}
           ORG: sw2m
           AUTHOR: ${{ github.event.issue.user.login }}
@@ -70,6 +71,7 @@ jobs:
         # presence as a job output so reviewer jobs can gate via `needs.*`.
         # (See pr-review.yml for the registration-failure history that
         # forced this restructuring.)
+        env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         shell: bash
@@ -96,6 +98,7 @@ jobs:
 
       - name: Detect spec:goal label
         id: label-check
+        env:
           LABELS_JSON: ${{ toJSON(github.event.issue.labels) }}
         shell: bash
         run: |
@@ -107,6 +110,7 @@ jobs:
           echo "is-goal-spec=$is_goal" >> "$GITHUB_OUTPUT"
 
       - name: Build prompt
+        env:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           IS_GOAL_SPEC: ${{ steps.label-check.outputs.is-goal-spec }}
@@ -225,12 +229,13 @@ jobs:
       - name: Run Gemini (composite action; org-member gate enforced inside)
         id: review
         uses: ./.github/actions/agents/gemini
-        env:
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_STDIN_FILE: stdin.txt
-          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: stdin.txt
+          actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (gemini)
+        env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
@@ -306,12 +311,13 @@ jobs:
       - name: Run Claude (composite action; org-member gate enforced inside)
         id: review
         uses: ./.github/actions/agents/claude
-        env:
-          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_STDIN_FILE: stdin.txt
-          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          stdin-file: stdin.txt
+          actor-override: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (claude)
+        env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
