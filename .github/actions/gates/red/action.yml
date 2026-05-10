@@ -29,7 +29,6 @@ runs:
         namespace: red
         agent: claude
         api-key: ${{ env.INPUT_ANTHROPIC_API_KEY }}
-        prompt: ${{ env.INPUT_PROMPT || '' }}
         retries: ${{ env.INPUT_MAX_RETRIES || '3' }}
         timeout: ${{ env.INPUT_AGENT_TIMEOUT_SECONDS || '900' }}
         validator: ./.github/scripts/vsdd/promote/to-pr/red.validator.ts
