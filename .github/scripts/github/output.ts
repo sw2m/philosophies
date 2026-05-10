@@ -2,7 +2,7 @@
 // $GITHUB_OUTPUT pattern that's repeated across every github-deno
 // script and standalone deno-run script in this repo.
 //
-// Standalone deno-run scripts (e.g. promote/to-pr/gates.ts) don't have
+// Standalone deno-run scripts (e.g. promote/to-pr/red.ts) don't have
 // `@actions/core` injected, so they can't call `core.setOutput(...)`.
 // This module is a runtime-agnostic equivalent.
 

@@ -8,5 +8,5 @@ runs:
   steps:
     - uses: sw2m/octoscript/action@main
     - id: run
-      run: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).red();
+      run: (await import("./scripts/vsdd/promote/to-pr/red.ts")).red();
       shell: octoscript {0}
