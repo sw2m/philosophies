@@ -25,6 +25,8 @@ runs:
 
     - name: Invoke gemini
       id: invoke
+      env:
+        GEMINI_API_KEY: ${{ env.INPUT_API_KEY }}
       run: |
         const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
         const parts = [];

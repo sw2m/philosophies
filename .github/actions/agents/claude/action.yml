@@ -25,6 +25,8 @@ runs:
 
     - name: Invoke claude
       id: invoke
+      env:
+        ANTHROPIC_API_KEY: ${{ env.INPUT_API_KEY }}
       run: |
         const { Claude } = await import("./.github/scripts/agents/claude.ts");
         const parts = [];
