@@ -401,6 +401,9 @@ jobs:
 
       - name: Upload prep data
         run: |
+          console.log("ACTIONS_RUNTIME_TOKEN present:", !!Deno.env.get("ACTIONS_RUNTIME_TOKEN"));
+          console.log("ACTIONS_RESULTS_URL present:", !!Deno.env.get("ACTIONS_RESULTS_URL"));
+          console.log("GITHUB_TOKEN present:", !!Deno.env.get("GITHUB_TOKEN"));
           const memoryPath = await Deno.stat("MEMORY.md").then(() => "MEMORY.md").catch(() => ".vsdd-philosophies/MEMORY.md");
           await artifact.set("prep", "memory", await Deno.readTextFile(memoryPath));
           await artifact.set("prep", "diff", await Deno.readTextFile("pr.diff"));
