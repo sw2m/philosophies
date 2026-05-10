@@ -34,15 +34,15 @@ runs:
     - name: Run agent
       id: run
       uses: sw2m/ci-agents/agent@main
-        with:
-          namespace: green
-          agent: claude
-          api-key: ${{ env.INPUT_ANTHROPIC_API_KEY }}
-          retries: ${{ env.INPUT_MAX_RETRIES || '3' }}
-          timeout: ${{ env.INPUT_AGENT_TIMEOUT_SECONDS || '900' }}
-          validator: ./.github/scripts/vsdd/promote/to-pr/green.validator.ts
-          on-retry: ./.github/scripts/vsdd/promote/to-pr/green.on-retry.ts
-          extra-args: "--allowed-tools Bash Edit Write Read Glob Grep --permission-mode bypassPermissions"
+      with:
+        namespace: green
+        agent: claude
+        api-key: ${{ env.INPUT_ANTHROPIC_API_KEY }}
+        retries: ${{ env.INPUT_MAX_RETRIES || '3' }}
+        timeout: ${{ env.INPUT_AGENT_TIMEOUT_SECONDS || '900' }}
+        validator: ./.github/scripts/vsdd/promote/to-pr/green.validator.ts
+        on-retry: ./.github/scripts/vsdd/promote/to-pr/green.on-retry.ts
+        extra-args: "--allowed-tools Bash Edit Write Read Glob Grep --permission-mode bypassPermissions"
 
     - name: Set bail output
       shell: octoscript {0}
