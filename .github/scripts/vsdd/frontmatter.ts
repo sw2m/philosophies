@@ -88,9 +88,9 @@ class Parse {
   private step(): boolean {
     const start = this.body.indexOf(OPEN, this.pos);
     if (start === -1) return false;
-    const end = this.body.indexOf(CLOSE, start + OPEN.length);
-    if (end === -1) return false;
-    this.pos = end + CLOSE.length;
+    let end = this.body.indexOf(CLOSE, start + OPEN.length);
+    if (end === -1) end = this.body.length;
+    this.pos = end + (end < this.body.length ? CLOSE.length : 0);
 
     const value = Parse.content(this.body.slice(start + OPEN.length, end));
     if (value !== null && value !== undefined) this.blocks.push(value);
