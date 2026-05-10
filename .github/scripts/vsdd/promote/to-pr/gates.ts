@@ -22,6 +22,7 @@ import * as output from "../../../github/output.ts";
 
 import * as inputs from "../../../github/inputs.ts";
 import * as shared from "../../../github/shared.ts";
+import Mustache from "npm:mustache@^4";
 // deno-lint-ignore no-explicit-any
 const git = (await import("npm:simple-git@^3")).default as any;
 const sg = git();
@@ -65,25 +66,16 @@ async function techContext(): Promise<{ title: string; body: string }> {
 
 
 
-/** Build the Phase 2 agent input as a string: prompt + DEFAULT_TEST_CMD +
- *  MEMORY.md + tech-spec title/body. Caller wraps in a Blob().stream()
- *  before passing to Claude. */
 async function buildPhase2Input(): Promise<string> {
   const ctx = await techContext();
-  const memory = await Deno.readTextFile("MEMORY.md");
-  return [
-    RED_PROMPT,
-    `DEFAULT_TEST_CMD=${Deno.env.get("DEFAULT_TEST_CMD") ?? ""}`,
-    "",
-    "--- MEMORY.md ---",
-    memory,
-    "",
-    "--- TECH-SPEC ISSUE TITLE ---",
-    ctx.title,
-    "",
-    "--- TECH-SPEC ISSUE BODY ---",
-    ctx.body,
-  ].join("\n");
+  const tmpl = await load("red.input.mustache");
+  return Mustache.render(tmpl, {
+    prompt: RED_PROMPT,
+    cmd: inputs.get("default-test-cmd") ?? "",
+    memory: await Deno.readTextFile("MEMORY.md"),
+    title: ctx.title,
+    body: ctx.body,
+  });
 }
 
 /** Build the Phase 4 agent input as a string. `meta` is null on the
