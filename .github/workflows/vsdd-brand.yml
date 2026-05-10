@@ -94,7 +94,6 @@ jobs:
 
       - name: Fetch PR file list (single call; reused below)
         id: files
-        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ needs.resolve-pr.outputs.pr-number }}
           REPO: ${{ github.repository }}
@@ -111,7 +110,6 @@ jobs:
 
       - name: Compute whitelist via brand.ts
         id: whitelist
-        env:
           PR_FILES: pr-files.json
         run: |
           const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
@@ -130,7 +128,6 @@ jobs:
       - name: Compute impl-content via classify-changes.sh
         id: impl
         if: steps.whitelist.outputs.whitelist != 'true'
-        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ needs.resolve-pr.outputs.pr-number }}
           REPO: ${{ github.repository }}
@@ -164,7 +161,6 @@ jobs:
 
       - name: Compute brand state via brand.ts
         id: brand-state
-        env:
           WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
           IMPL: ${{ steps.impl.outputs.impl }}
           MARKER: ${{ needs.marker.outputs.marker-present }}
@@ -179,7 +175,6 @@ jobs:
         shell: octoscript {0}
 
       - name: Post or delete vsdd:opt-out brand comment
-        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ needs.resolve-pr.outputs.pr-number }}
           REPO: ${{ github.repository }}

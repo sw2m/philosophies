@@ -10,12 +10,10 @@ runs:
 
     - name: Read goal issue
       uses: ./.github/actions/github/issue/read
-      env:
         INPUT_PREFIX: goal
 
     - name: Read orchestrator canonical tuple (#128)
       id: cardinality
-      env:
       run: |
         const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
         const { Comment } = await import("./.github/scripts/github/comment.ts");
@@ -47,7 +45,6 @@ runs:
       shell: octoscript {0}
 
     - name: Build agent prompt
-      env:
       run: |
         const memory = await Deno.readTextFile("MEMORY.md");
         const title = await shared.get("goal", "title") ?? "";
@@ -65,7 +62,6 @@ runs:
       uses: ./.github/actions/agents/claude
 
     - name: Parse tech-specs and open sub-issues
-      env:
       run: |
         const { Decompose } = await import("./.github/scripts/vsdd/promote/to-tech/decompose.ts");
         const { owner, repo } = context.repo;

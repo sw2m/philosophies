@@ -69,7 +69,6 @@ jobs:
       # `classify-changes` returns `tests-only=true|false` per commit.
       - name: Clause (a) — test-commits-only
         id: clause-a
-        env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -133,7 +132,6 @@ jobs:
       # `gh api repos/.../issues/<N>/comments` filtering.
       - name: Post Red-gate-cleared marker
         if: steps.clause-c.outputs.coverage-ok == 'true'
-        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
         shell: bash

@@ -14,7 +14,6 @@ runs:
         git config user.name "${{ env.INPUT_BOT_NAME }}"
         git config user.email "${{ env.INPUT_BOT_EMAIL }}"
     - id: scaffold
-      env:
       run: |
         const { Pull } = await import("./.github/scripts/github/pr.ts");
         const { owner, repo } = context.repo;

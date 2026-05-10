@@ -37,7 +37,6 @@ jobs:
       head-sha: ${{ steps.h.outputs.sha }}
     steps:
       - id: h
-        env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: echo "sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
@@ -62,7 +61,6 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch PR file list
-        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
@@ -74,7 +72,6 @@ jobs:
 
       - name: Compute whitelist via brand.ts
         id: whitelist
-        env:
           PR_FILES: pr-files.json
         run: |
           const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
@@ -93,7 +90,6 @@ jobs:
       - name: Compute impl-content via classify-changes.sh
         id: impl
         if: steps.whitelist.outputs.whitelist != 'true'
-        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
@@ -117,7 +113,6 @@ jobs:
           fi
 
       - name: Decide
-        env:
           WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
           IMPL: ${{ steps.impl.outputs.impl }}
           MARKER: ${{ needs.marker.outputs.marker-present }}

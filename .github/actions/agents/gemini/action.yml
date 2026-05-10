@@ -15,7 +15,6 @@ runs:
 
     - name: Verify org membership
       uses: ./.github/actions/github/org/verify
-      env:
         INPUT_ACTOR_OVERRIDE: ${{ env.INPUT_ACTOR_OVERRIDE }}
         INPUT_SENDER: ${{ github.event.sender.login }}
         INPUT_ORG: ${{ env.INPUT_ORG }}
@@ -25,7 +24,6 @@ runs:
 
     - name: Invoke gemini
       id: invoke
-      env:
       run: |
         const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
         const prompt = inputs.get("prompt");

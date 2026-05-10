@@ -9,7 +9,6 @@ runs:
   steps:
     - uses: sw2m/octoscript/action@main
     - id: create
-      env:
       run: |
         const { Issue } = await import("./.github/scripts/github/issue.ts");
         const { owner, repo } = context.repo;

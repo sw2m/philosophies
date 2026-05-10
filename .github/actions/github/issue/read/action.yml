@@ -10,7 +10,6 @@ runs:
   steps:
     - uses: sw2m/octoscript/action@main
     - id: read
-      env:
       run: |
         const { Issue } = await import("./.github/scripts/github/issue.ts");
         const ns = "${{ env.INPUT_PREFIX }}" || "issue";
