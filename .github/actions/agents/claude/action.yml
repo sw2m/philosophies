@@ -35,7 +35,7 @@ runs:
       run: npm install -g @anthropic-ai/claude-code@latest
 
     - name: Stage prompt input
-      if: ${{ inputs.prompt != '' }}
+      if: ${{ env.INPUT_PROMPT != '' }}
       shell: bash
       run: |
         mkdir -p "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}"

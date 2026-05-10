@@ -17,7 +17,7 @@ runs:
         const key = (name) => prefix ? `${prefix}-${name}` : name;
         const { owner, repo } = context.repo;
         const issue = new Issue({ api: github, owner, repo });
-        await issue.get({ issue_number: ${{ inputs.issue-number}} " });
+        await issue.get({ issue_number: ${{ env.INPUT_ISSUE_NUMBER }} });
         await shared.set(key("title"), issue.title);
         await shared.set(key("body"), issue.body ?? "");
         await shared.set(key("url"), issue.html_url);
