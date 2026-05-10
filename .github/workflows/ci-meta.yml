@@ -134,7 +134,7 @@ jobs:
       - name: Load eval context
         run: |
           const evalInput = await artifact.get("eval", "input");
-          if (!evalInput) { core.setFailed("eval/input artifact missing"); return; }
+          if (!evalInput) { core.setFailed("eval/input artifact missing"); exit(1); }
           await shared.set("agent", "context", evalInput);
         shell: octoscript {0}
 
@@ -249,7 +249,7 @@ jobs:
               console.error("--- raw output ---");
               console.error(raw);
               core.setFailed("verdict extraction failed");
-              return;
+              exit(1);
             }
             // Summary is whatever the agent appended after the closing -->
             const closeIdx = raw.indexOf("-->");
@@ -283,7 +283,7 @@ jobs:
       - name: Load eval context
         run: |
           const evalInput = await artifact.get("eval", "input");
-          if (!evalInput) { core.setFailed("eval/input artifact missing"); return; }
+          if (!evalInput) { core.setFailed("eval/input artifact missing"); exit(1); }
           await shared.set("agent", "context", evalInput);
         shell: octoscript {0}
 
@@ -419,7 +419,7 @@ jobs:
               console.error("--- raw output ---");
               console.error(raw);
               core.setFailed("verdict extraction failed");
-              return;
+              exit(1);
             }
             // Summary is whatever the agent appended after the closing -->
             const closeIdx = raw.indexOf("-->");
