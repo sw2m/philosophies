@@ -13,7 +13,6 @@
 // per-category Phase 3 split (#167) and any future ci-meta budget will
 // reuse this shape.
 
-import { parse as fm } from "./frontmatter.ts";
 
 export const INITIAL = 7;
 export const STEP = 2;
@@ -39,7 +38,7 @@ export class Budget {
 
   /** True iff `body` contains a `vsdd: { <key>: { reviewer: <slug> } }` block. */
   authored(body: string, slug: string): boolean {
-    for (const block of fm(body)) {
+    for (const block of serde.parse(body, "frontmatter")) {
       if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
       const ns = (block as Record<string, unknown>).vsdd;
       if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;

@@ -17,7 +17,6 @@
 //
 // Spec: sw2m/philosophies#128. Goal: sw2m/philosophies#125.
 
-import { parse as fm } from "../../frontmatter.ts";
 
 const KEY = "phase-1c";  // subkey under vsdd: namespace
 
@@ -42,7 +41,7 @@ export function read(body: string, slug: Reviewer):
   & { reviewer: Reviewer; verdict?: string }
   & Partial<Tuple>
   | null {
-  const blocks = fm(body);
+  const blocks = serde.parse(body, "frontmatter");
   let hit: Record<string, unknown> | null = null;
   for (const block of blocks) {
     if (typeof block !== "object" || block === null || Array.isArray(block)) continue;

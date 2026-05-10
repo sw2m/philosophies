@@ -34,7 +34,7 @@ runs:
         if (prompt && prompt.trim()) parts.push(prompt);
         const ctx = await shared.get("agent", "context");
         if (ctx && ctx.trim()) parts.push(ctx);
-        if (!parts.length) { core.setFailed("No content to send to claude."); return; }
+        if (!parts.length) { core.setFailed("No content to send to claude."); exit(1); }
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);
         const claude = new Claude({

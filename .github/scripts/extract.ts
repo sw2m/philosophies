@@ -40,7 +40,6 @@
 //   - 2 — usage error (missing flag, invalid value)
 
 import jsonata from "npm:jsonata@^2";
-import { parse as parseBlocks } from "./vsdd/frontmatter.ts";
 import { encodeHex } from "jsr:@std/encoding@^1/hex";
 
 type Args = {
@@ -116,7 +115,7 @@ function flatten(result: unknown): unknown[] {
  *  of written file paths. */
 export async function extract(opts: Args): Promise<string[]> {
   const raw = await Deno.readTextFile(opts.bodyFile);
-  const blocks = parseBlocks(raw);
+  const blocks = serde.parse(raw, "frontmatter");
 
   let result: unknown;
   try {

@@ -149,7 +149,7 @@ jobs:
       - name: Load prompt
         run: |
           const prompt = await artifact.get("prep", "prompt");
-          if (!prompt) { core.setFailed("prep/prompt artifact missing"); return; }
+          if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
           await shared.set("agent", "prompt", prompt);
         shell: octoscript {0}
 
@@ -234,7 +234,7 @@ jobs:
       - name: Load prompt
         run: |
           const prompt = await artifact.get("prep", "prompt");
-          if (!prompt) { core.setFailed("prep/prompt artifact missing"); return; }
+          if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
           await shared.set("agent", "prompt", prompt);
         shell: octoscript {0}
 

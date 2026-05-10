@@ -375,7 +375,7 @@ jobs:
       - name: Run symbol audit
         run: |
           const diff = await artifact.get("prep", "diff");
-          if (!diff) { core.setFailed("prep/diff artifact missing"); return; }
+          if (!diff) { core.setFailed("prep/diff artifact missing"); exit(1); }
           await Deno.writeTextFile("pr.diff", diff);
           await shell("bash .vsdd-philosophies/.github/scripts/symbol-audit.sh pr.diff symbol-audit.md");
           const body = await Deno.readTextFile("symbol-audit.md");

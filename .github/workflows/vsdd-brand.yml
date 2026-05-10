@@ -53,13 +53,13 @@ jobs:
             await output.set('pr-number', String(pr.number));
             await output.set('head-sha', pr.head.sha);
             await output.set('proceed', 'true');
-            return;
+            exit(0);
           }
           if (event === 'issue_comment') {
             const issue = context.payload.issue;
             if (!issue || !issue.pull_request) {
               await output.set('proceed', 'false');
-              return;
+              exit(0);
             }
             const {data: pr} = await github.rest.pulls.get({
               ...context.repo, pull_number: issue.number,
@@ -67,7 +67,7 @@ jobs:
             await output.set('pr-number', String(pr.number));
             await output.set('head-sha', pr.head.sha);
             await output.set('proceed', 'true');
-            return;
+            exit(0);
           }
           await output.set('proceed', 'false');
         shell: octoscript {0}

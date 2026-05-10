@@ -130,7 +130,7 @@ jobs:
             if (!refAt) {
               core.setFailed(`Could not resolve body-edit timestamp for issue #${issue}; refusing to evaluate verdict freshness.`);
               await output.set("cleared", "false");
-              return;
+              exit(0);
             }
             const refEpoch = Math.floor(new Date(refAt).getTime() / 1000);
             console.log(`Phase 1c verdict-freshness reference: ${refAt} (epoch ${refEpoch}); per #93 this is the body-edit timestamp.`);
@@ -166,22 +166,22 @@ jobs:
               if (!v) {
                 core.setFailed(`No Phase 1c review from ${slug} on this issue. Edit the issue body to re-trigger Phase 1c review.`);
                 await output.set("cleared", "false");
-                return;
+                exit(0);
               }
               if (!v.verdict) {
                 core.setFailed(`Phase 1c ${slug} comment found but verdict frontmatter is missing/unparseable; treating as fail.`);
                 await output.set("cleared", "false");
-                return;
+                exit(0);
               }
               if (v.epoch < refEpoch) {
                 core.setFailed(`Phase 1c ${slug} verdict (${v.verdict}) is stale — posted at ${v.created}, issue body last edited at ${refAt}. Edit the issue body to re-trigger Phase 1c.`);
                 await output.set("cleared", "false");
-                return;
+                exit(0);
               }
               if (v.verdict !== "pass") {
                 core.setFailed(`Phase 1c ${slug} verdict is '${v.verdict}'. Address the blocking concerns in the review comment, edit the issue, and re-run Phase 1c.`);
                 await output.set("cleared", "false");
-                return;
+                exit(0);
               }
               console.log(`✓ ${slug} verdict pass at ${v.created}`);
             }
@@ -192,7 +192,7 @@ jobs:
             if (orch && orch.epoch >= refEpoch && orch.verdict === "fail") {
               core.setFailed(`Phase 1c orchestrator verdict is 'fail' at ${orch.created}. See the orchestrator comment for blocking concerns.`);
               await output.set("cleared", "false");
-              return;
+              exit(0);
             }
 
             await output.set("cleared", "true");

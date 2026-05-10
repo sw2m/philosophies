@@ -6,7 +6,6 @@
 // to TS+Deno and uses `vsdd/frontmatter.ts` for marker detection so all
 // HTML-comment metadata flows through one parser.
 
-import { parse as fm } from "./frontmatter.ts";
 
 /** Subkey under `vsdd:` namespace. Inline-form marker:
  *  `<!-- vsdd: red-gate-cleared -->` parses to `{vsdd: "red-gate-cleared"}`. */
@@ -48,7 +47,7 @@ export function branded(
  *  so the check is `block.vsdd === TOKEN`. */
 export function marked(body: unknown): boolean {
   if (typeof body !== "string" || body.length === 0) return false;
-  return fm(body).some((b) => {
+  return serde.parse(body, "frontmatter").some((b) => {
     if (typeof b !== "object" || b === null || Array.isArray(b)) return false;
     return (b as Record<string, unknown>).vsdd === TOKEN;
   });

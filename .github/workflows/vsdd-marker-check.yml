@@ -65,7 +65,7 @@ jobs:
                   if (status2 === 403) {
                     core.notice("Rate-limited twice; failing-closed (marker-present=false).");
                     await output.set("marker-present", "false");
-                    return "absent";
+                    exit(0);
                   }
                   throw e2;
                 }
@@ -76,5 +76,5 @@ jobs:
 
             const present = result === "found" ? "true" : "false";
             await output.set("marker-present", present);
-            return result;
+
         shell: octoscript {0}
