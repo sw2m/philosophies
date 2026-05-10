@@ -38,14 +38,20 @@ const GREEN_PROMPT = await load("green.prompt.md");
 const GREEN_NORUN_PROMPT = await load("green-no-runner.prompt.md");
 const REGRESSION_PROMPT = await load("regression.prompt.md");
 
-/** Run a shell command, sending stdout+stderr to `log`. Returns exit code. */
-async function shell(cmd: string, log: string): Promise<number> {
+// shell() is available from octoscript globals when run via octoscript.
+// When imported as a module, we need our own.
+async function run(cmd: string): Promise<{ code: number; stdout: Uint8Array; stderr: Uint8Array }> {
   const proc = new Deno.Command("bash", {
-    args: ["-c", `${cmd} > ${log} 2>&1`],
-    stdout: "null",
-    stderr: "null",
+    args: ["-c", cmd],
+    stdout: "piped",
+    stderr: "piped",
   }).spawn();
-  return (await proc.status).code;
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).bytes(),
+    new Response(proc.stderr).bytes(),
+  ]);
+  const { code } = await proc.status;
+  return { code, stdout, stderr };
 }
 
 /** Read tech-spec title + body files written by an earlier action step. */
@@ -56,16 +62,7 @@ async function techContext(): Promise<{ title: string; body: string }> {
   };
 }
 
-/** Tail the last N lines of a file, returning the slice (best-effort). */
-async function tail(path: string, n: number): Promise<string> {
-  try {
-    const text = await Deno.readTextFile(path);
-    const lines = text.split("\n");
-    return lines.slice(Math.max(0, lines.length - n)).join("\n");
-  } catch {
-    return "";
-  }
-}
+
 
 /** Build the Phase 2 agent input as a string: prompt + DEFAULT_TEST_CMD +
  *  MEMORY.md + tech-spec title/body. Caller wraps in a Blob().stream()
@@ -128,6 +125,8 @@ export async function red(): Promise<void> {
   let passed = false;
   let lastFailure = "";
   let metaFinalPath = "";
+  let newResult = { code: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
+  let regResult = { code: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
 
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     console.log(`\n=== Phase 2 — Author tests (attempt ${attempt} of ${ATTEMPTS}) ===`);
@@ -163,8 +162,10 @@ export async function red(): Promise<void> {
     console.log(`Phase 2 regression test command: ${meta.regression}`);
 
     console.log(`\n=== Phase 3 — Red gate (attempt ${attempt}) ===`);
-    const newRc = await shell(meta["red-green"], `${RUNNER_TEMP}/red-new.log`);
-    const regRc = await shell(meta.regression, `${RUNNER_TEMP}/red-reg.log`);
+    const newResult = await run(meta["red-green"]);
+    const regResult = await run(meta.regression);
+    const newRc = newResult.code;
+    const regRc = regResult.code;
     console.log(`  new tests exit: ${newRc} (expect non-zero)`);
     console.log(`  regression tests exit: ${regRc} (expect zero)`);
 
@@ -199,12 +200,12 @@ export async function red(): Promise<void> {
       "",
       "Last new-tests output:",
       "```",
-      await tail(`${RUNNER_TEMP}/red-new.log`, 100),
+      new TextDecoder().decode(newResult.stdout).split("\n").slice(-100).join("\n"),
       "```",
       "",
       "Last regression-tests output:",
       "```",
-      await tail(`${RUNNER_TEMP}/red-reg.log`, 100),
+      new TextDecoder().decode(regResult.stdout).split("\n").slice(-100).join("\n"),
       "```",
     ].join("\n");
     await output.set("bail", bail);
@@ -231,6 +232,8 @@ export async function green(): Promise<void> {
 
   let passed = false;
   let lastFailure = "";
+  let newResult = { code: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
+  let regResult = { code: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
 
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     console.log(`\n=== Phase 4 — Implement (attempt ${attempt} of ${ATTEMPTS}) ===`);
@@ -259,8 +262,10 @@ export async function green(): Promise<void> {
     }
 
     console.log(`\n=== Phase 5 — Green gate (attempt ${attempt}) ===`);
-    const newRc = await shell(meta!["red-green"], `${RUNNER_TEMP}/green-new.log`);
-    const regRc = await shell(meta!.regression, `${RUNNER_TEMP}/green-reg.log`);
+    const newResult = await run(meta!["red-green"]);
+    const regResult = await run(meta!.regression);
+    const newRc = newResult.code;
+    const regRc = regResult.code;
     console.log(`  new tests exit: ${newRc} (expect zero)`);
     console.log(`  regression tests exit: ${regRc} (expect zero)`);
 
@@ -289,8 +294,8 @@ export async function green(): Promise<void> {
     console.error(`::error::Green gate exhausted retries. Last failure: ${lastFailure}`);
     const lines = [lastFailure, ""];
     if (!noRunner) {
-      lines.push("Last new-tests output:", "```", await tail(`${RUNNER_TEMP}/green-new.log`, 100), "```", "");
-      lines.push("Last regression-tests output:", "```", await tail(`${RUNNER_TEMP}/green-reg.log`, 100), "```");
+      lines.push("Last new-tests output:", "```", new TextDecoder().decode(newResult.stdout).split("\n").slice(-100).join("\n"), "```", "");
+      lines.push("Last regression-tests output:", "```", new TextDecoder().decode(regResult.stdout).split("\n").slice(-100).join("\n"), "```");
     }
     await output.set("bail", lines.join("\n"));
     await output.set("bailed", "true");
@@ -308,6 +313,7 @@ export async function regression(): Promise<void> {
   const ATTEMPTS = MAX_RETRIES + 1;
   let passed = false;
   let lastFailure = "";
+  let regRun = { code: 0, stdout: new Uint8Array(), stderr: new Uint8Array() };
 
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     console.log(`\n=== Regression — Author regression tests (attempt ${attempt} of ${ATTEMPTS}) ===`);
@@ -364,7 +370,8 @@ export async function regression(): Promise<void> {
     console.log(`Regression command: ${meta.command}`);
 
     console.log(`\n=== Regression — Run (attempt ${attempt}) ===`);
-    const rc = await shell(meta.command, `${RUNNER_TEMP}/regression.log`);
+    const regRun = await run(meta.command);
+    const rc = regRun.code;
     console.log(`  regression exit: ${rc} (expect zero)`);
 
     if (rc === 0) {
@@ -387,7 +394,7 @@ export async function regression(): Promise<void> {
       "",
       "Last regression output:",
       "```",
-      await tail(`${RUNNER_TEMP}/regression.log`, 100),
+      new TextDecoder().decode(regRun.stdout).split("\n").slice(-100).join("\n"),
       "```",
     ].join("\n");
     await output.set("bail", bail);
