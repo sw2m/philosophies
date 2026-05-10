@@ -21,6 +21,9 @@ import { read as readPhase2 } from "../../phase-2/frontmatter.ts";
 import * as output from "../../../github/output.ts";
 
 import * as inputs from "../../../github/inputs.ts";
+// deno-lint-ignore no-explicit-any
+const git = (await import("npm:simple-git@^3")).default as any;
+const sg = git();
 
 const RUNNER_TEMP = Deno.env.get("RUNNER_TEMP") ?? "/tmp";
 const BRANCH = inputs.get("branch") ?? "";
@@ -43,29 +46,6 @@ async function shell(cmd: string, log: string): Promise<number> {
     stderr: "null",
   }).spawn();
   return (await proc.status).code;
-}
-
-/** Run a git command with stdio inherited. Returns exit code. */
-async function git(...args: string[]): Promise<number> {
-  const proc = new Deno.Command("git", {
-    args,
-    stdout: "inherit",
-    stderr: "inherit",
-  }).spawn();
-  return (await proc.status).code;
-}
-
-/** Stage everything, commit (if there are staged changes) with `msg`,
- *  then push the current `BRANCH`. Returns true iff a commit was made. */
-async function commitPush(msg: string): Promise<boolean> {
-  await git("add", ".");
-  const cached = await new Deno.Command("git", {
-    args: ["diff", "--cached", "--quiet"],
-  }).output();
-  if (cached.code === 0) return false; // nothing staged
-  await git("commit", "-m", msg);
-  await git("push", "origin", BRANCH);
-  return true;
 }
 
 /** Read tech-spec title + body files written by an earlier action step. */
@@ -208,8 +188,8 @@ export async function red(): Promise<void> {
     }
     console.error(`::warning::${lastFailure}`);
     // Reset working tree before retry.
-    await git("checkout", "--", ".");
-    await git("clean", "-fd");
+    await sg.checkout(["--", "."]);
+    await sg.clean("f", ["-d"]);
   }
 
   if (!passed) {
@@ -261,8 +241,8 @@ export async function green(): Promise<void> {
       lastFailure =
         `Phase 4 agent (attempt ${attempt}) exited non-zero on both primary and fallback models.`;
       console.error(`::warning::${lastFailure}`);
-      await git("checkout", "--", ".");
-      await git("clean", "-fd");
+      await sg.checkout(["--", "."]);
+      await sg.clean("f", ["-d"]);
       continue;
     }
 
@@ -301,8 +281,8 @@ export async function green(): Promise<void> {
     }
     console.error(`::warning::${lastFailure}`);
     // Discard the bad Phase 4 attempt; keep the committed Phase 2 tests.
-    await new Deno.Command("git", { args: ["stash", "--include-untracked"] }).output();
-    await new Deno.Command("git", { args: ["stash", "drop"] }).output();
+    await sg.stash(["--include-untracked"]);
+    try { await sg.stash(["drop"]); } catch {}
   }
 
   if (!passed) {
@@ -396,8 +376,8 @@ export async function regression(): Promise<void> {
 
     lastFailure = `Regression gate FAIL: regression tests failed — change broke existing behavior. attempt ${attempt} of ${ATTEMPTS}.`;
     console.error(`::warning::${lastFailure}`);
-    await git("checkout", "--", ".");
-    await git("clean", "-fd");
+    await sg.checkout(["--", "."]);
+    await sg.clean("f", ["-d"]);
   }
 
   if (!passed) {
@@ -426,4 +406,15 @@ if (import.meta.main) {
     console.error("usage: gates.ts <red|green>");
     Deno.exit(2);
   }
+}
+
+/** Stage everything, commit (if there are staged changes) with `msg`,
+ *  then push. Returns true iff a commit was made. */
+async function commitPush(msg: string): Promise<boolean> {
+  await sg.add(".");
+  const status = await sg.status();
+  if (status.isClean()) return false;
+  await sg.commit(msg);
+  await sg.push("origin", BRANCH);
+  return true;
 }
