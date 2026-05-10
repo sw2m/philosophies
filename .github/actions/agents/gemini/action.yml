@@ -34,19 +34,15 @@ runs:
       shell: bash
       run: npm install -g @google/gemini-cli@latest
 
-    - name: Stage prompt input
-      if: ${{ env.INPUT_PROMPT != '' }}
-      shell: bash
-      run: |
-        mkdir -p "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}"
-        printf '%s' "${{ env.INPUT_PROMPT }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}/prompt"
 
     - name: Invoke gemini
       id: invoke
       env:
       run: |
         const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
+        const prompt = inputs.get("prompt");
         const parts = [];
+        if (prompt) parts.push(prompt);
         for (const name of await shared.list()) {
           const content = await shared.get(name);
           if (content) parts.push(content);
