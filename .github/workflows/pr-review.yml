@@ -431,11 +431,20 @@ jobs:
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
         env:
-          REVIEW: ${{ steps.review.outputs.result }}
+          
         run: |
-            const { extract } = await import("././.github/scripts/vsdd/verdict.ts");
-            const raw = Deno.env.get("REVIEW") ?? "";
-            const { verdict, body } = extract(raw, "phase-3");
+            const resultJson = await shared.get("review", "result");
+            const raw = await shared.get("review", "raw") ?? "";
+            let verdict = null;
+            if (resultJson) {
+              const result = JSON.parse(resultJson);
+              const blocks = Array.isArray(result) ? result : [result];
+              for (const block of blocks) {
+                const v = block?.vsdd?.["phase-3"]?.verdict;
+                if (v === "pass" || v === "fail") { verdict = v; break; }
+              }
+            }
+            const body = raw.includes("-->") ? raw.slice(raw.indexOf("-->") + 3).trim() : raw;
             if (verdict !== "pass" && verdict !== "fail") {
               core.setFailed("Gemini output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
             }
@@ -508,11 +517,20 @@ jobs:
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         env:
-          REVIEW: ${{ steps.review.outputs.result }}
+          
         run: |
-            const { extract } = await import("././.github/scripts/vsdd/verdict.ts");
-            const raw = Deno.env.get("REVIEW") ?? "";
-            const { verdict, body } = extract(raw, "phase-3");
+            const resultJson = await shared.get("review", "result");
+            const raw = await shared.get("review", "raw") ?? "";
+            let verdict = null;
+            if (resultJson) {
+              const result = JSON.parse(resultJson);
+              const blocks = Array.isArray(result) ? result : [result];
+              for (const block of blocks) {
+                const v = block?.vsdd?.["phase-3"]?.verdict;
+                if (v === "pass" || v === "fail") { verdict = v; break; }
+              }
+            }
+            const body = raw.includes("-->") ? raw.slice(raw.indexOf("-->") + 3).trim() : raw;
             if (verdict !== "pass" && verdict !== "fail") {
               core.setFailed("Claude output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
             }

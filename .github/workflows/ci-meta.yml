@@ -226,37 +226,36 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
-        env:
-          REVIEW: ${{ steps.review.outputs.result }}
         run: |
-          
-          const raw = Deno.env.get("REVIEW") ?? "";
-
-            // Find the vsdd:ci-meta block. Block content has
-            // {verdict, rationale, gaps}; we attach reviewer + summary
-            // and write the JSON for downstream consensus consumption.
-            let payload = null;
-            for (const block of serde.parse(raw, "frontmatter")) {
-              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-              const ns = (block as Record<string, unknown>).vsdd;
-              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
-              const inner = (ns as Record<string, unknown>)["ci-meta"];
-              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
-              const v = (inner as Record<string, unknown>).verdict;
-              if (v !== "pass" && v !== "fail") continue;
-              payload = inner as Record<string, unknown>;
-              break;
-            }
-            if (!payload) {
-              console.error("::error::Could not extract a vsdd:ci-meta verdict from gemini output.");
-              console.error("--- raw output ---");
-              console.error(raw);
-              core.setFailed("verdict extraction failed");
-              exit(1);
-            }
-            // Summary is whatever the agent appended after the closing -->
-            const closeIdx = raw.indexOf("-->");
-            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
+          const resultJson = await shared.get("eval", "result");
+          const raw = await shared.get("eval", "raw") ?? "";
+          if (!resultJson) {
+            console.error("::error::No structured result from agent.");
+            console.error("--- raw output ---");
+            console.error(raw);
+            core.setFailed("verdict extraction failed");
+            exit(1);
+          }
+          const result = JSON.parse(resultJson);
+          const blocks = Array.isArray(result) ? result : [result];
+          let payload = null;
+          for (const block of blocks) {
+            if (typeof block !== "object" || block === null) continue;
+            const ns = block.vsdd;
+            if (typeof ns !== "object" || ns === null) continue;
+            const inner = ns["ci-meta"];
+            if (typeof inner !== "object" || inner === null) continue;
+            if (inner.verdict !== "pass" && inner.verdict !== "fail") continue;
+            payload = inner;
+            break;
+          }
+          if (!payload) {
+            console.error("::error::Structured result missing vsdd.ci-meta.verdict.");
+            console.error(resultJson);
+            core.setFailed("verdict extraction failed");
+            exit(1);
+          }
+          const summary = raw.includes("-->") ? raw.slice(raw.indexOf("-->") + 3).trim() : "";
 
             const out = { ...payload, reviewer: "gemini", summary };
             const outJson = JSON.stringify(out, null, 2);
@@ -399,37 +398,36 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
-        env:
-          REVIEW: ${{ steps.review.outputs.result }}
         run: |
-          
-          const raw = Deno.env.get("REVIEW") ?? "";
-
-            // Find the vsdd:ci-meta block. Block content has
-            // {verdict, rationale, gaps}; we attach reviewer + summary
-            // and write the JSON for downstream consensus consumption.
-            let payload = null;
-            for (const block of serde.parse(raw, "frontmatter")) {
-              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-              const ns = (block as Record<string, unknown>).vsdd;
-              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
-              const inner = (ns as Record<string, unknown>)["ci-meta"];
-              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
-              const v = (inner as Record<string, unknown>).verdict;
-              if (v !== "pass" && v !== "fail") continue;
-              payload = inner as Record<string, unknown>;
-              break;
-            }
-            if (!payload) {
-              console.error("::error::Could not extract a vsdd:ci-meta verdict from claude output.");
-              console.error("--- raw output ---");
-              console.error(raw);
-              core.setFailed("verdict extraction failed");
-              exit(1);
-            }
-            // Summary is whatever the agent appended after the closing -->
-            const closeIdx = raw.indexOf("-->");
-            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
+          const resultJson = await shared.get("eval", "result");
+          const raw = await shared.get("eval", "raw") ?? "";
+          if (!resultJson) {
+            console.error("::error::No structured result from agent.");
+            console.error("--- raw output ---");
+            console.error(raw);
+            core.setFailed("verdict extraction failed");
+            exit(1);
+          }
+          const result = JSON.parse(resultJson);
+          const blocks = Array.isArray(result) ? result : [result];
+          let payload = null;
+          for (const block of blocks) {
+            if (typeof block !== "object" || block === null) continue;
+            const ns = block.vsdd;
+            if (typeof ns !== "object" || ns === null) continue;
+            const inner = ns["ci-meta"];
+            if (typeof inner !== "object" || inner === null) continue;
+            if (inner.verdict !== "pass" && inner.verdict !== "fail") continue;
+            payload = inner;
+            break;
+          }
+          if (!payload) {
+            console.error("::error::Structured result missing vsdd.ci-meta.verdict.");
+            console.error(resultJson);
+            core.setFailed("verdict extraction failed");
+            exit(1);
+          }
+          const summary = raw.includes("-->") ? raw.slice(raw.indexOf("-->") + 3).trim() : "";
 
             const out = { ...payload, reviewer: "claude", summary };
             const outJson = JSON.stringify(out, null, 2);

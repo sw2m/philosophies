@@ -165,14 +165,12 @@ jobs:
           INPUT_FORMAT: frontmatter
 
       - name: Post review with budget-decay reclassification (gemini)
-        env:
-          REVIEW: ${{ steps.review.outputs.result }}
         run: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
             const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
             const budget = new budgetMod.Budget({ key: "phase-1c" });
             const SLUG = "gemini";
-            const reviewBody = Deno.env.get("REVIEW") ?? "";
+            const reviewBody = await shared.get("review", "raw") ?? "";
             // Round counting: paginate through all issue comments, count
             // prior frontmatter comments authored by this reviewer.
             const allComments = await github.paginate(
@@ -254,14 +252,12 @@ jobs:
           INPUT_FORMAT: frontmatter
 
       - name: Post review with budget-decay reclassification (claude)
-        env:
-          REVIEW: ${{ steps.review.outputs.result }}
         run: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
             const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
             const budget = new budgetMod.Budget({ key: "phase-1c" });
             const SLUG = "claude";
-            const reviewBody = Deno.env.get("REVIEW") ?? "";
+            const reviewBody = await shared.get("review", "raw") ?? "";
             // Round counting: paginate through all issue comments, count
             // prior frontmatter comments authored by this reviewer.
             const allComments = await github.paginate(
