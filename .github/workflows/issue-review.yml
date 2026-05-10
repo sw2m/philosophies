@@ -152,8 +152,8 @@ jobs:
         run: |
           const prompt = await artifact.get("prep", "prompt");
           if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
-          await shared.set("review.gemini", "prompt", prompt);
-          await shared.set("review.claude", "prompt", prompt);
+          await shared.set("review.gemini", "input", prompt);
+          await shared.set("review.claude", "input", prompt);
         shell: octoscript {0}
 
       - name: Run panel

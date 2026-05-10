@@ -108,8 +108,8 @@ jobs:
             hasTests: Deno.env.get("HAS_TESTS") || "false",
           });
           const input = prompt + "\n\n" + evalInput;
-          await shared.set("eval.gemini", "prompt", input);
-          await shared.set("eval.claude", "prompt", input);
+          await shared.set("eval.gemini", "input", input);
+          await shared.set("eval.claude", "input", input);
         shell: octoscript {0}
 
       - name: Run panel
