@@ -20,21 +20,20 @@ import { Claude } from "../../../agents/claude.ts";
 import { read as readPhase2 } from "../../phase-2/frontmatter.ts";
 import * as output from "../../../github/output.ts";
 
+import * as inputs from "../../../github/inputs.ts";
+
 const RUNNER_TEMP = Deno.env.get("RUNNER_TEMP") ?? "/tmp";
-const BRANCH = Deno.env.get("BRANCH")!;
-const ISSUE = Deno.env.get("ISSUE_NUMBER")!;
-const MAX_RETRIES = Number(Deno.env.get("MAX_RETRIES") ?? "3");
-const TIMEOUT = Number(Deno.env.get("AGENT_TIMEOUT_SECONDS") ?? "900");
+const BRANCH = inputs.get("branch") ?? "";
+const ISSUE = inputs.get("issue-number") ?? "";
+const MAX_RETRIES = Number(inputs.get("max-retries") ?? "3");
+const TIMEOUT = Number(inputs.get("agent-timeout-seconds") ?? "900");
 
 const HERE = new URL(".", import.meta.url);
-const RED_PROMPT = await Deno.readTextFile(new URL("./red.prompt.md", HERE));
-const GREEN_PROMPT = await Deno.readTextFile(new URL("./green.prompt.md", HERE));
-const GREEN_NORUN_PROMPT = await Deno.readTextFile(
-  new URL("./green-no-runner.prompt.md", HERE),
-);
-const REGRESSION_PROMPT = await Deno.readTextFile(
-  new URL("./regression.prompt.md", HERE),
-);
+const load = (name: string) => Deno.readTextFile(new URL(`./${name}`, HERE));
+const RED_PROMPT = await load("red.prompt.md");
+const GREEN_PROMPT = await load("green.prompt.md");
+const GREEN_NORUN_PROMPT = await load("green-no-runner.prompt.md");
+const REGRESSION_PROMPT = await load("regression.prompt.md");
 
 /** Run a shell command, sending stdout+stderr to `log`. Returns exit code. */
 async function shell(cmd: string, log: string): Promise<number> {
