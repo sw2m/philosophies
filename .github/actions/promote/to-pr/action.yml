@@ -10,11 +10,9 @@ runs:
     - uses: sw2m/octoscript/action@main
 
     - name: Verify org membership
+      uses: ./.github/actions/github/org/verify
       env:
-      run: |
-        const org = await import("./.github/scripts/github/org.ts");
-        await org.verify({ api: github, core, sender: "${{ env.INPUT_OWNER_LOGIN }}" });
-      shell: octoscript {0}
+        INPUT_SENDER: ${{ env.INPUT_OWNER_LOGIN }}
 
     - name: Read tech-spec issue
       id: read

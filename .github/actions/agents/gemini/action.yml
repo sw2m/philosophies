@@ -14,17 +14,12 @@ runs:
     - uses: sw2m/octoscript/action@main
 
     - name: Verify org membership
+      uses: ./.github/actions/github/org/verify
       env:
-      run: |
-        const org = await import("./.github/scripts/github/org.ts");
-        await org.verify({
-          api: github, core,
-          org: "${{ env.INPUT_ORG }}",
-          actor: "${{ env.INPUT_ACTOR_OVERRIDE }}",
-          sender: "${{ github.event.sender.login }}" || "${{ github.actor }}",
-          bot: "${{ env.INPUT_TRUST_GITHUB_ACTIONS_BOT }}" === "true",
-        });
-      shell: octoscript {0}
+        INPUT_ACTOR_OVERRIDE: ${{ env.INPUT_ACTOR_OVERRIDE }}
+        INPUT_SENDER: ${{ github.event.sender.login }}
+        INPUT_ORG: ${{ env.INPUT_ORG }}
+        INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ env.INPUT_TRUST_GITHUB_ACTIONS_BOT }}
 
     - uses: actions/setup-node@v6
       with:
