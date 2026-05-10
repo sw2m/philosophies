@@ -1,0 +1,46 @@
+# OUTPUT FORMAT (strict JSON)
+
+Your response must be a single JSON object. No preamble, no markdown fences,
+no explanation outside the JSON. The JSON must validate against this schema:
+
+```json
+{
+  "verdict": "pass" or "fail",
+  "rationale": "one paragraph summarizing the evaluation",
+  "gaps": [
+    {
+      "title": "[ci-meta] short description (max 60 chars)",
+      "body": "Goal-spec form. Describe the problem only."
+    }
+  ]
+}
+```
+
+verdict: "pass" if gaps are non-critical. "fail" if any gap is critical.
+
+# TASK
+
+You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
+
+The canonical VSDD doc is embedded below. Every file under `.github/` is
+embedded in the eval-input context. You have the full repo checkout —
+read files from disk for additional context.
+
+Repo-shape context:
+  repo-kind: {{{repoKind}}}
+  has-tests: {{{hasTests}}}
+
+Use this to decide §VIII applicability:
+- code repo: Phase 2a/2b and §VIII are applicable
+- docs repo: Phase 2a/2b and §VIII are N/A
+
+Evaluate whether the workflows correctly enforce:
+- Phase 1c (Spec Review Gate)
+- Phase 2a (Red Gate) — if applicable
+- Phase 2b (Green Gate) — if applicable
+- 4-Result Rule (§VIII) — if applicable
+- Phase 3 (adversarial review)
+- §IX (multi-word symbol audit)
+- Spec discipline (§VII)
+
+Classify each: ENFORCED, PARTIAL, MISSING, or N/A.

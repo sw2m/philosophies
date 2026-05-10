@@ -7,6 +7,38 @@ runs:
   using: composite
   steps:
     - uses: sw2m/octoscript/action@main
-    - id: run
-      run: (await import("./scripts/vsdd/promote/to-pr/regression.ts")).regression();
+
+    - name: Build prompt
       shell: octoscript {0}
+      run: |
+        const HERE = "./.github/scripts/vsdd/promote/to-pr/";
+        const prompt = await Deno.readTextFile(HERE + "regression.prompt.md");
+        const memory = await Deno.readTextFile("MEMORY.md");
+        const title = await shared.get("tech", "title") || "";
+        const body = await shared.get("tech", "body") || "";
+        const rendered = [prompt, "--- MEMORY.md ---", memory, "", "--- TECH-SPEC ISSUE TITLE ---", title, "", "--- TECH-SPEC ISSUE BODY ---", body].join("\n");
+        await shared.set("regression", "input", rendered);
+
+    - name: Run agent
+      id: run
+      uses: sw2m/ci-agents/agent@main
+      with:
+        namespace: regression
+        agent: claude
+        api-key: ${{ env.INPUT_ANTHROPIC_API_KEY }}
+        retries: ${{ env.INPUT_MAX_RETRIES || '3' }}
+        timeout: ${{ env.INPUT_AGENT_TIMEOUT_SECONDS || '900' }}
+        validator: ./.github/scripts/vsdd/promote/to-pr/regression.validator.ts
+        on-retry: ./.github/scripts/vsdd/promote/to-pr/on-retry.ts
+        extra-args: "--allowed-tools Bash Edit Write Read Glob Grep --permission-mode bypassPermissions"
+
+    - name: Set bail output
+      shell: octoscript {0}
+      run: |
+        const raw = await shared.get("regression", "raw");
+        if (!raw) {
+          await output.set("bailed", "true");
+          await output.set("bail", "Agent produced no output");
+        } else {
+          await output.set("bailed", "false");
+        }

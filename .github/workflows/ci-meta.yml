@@ -1,27 +1,9 @@
 name: VSDD CI Meta-Review
 
-# Reviews CI workflow files against VSDD methodology with TWO independent
-# adversarial reviewers (Gemini + Claude). Both must reach consensus that the
-# proposed CI correctly enforces VSDD; disagreement opens an issue per gap and
-# fails the consensus check.
-#
-# Self-evaluation runs on philosophies' own PRs that touch CI files or
-# MEMORY.md. Other sw2m repos invoke via `workflow_call` to have their own CI
-# evaluated against the canonical VSDD doc.
-#
-# AI invocations are factored out into composite actions under .github/actions/
-# (`gemini`, `claude`). Search for those names to audit every place agents run.
-
 on:
   pull_request:
-    # `ready_for_review` so jobs run when a draft is promoted. Drafts are
-    # skipped at job level via the `if: ... draft != true` guard below.
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      # Broadened from explicit (workflows + actions + MEMORY.md) to all of
-      # .github/** per #198: scripts/, prompts/, CLAUDE.md, labels.yml etc.
-      # are all CI-meta-relevant — anything under .github/ shapes the CI
-      # contract and should re-trigger this review.
       - ".github/**"
       - "MEMORY.md"
   workflow_call:
@@ -49,10 +31,6 @@ permissions:
   id-token: write
 
 jobs:
-  # No top-level membership-gate job here — the org-member check lives inside
-  # `.github/actions/agents/gemini` and `.github/actions/agents/claude` so it is impossible
-  # to invoke an agent without going through it.
-
   repo-shape:
     name: Detect repo shape (code vs docs)
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
@@ -64,22 +42,6 @@ jobs:
       - uses: actions/checkout@v6
       - id: shape
         uses: ./.github/actions/git/repo-shape
-      - name: Print VSDD §VIII applicability to job summary
-        shell: bash
-        env:
-          HAS_TESTS: ${{ steps.shape.outputs.has-tests }}
-          REPO_KIND: ${{ steps.shape.outputs.repo-kind }}
-        run: |
-          if [ "$HAS_TESTS" = "true" ]; then
-            status="ENFORCED"
-          else
-            status="N/A (no test suite detected)"
-          fi
-          line="VSDD 2a/2b/§VIII: $status"
-          echo "$line"
-          echo "- repo-kind: \`$REPO_KIND\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- has-tests: \`$HAS_TESTS\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- $line" >> "$GITHUB_STEP_SUMMARY"
 
   prep:
     name: Prepare evaluation input
@@ -121,820 +83,217 @@ jobs:
             await artifact.set("eval", "memory", memory);
             console.log("Uploaded eval artifacts (" + evalInput.length + " bytes)");
 
-  gemini-eval:
-    name: Gemini VSDD CI evaluation
+  eval:
+    name: CI evaluation + consensus
     needs: [prep, repo-shape]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true
     runs-on: ubuntu-latest
-    outputs:
-      verdict: ${{ steps.parse.outputs.verdict }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: sw2m/octoscript/action@main
-
-      - name: Load eval context
-        run: |
-          const evalInput = await artifact.get("eval", "input");
-          if (!evalInput) { core.setFailed("eval/input artifact missing"); exit(1); }
-          await shared.set("agent", "context", evalInput);
-        shell: octoscript {0}
-
-      - name: Run Gemini
-        id: review
-        uses: ./.github/actions/agents/gemini
-        env:
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          INPUT_PROMPT: |
-            You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
-
-            Read the canonical VSDD doc inside <vsdd-canonical> tags.
-            Every file under `.github/` is embedded inside a single
-            <file path="..."> tag with its repo-relative path. Categories
-            you can expect (treat them by file path, not tag name):
-            workflows (`.github/workflows/*.yml`), composite actions
-            (`.github/actions/<category>/<name>/action.yml`) and their
-            helpers (`runner.ts`, `cli.js`, etc.), CI helper scripts
-            (`.github/scripts/`), and top-level `.github/` docs and config
-            (CLAUDE.md per #152, labels.yml, etc.).
-
-            Repo-shape context (detected by `.github/actions/git/repo-shape`, which
-            looks for package.json / deno.json / Cargo.toml / go.mod /
-            pyproject.toml / tsconfig.json / a `tests/` or `test/` directory):
-
-            <repo-kind>${{ needs.repo-shape.outputs.repo-kind }}</repo-kind>
-            <has-tests>${{ needs.repo-shape.outputs.has-tests }}</has-tests>
-
-            Use this context to decide §VIII applicability EXPLICITLY:
-            - if <repo-kind>code</repo-kind>, Phase 2a/2b and the 4-Result
-              Rule (§VIII) are applicable; classify them ENFORCED / PARTIAL /
-              MISSING normally.
-            - if <repo-kind>docs</repo-kind>, Phase 2a/2b and §VIII are NOT
-              applicable; mark them `N/A` and state the reason ("no test
-              suite detected by repo-shape"). Do NOT mark them MISSING.
-
-            Evaluate whether the workflows correctly enforce VSDD requirements:
-            - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
-            - Phase 2a (Red Gate): a mechanism that confirms tests fail before implementation lands.
-            - Phase 2b (Green Gate): tests pass after minimal implementation.
-            - 4-Result Rule (§VIII): regression set runs alongside new tests on Red AND Green gates.
-            - Phase 3: adversarial review of code changes (Gemini and/or Claude on PR diffs).
-            - §IX: multi-word symbol audit (camelCase/snake_case scan on code PRs).
-            - Spec discipline (§VII): tech specs are discrete; goal specs are bulk.
-
-            Classify each requirement: ENFORCED, PARTIAL, MISSING, or N/A
-            (the last only for items the repo-shape context above marks
-            inapplicable).
-
-            # OUTPUT FORMAT (strict)
-
-            Begin your output with an HTML-comment frontmatter block, then prose. The block MUST be the first thing — no leading whitespace, no preamble. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line).
-
-            <!--
-            vsdd:
-              ci-meta:
-                verdict: pass | fail
-                rationale: |
-                  one paragraph summarizing the evaluation
-                gaps:
-                  - title: "[ci-meta] short description (≤60 chars)"
-                  body: |
-                    Goal-spec form. Describe the problem only — what's missing,
-                    what's broken, what symptom is observed, which §-reference
-                    the gap maps to. Concrete technical detail is welcome ONLY
-                    insofar as it characterizes the problem ("Phase 2a is
-                    unenforced because no workflow runs tests with new tests
-                    expected to fail").
-                    Do NOT propose a solution, fix, or implementation path.
-                    Solutions belong in tech-spec sub-issues, opened by the
-                    promotion pipeline once an org member assigns themselves.
-                - title: "..."
-                  body: |
-                    ...
-            -->
-
-            (free-form summary may follow but is ignored by the parser)
-
-            Verdict semantics: `pass` answers "should this PR be approved?", not "are there zero gaps?". A `pass` with non-critical gaps listed is fine — the gaps still get tracked as issues but the meta-CI doesn't block merge.
-
-            - `verdict: pass` ⇔ gaps are nice-to-have / non-critical / partial coverage that doesn't undermine VSDD.
-            - `verdict: fail` ⇔ at least one gap is critical (a MISSING applicable requirement, or a significant PARTIAL that undermines VSDD).
-
-            For each MISSING applicable requirement, AND each significant PARTIAL, AND any nit you'd want tracked, add a `gaps` entry. The verdict tells the reader whether those gaps block merge or not.
-
-      - name: Parse frontmatter
-        id: parse
-        env:
-          REVIEW: ${{ steps.review.outputs.response }}
-        run: |
-          
-          const raw = Deno.env.get("REVIEW") ?? "";
-
-            // Find the vsdd:ci-meta block. Block content has
-            // {verdict, rationale, gaps}; we attach reviewer + summary
-            // and write the JSON for downstream consensus consumption.
-            let payload = null;
-            for (const block of serde.parse(raw, "frontmatter")) {
-              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-              const ns = (block as Record<string, unknown>).vsdd;
-              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
-              const inner = (ns as Record<string, unknown>)["ci-meta"];
-              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
-              const v = (inner as Record<string, unknown>).verdict;
-              if (v !== "pass" && v !== "fail") continue;
-              payload = inner as Record<string, unknown>;
-              break;
-            }
-            if (!payload) {
-              console.error("::error::Could not extract a vsdd:ci-meta verdict from gemini output.");
-              console.error("--- raw output ---");
-              console.error(raw);
-              core.setFailed("verdict extraction failed");
-              exit(1);
-            }
-            // Summary is whatever the agent appended after the closing -->
-            const closeIdx = raw.indexOf("-->");
-            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
-
-            const out = { ...payload, reviewer: "gemini", summary };
-            const outJson = JSON.stringify(out, null, 2);
-            await shared.set("eval", "gemini", outJson);
-            await output.set("verdict", String(payload.verdict));
-            const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
-            console.log("gemini verdict: " + payload.verdict + ", gaps: " + gaps.length);
-        shell: octoscript {0}
-
-      - name: Upload gemini eval
-        uses: sw2m/octoscript@main
-        with:
-          script: |
-            const data = await shared.get("eval", "gemini");
-            if (data) await artifact.set("eval", "gemini", data);
-
-  claude-eval:
-    name: Claude VSDD CI evaluation
-    needs: [prep, repo-shape]
-    runs-on: ubuntu-latest
-    outputs:
-      verdict: ${{ steps.parse.outputs.verdict }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: sw2m/octoscript/action@main
-
-      - name: Load eval context
-        run: |
-          const evalInput = await artifact.get("eval", "input");
-          if (!evalInput) { core.setFailed("eval/input artifact missing"); exit(1); }
-          await shared.set("agent", "context", evalInput);
-        shell: octoscript {0}
-
-      - name: Run Claude
-        id: review
-        uses: ./.github/actions/agents/claude
-        env:
-          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          INPUT_PROMPT: |
-            # CRITICAL OUTPUT FORMAT (read this FIRST)
-
-            Begin your output with an HTML-comment frontmatter block, then prose. The block MUST be the first thing — no leading whitespace, no preamble. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line).
-
-            Concrete example of an acceptable response:
-
-            ```
-            <!--
-            vsdd:
-              ci-meta:
-                verdict: pass
-                rationale: |
-                  All applicable VSDD requirements are enforced.
-                gaps:
-                  - title: "[ci-meta] sample non-blocking gap"
-                    body: |
-                      Optional improvement that doesn't block merge.
-            -->
-
-            (any free-form summary may follow here, ignored by the parser)
-            ```
-
-            If you do not produce this frontmatter as your first output, the workflow
-            will fail and your analysis will be discarded. This is non-negotiable.
-
-            # TASK
-
-            You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
-
-            The canonical VSDD doc is embedded inside <vsdd-canonical>
-            tags. Every file under `.github/` is embedded inside a single
-            <file path="..."> tag with its repo-relative path — workflows,
-            composite actions and their helpers (runner.ts, cli.js, etc.),
-            CI helper scripts under `.github/scripts/`, and top-level
-            `.github/` docs/config (CLAUDE.md per #152, labels.yml, etc.).
-            Do NOT look for files on disk; only cite content that is
-            present in the embedded text.
-
-            Repo-shape context (detected by `.github/actions/git/repo-shape`,
-            which looks for package.json / deno.json / Cargo.toml / go.mod
-            / pyproject.toml / tsconfig.json / a `tests/` or `test/`
-            directory):
-
-            <repo-kind>${{ needs.repo-shape.outputs.repo-kind }}</repo-kind>
-            <has-tests>${{ needs.repo-shape.outputs.has-tests }}</has-tests>
-
-            Use this context to decide §VIII applicability EXPLICITLY:
-            - if <repo-kind>code</repo-kind>, Phase 2a/2b and the 4-Result
-              Rule (§VIII) are applicable; classify them ENFORCED / PARTIAL
-              / MISSING normally.
-            - if <repo-kind>docs</repo-kind>, Phase 2a/2b and §VIII are NOT
-              applicable; mark them `N/A` and state the reason ("no test
-              suite detected by repo-shape"). Do NOT mark them MISSING.
-
-            Evaluate whether the workflows correctly enforce VSDD requirements:
-            - Phase 1c (Spec Review Gate): adversarial review of new/edited issues against §VII spec discipline.
-            - Phase 2a (Red Gate): tests fail before implementation; CI confirms.
-            - Phase 2b (Green Gate): tests pass after minimal impl.
-            - 4-Result Rule (§VIII): regression set runs alongside new tests on Red AND Green gates.
-            - Phase 3: adversarial review of code changes.
-            - §IX: multi-word symbol audit.
-            - Spec discipline (§VII): tech specs are discrete.
-
-            # OUTPUT FORMAT (strict)
-
-            Begin your output with an HTML-comment frontmatter block, then prose. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line):
-
-            <!--
-            vsdd:
-              ci-meta:
-                verdict: pass | fail
-                rationale: |
-                  one paragraph
-                gaps:
-                  - title: "[ci-meta] short description ≤60 chars"
-                  body: |
-                    Goal-spec form. Describe the problem only — what's missing,
-                    what's broken, what symptom is observed, which §-reference
-                    the gap maps to. Concrete technical detail is welcome ONLY
-                    insofar as it characterizes the problem.
-                    Do NOT propose a solution, fix, or implementation path.
-                    Solutions belong in tech-spec sub-issues, opened by the
-                    promotion pipeline once an org member assigns themselves.
-                - title: "..."
-                  body: |
-                    ...
-            -->
-
-            (free-form summary may follow but is ignored by the parser)
-
-            The frontmatter MUST be the first thing in the file (no leading whitespace, no preamble).
-
-            Verdict semantics: `pass` answers "should this PR be approved?", not "are there zero gaps?". A `pass` with non-critical gaps listed is fine — the gaps still get tracked but the meta-CI doesn't block merge.
-
-            - `verdict: pass` ⇔ gaps are nice-to-have / non-critical / partial coverage that doesn't undermine VSDD.
-            - `verdict: fail` ⇔ at least one gap is critical (a MISSING applicable requirement, or a significant PARTIAL that undermines VSDD).
-
-      - name: Parse frontmatter
-        id: parse
-        env:
-          REVIEW: ${{ steps.review.outputs.response }}
-        run: |
-          
-          const raw = Deno.env.get("REVIEW") ?? "";
-
-            // Find the vsdd:ci-meta block. Block content has
-            // {verdict, rationale, gaps}; we attach reviewer + summary
-            // and write the JSON for downstream consensus consumption.
-            let payload = null;
-            for (const block of serde.parse(raw, "frontmatter")) {
-              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
-              const ns = (block as Record<string, unknown>).vsdd;
-              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
-              const inner = (ns as Record<string, unknown>)["ci-meta"];
-              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
-              const v = (inner as Record<string, unknown>).verdict;
-              if (v !== "pass" && v !== "fail") continue;
-              payload = inner as Record<string, unknown>;
-              break;
-            }
-            if (!payload) {
-              console.error("::error::Could not extract a vsdd:ci-meta verdict from claude output.");
-              console.error("--- raw output ---");
-              console.error(raw);
-              core.setFailed("verdict extraction failed");
-              exit(1);
-            }
-            // Summary is whatever the agent appended after the closing -->
-            const closeIdx = raw.indexOf("-->");
-            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
-
-            const out = { ...payload, reviewer: "claude", summary };
-            const outJson = JSON.stringify(out, null, 2);
-            await shared.set("eval", "claude", outJson);
-            await output.set("verdict", String(payload.verdict));
-            const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
-            console.log("claude verdict: " + payload.verdict + ", gaps: " + gaps.length);
-        shell: octoscript {0}
-
-      - name: Upload claude eval
-        uses: sw2m/octoscript@main
-        with:
-          script: |
-            const data = await shared.get("eval", "claude");
-            if (data) await artifact.set("eval", "claude", data);
-
-  consensus:
-    name: Consensus + open issues for gaps
-    needs: [gemini-eval, claude-eval]
-    runs-on: ubuntu-latest
-    # `always()` so consensus runs even when reviewers fail (we want a
-    # report of what failed). BUT: skip the whole consensus job on draft
-    # PRs — `prep`, `gemini-eval`, and `claude-eval` all carry a
-    # `draft != true` guard and SKIP on drafts; without the same guard
-    # here, consensus would try to fail-fast on the SKIPPED reviewers and
-    # record a FAILURE check that lingers in the required-checks rollup
-    # and pollutes branch protection on the next push (#52).
-    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft != true) }}
-    # Serialize issue creation across concurrent runs of this workflow.
-    # Without this, two concurrent PRs identifying the same gap can both
-    # see "no existing issue" and create duplicates (TOCTOU between
-    # `gh issue list` and `gh issue create`).
     concurrency:
       group: ci-meta-consensus-${{ github.repository }}
       cancel-in-progress: false
     steps:
-      - name: Fail fast if either reviewer errored
-        run: |
-          GEMINI_RESULT="${{ needs.gemini-eval.result }}"
-          CLAUDE_RESULT="${{ needs.claude-eval.result }}"
-          echo "gemini-eval: $GEMINI_RESULT"
-          echo "claude-eval: $CLAUDE_RESULT"
-          fail=0
-          [ "$GEMINI_RESULT" != "success" ] && { echo "::error::Gemini reviewer did not complete successfully ($GEMINI_RESULT)."; fail=1; }
-          [ "$CLAUDE_RESULT" != "success" ] && { echo "::error::Claude reviewer did not complete successfully ($CLAUDE_RESULT)."; fail=1; }
-          if [ "$fail" = "1" ]; then
-            echo ""
-            echo "Both reviewers must complete before consensus. A missing reviewer must not count as 'pass'."
-            exit 1
-          fi
-
       - uses: actions/checkout@v6
       - uses: sw2m/octoscript/action@main
 
-      - name: Load eval results
+      - name: Build prompt
+        env:
+          REPO_KIND: ${{ needs.repo-shape.outputs.repo-kind }}
+          HAS_TESTS: ${{ needs.repo-shape.outputs.has-tests }}
         run: |
-          const gemini = await artifact.get("eval", "gemini");
-          const claude = await artifact.get("eval", "claude");
-          await Deno.mkdir("eval", { recursive: true });
-          if (gemini) await Deno.writeTextFile("eval/gemini-eval.json", gemini);
-          if (claude) await Deno.writeTextFile("eval/claude-eval.json", claude);
+          const evalInput = await artifact.get("eval", "input");
+          if (!evalInput) { core.setFailed("eval/input artifact missing"); exit(1); }
+          const promptTmpl = await Deno.readTextFile("./.github/scripts/vsdd/ci-meta/prompt.mustache");
+          const prompt = Mustache.render(promptTmpl, {
+            repoKind: Deno.env.get("REPO_KIND") || "unknown",
+            hasTests: Deno.env.get("HAS_TESTS") || "false",
+          });
+          const input = prompt + "\n\n" + evalInput;
+          await shared.set("eval.gemini", "prompt", input);
+          await shared.set("eval.claude", "prompt", input);
         shell: octoscript {0}
 
-      - name: Build proposed gaps + fetch existing tracked gaps
-        id: prep-dedup
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 - <<'PY'
-          import json, os, re, subprocess
+      - name: Run panel
+        id: panel
+        uses: sw2m/ci-agents/panel@main
+        with:
+          namespace: eval
+          config: .github/ci-agents/ci-meta.yml
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          org: sw2m
+          debug: "true"
 
-          with open('eval/gemini-eval.json') as f:
-              gemini = json.load(f)
-          with open('eval/claude-eval.json') as f:
-              claude = json.load(f)
-
-          print(f"gemini: verdict={gemini['verdict']}, gaps={len(gemini.get('gaps', []))}")
-          print(f"claude: verdict={claude['verdict']}, gaps={len(claude.get('gaps', []))}")
-          print()
-          print(f"gemini rationale: {gemini.get('rationale', '')}")
-          print(f"claude rationale: {claude.get('rationale', '')}")
-
-          fail = gemini['verdict'] == 'fail' or claude['verdict'] == 'fail'
-
-          # Merge the two reviewers' gap lists. Keep the title-similarity
-          # merge (collapses near-identical titles flagged by both sides
-          # into one entry); semantic dedup against ALREADY-tracked gaps
-          # happens in the next step via Gemini.
-          all_gaps = []
-          for g in gemini.get('gaps', []):
-              all_gaps.append({**g, 'flagged_by': ['gemini']})
-          for g in claude.get('gaps', []):
-              norm = re.sub(r'\W+', ' ', g['title'].lower()).strip()
-              merged = False
-              for existing in all_gaps:
-                  if re.sub(r'\W+', ' ', existing['title'].lower()).strip() == norm:
-                      existing['flagged_by'].append('claude')
-                      merged = True
-                      break
-              if not merged:
-                  all_gaps.append({**g, 'flagged_by': ['claude']})
-
-          with open('proposed-gaps.json', 'w') as f:
-              json.dump(all_gaps, f)
-          with open('verdicts.json', 'w') as f:
-              json.dump({'fail': fail, 'gemini': gemini, 'claude': claude}, f)
-
-          # Fetch ALL ci-meta-labeled issues regardless of state so a
-          # closed-without-PR issue (the primary failure mode of the old
-          # exact-title dedup) still functions as a dedup candidate.
-          # Pre-existing tracked gaps in any state are candidates; the
-          # semantic-dedup agent decides matching, not state.
-          candidates = []
-          if all_gaps:
-              r = subprocess.run(
-                  ['gh', 'issue', 'list', '--state', 'all', '--label', 'ci-meta',
-                   '--limit', '200',
-                   '--json', 'number,title,body,state,stateReason'],
-                  capture_output=True, text=True, check=True,
-              )
-              candidates = json.loads(r.stdout)
-
-          # Fetch open PRs and parse `Closes #N` / `Fixes #N` /
-          # `Resolves #N` references against the candidate set — used to
-          # attach `closing_prs` to each candidate so the dedup agent
-          # treats in-flight remediation as a strong duplicate signal
-          # (#39: dedup was previously blind to in-flight PRs).
-          if all_gaps and candidates:
-              r = subprocess.run(
-                  ['gh', 'pr', 'list', '--state', 'open', '--limit', '200',
-                   '--json', 'number,title,body,isDraft'],
-                  capture_output=True, text=True, check=True,
-              )
-              open_prs = json.loads(r.stdout)
-              candidate_nums = {c['number'] for c in candidates}
-              prs_by_issue = {}
-              link_re = re.compile(r'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)[: ]+#(\d+)', re.IGNORECASE)
-              for pr in open_prs:
-                  for m in link_re.finditer(pr.get('body') or ''):
-                      n = int(m.group(1))
-                      if n in candidate_nums:
-                          prs_by_issue.setdefault(n, []).append({
-                              'number': pr['number'],
-                              'title': pr['title'],
-                              'isDraft': pr.get('isDraft', False),
-                          })
-              for c in candidates:
-                  c['closing_prs'] = prs_by_issue.get(c['number'], [])
-              in_flight_count = sum(1 for c in candidates if c['closing_prs'])
-              print(f"in-flight PRs found: {sum(len(c['closing_prs']) for c in candidates)} across {in_flight_count} candidates")
-
-          with open('existing-issues.json', 'w') as f:
-              json.dump(candidates, f)
-
-          print(f"proposed gaps: {len(all_gaps)} | existing ci-meta issues: {len(candidates)}")
-          out = os.environ['GITHUB_OUTPUT']
-          with open(out, 'a') as f:
-              f.write(f"proposed-count={len(all_gaps)}\n")
-              f.write(f"candidate-count={len(candidates)}\n")
-              dedup = 'true' if (all_gaps and candidates) else 'false'
-              f.write(f"dedup-needed={dedup}\n")
-          PY
-
-      - name: Build Gemini dedup input
-        if: steps.prep-dedup.outputs.dedup-needed == 'true'
-        run: |
-          python3 - <<'PY'
-          import json
-          with open('proposed-gaps.json') as f: proposed = json.load(f)
-          with open('existing-issues.json') as f: existing = json.load(f)
-
-          def _truncate(s, n=4000):
-              s = (s or '').strip()
-              return s if len(s) <= n else s[:n] + '\n... [truncated]'
-
-          out = []
-          out.append("# CRITICAL OUTPUT FORMAT (read FIRST)")
-          out.append("")
-          out.append("Your response MUST start with YAML frontmatter on the very first line — no preamble, no leading whitespace. Concrete shape:")
-          out.append("")
-          out.append("```")
-          out.append("---")
-          out.append("verdicts:")
-          out.append("  - proposed_index: 0")
-          out.append("    duplicate_of: 42  # existing issue number, OR null if no semantic match")
-          out.append("    rationale: |")
-          out.append("      one short line explaining the call")
-          out.append("  - proposed_index: 1")
-          out.append("    duplicate_of: null")
-          out.append("    rationale: |")
-          out.append("      ...")
-          out.append("---")
-          out.append("```")
-          out.append("")
-          out.append("# TASK")
-          out.append("")
-          out.append("Deduplicate proposed CI gap issues against pre-existing tracked gaps in this repo. Two gaps are SEMANTIC DUPLICATES when they describe the same underlying CI gap — same root cause, same VSDD section, same observable symptom — even if their titles or wording differ. Match on substance, not title.")
-          out.append("")
-          out.append("Closed issues are still valid dedup candidates. The maintainer who closed an issue (with or without a linked PR) made a judgment that should not be re-litigated by re-flagging. The PRIMARY failure mode this is meant to catch: an issue closed without a PR (closed because it was deemed low-value, wontfix, or out of scope) gets re-flagged on the next meta-CI run because the gap technically still exists. That should be a duplicate.")
-          out.append("")
-          out.append("**In-flight PRs are a strong duplicate signal.** When an existing tracked issue has one or more open PRs declared as closing it (rendered below as a `<closing-prs>` sub-element on the `<issue>` block), that gap is actively being addressed. A proposed gap matching that issue is a duplicate — even if the existing issue's title differs in wording. Mention the PR number(s) in your `rationale` so the consensus comment can surface that the remediation is in flight.")
-          out.append("")
-          out.append("Match conservatively. Only call something a duplicate if you are confident the substance overlaps — when in doubt, return null and let the human decide.")
-          out.append("")
-          out.append("Output one verdict per proposed gap, in order. `proposed_index` is 0-based and must match the `<proposed index=N>` blocks below.")
-          out.append("")
-          out.append("--- EXISTING TRACKED GAPS ---")
-          for e in existing:
-              out.append("")
-              out.append(f'<issue number="{e["number"]}" state="{e["state"]}" stateReason="{e.get("stateReason","")}">')
-              out.append(f"<title>{e['title']}</title>")
-              out.append("<body>")
-              out.append(_truncate(e.get('body', '')))
-              out.append("</body>")
-              for pr in (e.get('closing_prs') or []):
-                  draft_marker = ' isDraft="true"' if pr.get('isDraft') else ''
-                  out.append(f'<closing-prs><pr number="{pr["number"]}"{draft_marker}>{pr["title"]}</pr></closing-prs>')
-              out.append("</issue>")
-          out.append("")
-          out.append("--- PROPOSED NEW GAPS ---")
-          for i, p in enumerate(proposed):
-              out.append("")
-              out.append(f'<proposed index="{i}">')
-              out.append(f"<title>{p['title']}</title>")
-              out.append("<body>")
-              out.append(_truncate(p.get('body', '')))
-              out.append("</body>")
-              out.append("</proposed>")
-
-          dedup_content = '\n'.join(out)
-          import subprocess, os
-          # Write to shared module for the agent composite to read
-          shared_dir = os.environ.get('GITHUB_SHARED_DIR', os.environ.get('RUNNER_TEMP', '/tmp') + '/shared')
-          agent_dir = os.path.join(shared_dir, 'agent')
-          os.makedirs(agent_dir, exist_ok=True)
-          with open(os.path.join(agent_dir, 'prompt'), 'w') as f:
-              f.write(dedup_content)
-          print(f"dedup prompt: {len(dedup_content)} bytes")
-          PY
-
-      - name: Resolve org-member owner for dedup actor-override
-        id: resolve-owner
-        if: steps.prep-dedup.outputs.dedup-needed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ORG: sw2m
-          AUTHOR: ${{ github.event.pull_request.user.login }}
-          ASSIGNEES_JSON: ${{ toJSON(github.event.pull_request.assignees) }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Same shape as promote.yml's ownership job: walk assignees first,
-          # take first org-member, fall back to author. Previously this
-          # step naively used pull_request.user.login as actor-override,
-          # which broke on bot-authored PRs from the promote-tech-to-pr
-          # pipeline (the bot is not a public org member, so the gemini
-          # composite action's org gate refused to run).
-          #
-          # If we cannot resolve an org-member owner, leave OWNER empty
-          # rather than failing the step. The composite action's empty-
-          # actor-override path falls back to its own $SENDER check —
-          # which on non-PR events (workflow_call from push, etc.) is
-          # the org-member trigger and will succeed there. Hard-failing
-          # here would discard already-completed reviewer work.
-          member() {
-            local login="$1"
-            [ -n "$login" ] && gh api "orgs/$ORG/members/$login" >/dev/null 2>&1
-          }
-          OWNER=""
-          # `.[]?.login` tolerates null assignees (non-PR contexts).
-          for login in $(jq -r '.[]?.login' <<<"$ASSIGNEES_JSON"); do
-            if member "$login"; then
-              OWNER="$login"
-              echo "Owner: $login (assignee, org member)"
-              break
-            fi
-          done
-          if [ -z "$OWNER" ] && member "$AUTHOR"; then
-            OWNER="$AUTHOR"
-            echo "Owner: $AUTHOR (PR author, org member)"
-          fi
-          if [ -z "$OWNER" ]; then
-            echo "::notice::No org-member assignee or author resolvable. Leaving actor-override empty; gemini composite action will fall back to its sender-based check."
-          fi
-          echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
-
-      - name: Run Gemini semantic dedup
-        if: steps.prep-dedup.outputs.dedup-needed == 'true'
-        uses: ./.github/actions/agents/gemini
-        env:
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_ACTOR_OVERRIDE: ${{ steps.resolve-owner.outputs.owner }}
-
-      - name: Open non-duplicate gap issues
+      - name: Process consensus + dedup + open gap issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           python3 - <<'PY'
-          import json, os, re, subprocess, sys, yaml
+          import json, os, re, subprocess, sys
 
-          with open('proposed-gaps.json') as f: proposed = json.load(f)
-          with open('verdicts.json')      as f: vs = json.load(f)
-          with open('existing-issues.json') as f: existing = json.load(f)
-          existing_by_num = {e['number']: e for e in existing}
+          ruling_raw = subprocess.run(
+            ['bash', '-c', 'cat ${GITHUB_SHARED_DIR:-${RUNNER_TEMP:-/tmp}/shared}/eval/ruling'],
+            capture_output=True, text=True
+          ).stdout.strip()
 
-          # proposed_index -> existing issue number
+          if not ruling_raw:
+            print("::error::No ruling from panel")
+            sys.exit(1)
+
+          ruling = json.loads(ruling_raw)
+          print(f"ruling keys: {list(ruling.keys())}")
+          categories = ruling.get('categories', {})
+          print(f"categories: {list(categories.keys())}")
+          for name, cat in categories.items():
+            print(f"  {name}: outputs={len(cat.get('outputs', []))}, alignment={cat.get('alignment')}")
+
+          def extract_output(cat_data):
+            outputs = cat_data.get('outputs', [])
+            if not outputs:
+                return {}
+            first = outputs[0]
+            return first.get('output') or {}
+
+          gemini_output = extract_output(categories.get('gemini') or {})
+          claude_output = extract_output(categories.get('claude') or {})
+
+          gemini_verdict = gemini_output.get('verdict', 'unknown')
+          claude_verdict = claude_output.get('verdict', 'unknown')
+
+          if gemini_verdict == 'unknown':
+            print("::error::Gemini produced no usable verdict. Output:", json.dumps(gemini_output)[:500])
+          if claude_verdict == 'unknown':
+            print("::error::Claude produced no usable verdict. Output:", json.dumps(claude_output)[:500])
+
+          fail = gemini_verdict != 'pass' or claude_verdict != 'pass'
+
+          print(f"gemini: verdict={gemini_verdict}, gaps={len(gemini_output.get('gaps', []))}")
+          print(f"claude: verdict={claude_verdict}, gaps={len(claude_output.get('gaps', []))}")
+
+          # Merge gap lists
+          all_gaps = []
+          for g in gemini_output.get('gaps', []):
+            all_gaps.append({**g, 'flagged_by': ['gemini']})
+          for g in claude_output.get('gaps', []):
+            norm = re.sub(r'\W+', ' ', g['title'].lower()).strip()
+            merged = False
+            for existing in all_gaps:
+                if re.sub(r'\W+', ' ', existing['title'].lower()).strip() == norm:
+                    existing['flagged_by'].append('claude')
+                    merged = True
+                    break
+            if not merged:
+                all_gaps.append({**g, 'flagged_by': ['claude']})
+
+          # Fetch existing ci-meta issues for dedup
+          candidates = []
+          if all_gaps:
+            r = subprocess.run(
+                ['gh', 'issue', 'list', '--state', 'all', '--label', 'ci-meta',
+                 '--limit', '200', '--json', 'number,title,body,state,stateReason'],
+                capture_output=True, text=True, check=True,
+            )
+            candidates = json.loads(r.stdout)
+
+          # Title-exact dedup fallback
           duplicate_map = {}
-          dedup_source = 'none'
-
-          if os.path.exists('dedup-output.md'):
-              with open('dedup-output.md') as f:
-                  raw = f.read()
-              # Frontmatter parse — strict-top, then embedded fallback.
-              fm = None
-              m = re.match(r'^\s*---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$', raw)
-              if m:
-                  try: fm = yaml.safe_load(m.group(1))
-                  except yaml.YAMLError: fm = None
-              if not isinstance(fm, dict) or 'verdicts' not in fm:
-                  m2 = re.search(r'\n---\s*\n(verdicts\s*:[\s\S]*?)\n---\s*\n', raw)
-                  if m2:
-                      try: fm = yaml.safe_load(m2.group(1))
-                      except yaml.YAMLError: fm = None
-              if isinstance(fm, dict) and isinstance(fm.get('verdicts'), list):
-                  for v in fm['verdicts']:
-                      idx = v.get('proposed_index')
-                      dup = v.get('duplicate_of')
-                      if isinstance(idx, int) and isinstance(dup, int) and dup in existing_by_num:
-                          duplicate_map[idx] = dup
-                  dedup_source = 'gemini'
-                  print(f"Gemini flagged {len(duplicate_map)}/{len(proposed)} as semantic duplicates.")
-              else:
-                  print('::warning::Gemini dedup output unparseable; falling back to title-exact match against open issues.', file=sys.stderr)
-
-          # Defensive fallback: when Gemini didn't run (no candidates) OR
-          # produced unparseable output, still skip OPEN issues with the
-          # exact same title. Reduces noise while preserving the
-          # intent-of-the-PR semantic dedup as the primary path.
-          if dedup_source != 'gemini':
-              for i, p in enumerate(proposed):
-                  if i in duplicate_map:
-                      continue
-                  r = subprocess.run(
-                      ['gh', 'issue', 'list', '--state', 'open', '--search', p['title'],
-                       '--json', 'number,title'],
-                      capture_output=True, text=True, check=True,
-                  )
-                  for item in json.loads(r.stdout):
-                      if item['title'] == p['title']:
-                          duplicate_map[i] = item['number']
-                          break
-              if duplicate_map:
-                  dedup_source = 'title-exact-fallback'
-                  print(f"Fallback flagged {len(duplicate_map)}/{len(proposed)} as title-exact duplicates of open issues.")
+          for i, p in enumerate(all_gaps):
+            r = subprocess.run(
+                ['gh', 'issue', 'list', '--state', 'open', '--search', p['title'],
+                 '--json', 'number,title'],
+                capture_output=True, text=True, check=True,
+            )
+            for item in json.loads(r.stdout):
+                if item['title'] == p['title']:
+                    duplicate_map[i] = item['number']
+                    break
 
           pr_url = os.environ.get('PR_URL', '')
-          opened = []  # parallel to `proposed`; URL or None
-          for i, g in enumerate(proposed):
-              if i in duplicate_map:
-                  dup_num = duplicate_map[i]
-                  in_flight = existing_by_num.get(dup_num, {}).get('closing_prs') or []
-                  if in_flight:
-                      pr_list = ', '.join(f"#{pr['number']}" for pr in in_flight)
-                      print(f"  skip (semantic dup of #{dup_num}; remediation in flight as {pr_list}): {g['title']}")
-                  else:
-                      print(f"  skip (semantic dup of #{dup_num}): {g['title']}")
-                  opened.append(None)
-                  continue
-              flagged_by = ' + '.join(sorted(g['flagged_by']))
-              body = (
-                  f"_Flagged by **{flagged_by}** in the VSDD CI meta-review._\n\n"
-                  f"{g['body']}\n\n"
-                  f"---\n"
-                  f"PR triggering this evaluation: {pr_url or '(self-evaluation)'}\n"
-              )
-              # `spec:goal` enables the assignment-triggered promotion
-              # pipeline (promote.yml). `ci-meta` is provenance.
-              r = subprocess.run(
-                  ['gh', 'issue', 'create', '--title', g['title'], '--body', body,
-                   '--label', 'ci-meta', '--label', 'spec:goal'],
-                  capture_output=True, text=True,
-              )
-              if r.returncode != 0:
-                  # Labels may not exist on first run in a downstream repo.
-                  r = subprocess.run(
-                      ['gh', 'issue', 'create', '--title', g['title'], '--body', body],
-                      capture_output=True, text=True, check=True,
-                  )
-              url = r.stdout.strip().splitlines()[-1]
-              print(f"  opened: {url}")
-              opened.append(url)
+          opened = []
+          for i, g in enumerate(all_gaps):
+            if i in duplicate_map:
+                print(f"  skip (dup of #{duplicate_map[i]}): {g['title']}")
+                opened.append(None)
+                continue
+            flagged_by = ' + '.join(sorted(g['flagged_by']))
+            body = (
+                f"_Flagged by **{flagged_by}** in the VSDD CI meta-review._\n\n"
+                f"{g['body']}\n\n---\n"
+                f"PR triggering this evaluation: {pr_url or '(self-evaluation)'}\n"
+            )
+            r = subprocess.run(
+                ['gh', 'issue', 'create', '--title', g['title'], '--body', body,
+                 '--label', 'ci-meta', '--label', 'spec:goal'],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                r = subprocess.run(
+                    ['gh', 'issue', 'create', '--title', g['title'], '--body', body],
+                    capture_output=True, text=True, check=True,
+                )
+            url = r.stdout.strip().splitlines()[-1]
+            print(f"  opened: {url}")
+            opened.append(url)
 
-          # Step summary + consensus state.
-          fail   = vs['fail']
-          gemini = vs['gemini']
-          claude = vs['claude']
-          summary = os.environ.get('GITHUB_STEP_SUMMARY')
-          if summary:
-              with open(summary, 'a') as f:
-                  f.write("# VSDD CI Meta-Review\n\n")
-                  f.write(f"- Gemini: **{gemini['verdict']}**\n")
-                  f.write(f"- Claude: **{claude['verdict']}**\n")
-                  f.write(f"- Consensus: **{'fail' if fail else 'pass'}**\n")
-                  f.write(f"- Dedup: **{dedup_source}**\n\n")
-                  if proposed:
-                      f.write(f"## Gaps ({len(proposed)})\n\n")
-                      for i, g in enumerate(proposed):
-                          flagged_by = ' + '.join(sorted(g['flagged_by']))
-                          line = f"- {g['title']} _(flagged by {flagged_by})_"
-                          if i in duplicate_map:
-                              dup_num = duplicate_map[i]
-                              in_flight = existing_by_num.get(dup_num, {}).get('closing_prs') or []
-                              if in_flight:
-                                  pr_list = ', '.join(f"#{pr['number']}" for pr in in_flight)
-                                  line += f" — _skipped: dup of #{dup_num}; remediation in flight as {pr_list}_"
-                              else:
-                                  line += f" — _skipped: dup of #{dup_num}_"
-                          elif opened[i]:
-                              line += f" — {opened[i]}"
-                          f.write(line + "\n")
-
+          # Write state for the review posting step
           state = {
-              'verdict': 'fail' if fail else 'pass',
-              'gemini_verdict': gemini['verdict'],
-              'claude_verdict': claude['verdict'],
-              'gemini_rationale': gemini.get('rationale', ''),
-              'claude_rationale': claude.get('rationale', ''),
-              'gaps': proposed,
-              'opened_issue_urls': [u for u in opened if u],
-              'duplicate_map': duplicate_map,
-              'dedup_source': dedup_source,
+            'verdict': 'fail' if fail else 'pass',
+            'gemini_verdict': gemini_verdict,
+            'claude_verdict': claude_verdict,
+            'gemini_rationale': gemini_output.get('rationale', ''),
+            'claude_rationale': claude_output.get('rationale', ''),
+            'gaps': all_gaps,
+            'opened_issue_urls': [u for u in opened if u],
+            'duplicate_map': {str(k): v for k, v in duplicate_map.items()},
           }
           with open('consensus-state.json', 'w') as f:
-              json.dump(state, f, indent=2)
+            json.dump(state, f, indent=2)
 
           opened_count = sum(1 for u in opened if u)
           skipped_count = len(duplicate_map)
-          # Per #100: exit non-zero only when verdict is fail OR a NEW gap was
-          # filed this run. Duplicate-only runs (every gap matched an existing
-          # tracked issue → opened_count == 0) pass cleanly even when the
-          # underlying consensus is fail — the dedup signal IS the "already
-          # known" signal.
-          # consensus exit-code: rc = 0 iff verdict==pass AND opened_count==0.
-          # If a future PR moves the surrounding state-write/dedup Python
-          # logic to TS, fold this into the unified consensus module then.
-          verdict_str = 'fail' if fail else 'pass'
-          rc = 1 if (verdict_str == 'fail' or opened_count > 0) else 0
+          rc = 1 if (fail or opened_count > 0) else 0
           status = 'FAIL' if rc != 0 else 'PASS'
           print(f"\n{status}: {opened_count} gap issue(s) opened, {skipped_count} skipped as duplicates.")
           sys.exit(rc)
           PY
 
-      - name: Submit consensus PR review (APPROVE / REQUEST_CHANGES)
+      - name: Submit consensus PR review
         if: always() && hashFiles('consensus-state.json') != '' && github.event_name == 'pull_request'
         run: |
-          const state = JSON.parse(await Deno.readTextFile('consensus-state.json'));
-            const event = state.verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
-            const lines = [
-              `**VSDD CI Meta-Review** _(advisory; status check is what gates merge)_  `,
-              `_Consensus: \`${state.verdict}\` &nbsp;·&nbsp; Gemini: \`${state.gemini_verdict}\` &nbsp;·&nbsp; Claude: \`${state.claude_verdict}\`_`,
-              ``,
-              `**Gemini rationale.** ${state.gemini_rationale}`,
-              ``,
-              `**Claude rationale.** ${state.claude_rationale}`,
-              ``,
-            ];
-            if (state.gaps.length > 0) {
-              lines.push(`### Gaps (${state.gaps.length})`, ``);
-              for (let i = 0; i < state.gaps.length; i++) {
-                const g = state.gaps[i];
-                const flagged = (g.flagged_by || []).sort().join(' + ');
-                const url = state.opened_issue_urls[i];
-                lines.push(`- ${g.title} _(flagged by ${flagged})_${url ? ` — ${url}` : ''}`);
-              }
-              lines.push(``);
-            }
-            lines.push(`---`, `_Automated meta-review per MEMORY.md §I (Adversary). Two cognitive sources required to reach consensus._`);
-            // GitHub rejects `pulls.createReview` with HTTP 422 "Review
-            // Can not approve your own pull request" when the review
-            // actor matches the PR author. `promote-tech-to-pr`'s
-            // artifact PRs are bot-authored, and the consensus step
-            // runs under that same bot, so the API call would always
-            // fail on those PRs and fail the required status check
-            // (#66). Downgrade to `issues.createComment` in that case —
-            // same content, no verdict, no API rejection.
-            //
-            // Hardcoded against `'github-actions[bot]'` because the
-            // dynamic alternative `github.rest.users.getAuthenticated()`
-            // returns HTTP 403 "Resource not accessible by integration"
-            // when the workflow runs under the default GITHUB_TOKEN.
-            // Spec annotation: this assumes all reviewer-submission
-            // steps run under the default GITHUB_TOKEN. If the workflow
-            // is ever switched to a PAT or a custom GitHub App, this
-            // heuristic must be updated at the same change.
-            const author = context.payload.pull_request?.user?.login;
-            if (author === 'github-actions[bot]') {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: `_(${event} would be rejected: PR is authored by the same identity as the review actor, posting as comment)_\n\n` + lines.join('\n'),
-              });
-            } else {
-              await github.rest.pulls.createReview({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                event,
-                body: lines.join('\n'),
-              });
-            }
+          const state = JSON.parse(await Deno.readTextFile("consensus-state.json"));
+          const event = state.verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
+          const lines = [
+          "**VSDD CI Meta-Review** _(advisory; status check is what gates merge)_  ",
+          "_Consensus: `" + state.verdict + "` · Gemini: `" + state.gemini_verdict + "` · Claude: `" + state.claude_verdict + "`_",
+          "",
+          "**Gemini rationale.** " + state.gemini_rationale,
+          "",
+          "**Claude rationale.** " + state.claude_rationale,
+          "",
+          ];
+          if (state.gaps.length > 0) {
+          lines.push("### Gaps (" + state.gaps.length + ")", "");
+          for (let i = 0; i < state.gaps.length; i++) {
+            const g = state.gaps[i];
+            const flagged = (g.flagged_by || []).sort().join(" + ");
+            const url = state.opened_issue_urls[i];
+            lines.push("- " + g.title + " _(flagged by " + flagged + ")_" + (url ? " — " + url : ""));
+          }
+          lines.push("");
+          }
+          lines.push("---", "_Automated meta-review per MEMORY.md §I (Adversary)._");
+
+          const author = context.payload.pull_request?.user?.login;
+          if (author === "github-actions[bot]") {
+          await github.rest.issues.createComment({
+            ...context.repo, issue_number: context.issue.number,
+            body: lines.join("\n"),
+          });
+          } else {
+          await github.rest.pulls.createReview({
+            ...context.repo, pull_number: context.issue.number,
+            event, body: lines.join("\n"),
+          });
+          }
         shell: octoscript {0}

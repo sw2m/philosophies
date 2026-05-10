@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["verdict", "concerns"],
+  "properties": {
+    "verdict": { "type": "string", "enum": ["pass", "fail"] },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "scope"],
+        "properties": {
+          "text": { "type": "string" },
+          "scope": { "type": "string", "enum": ["PR-scope", "out-of-scope"] },
+          "severity": { "type": "string", "enum": ["blocking", "advisory"] },
+          "file": { "type": "string" },
+          "line": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

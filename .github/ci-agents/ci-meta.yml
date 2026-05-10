@@ -1,0 +1,10 @@
+categories:
+  gemini:
+    agent: gemini
+    readonly: true
+    schema: .github/ci-agents/schemas/ci-meta.json
+  claude:
+    agent: claude
+    readonly: true
+    schema: .github/ci-agents/schemas/ci-meta.json
+ruling: any-fail

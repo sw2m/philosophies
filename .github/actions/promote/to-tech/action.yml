@@ -60,13 +60,20 @@ runs:
       shell: octoscript {0}
 
     - name: Run Claude
-      uses: ./.github/actions/agents/claude
+      id: invoke
+      uses: sw2m/ci-agents/agent@main
+      with:
+        namespace: decompose
+        agent: claude
+        api-key: ${{ env.INPUT_ANTHROPIC_API_KEY }}
+        org: sw2m
+        actor: ${{ env.INPUT_OWNER_LOGIN }}
 
     - name: Parse tech-specs and open sub-issues
       run: |
         const { Decompose } = await import("./.github/scripts/vsdd/promote/to-tech/decompose.ts");
         const { owner, repo } = context.repo;
-        const response = "${{ steps.invoke.outputs.response }}" || await shared.get("agent", "response") || "";
+        const response = await shared.get("decompose", "raw") || "";
         const dc = new Decompose({
           api: github, owner, repo,
           issue_number: inputs.get("issue-number"),
