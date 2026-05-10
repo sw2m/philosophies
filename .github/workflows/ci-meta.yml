@@ -140,10 +140,13 @@ jobs:
 
       - name: Run Gemini
         id: review
-        uses: ./.github/actions/agents/gemini
+        uses: sw2m/ci-agents/agent@main
         env:
+          INPUT_NAMESPACE: eval
+          INPUT_AGENT: gemini
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_ORG: sw2m
+          INPUT_FORMAT: frontmatter
           INPUT_PROMPT: |
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
@@ -224,7 +227,7 @@ jobs:
       - name: Parse frontmatter
         id: parse
         env:
-          REVIEW: ${{ steps.review.outputs.response }}
+          REVIEW: ${{ steps.review.outputs.result }}
         run: |
           
           const raw = Deno.env.get("REVIEW") ?? "";
@@ -289,10 +292,13 @@ jobs:
 
       - name: Run Claude
         id: review
-        uses: ./.github/actions/agents/claude
+        uses: sw2m/ci-agents/agent@main
         env:
+          INPUT_NAMESPACE: eval
+          INPUT_AGENT: claude
           INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_ORG: sw2m
+          INPUT_FORMAT: frontmatter
           INPUT_PROMPT: |
             # CRITICAL OUTPUT FORMAT (read this FIRST)
 
@@ -394,7 +400,7 @@ jobs:
       - name: Parse frontmatter
         id: parse
         env:
-          REVIEW: ${{ steps.review.outputs.response }}
+          REVIEW: ${{ steps.review.outputs.result }}
         run: |
           
           const raw = Deno.env.get("REVIEW") ?? "";
@@ -712,10 +718,13 @@ jobs:
 
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
-        uses: ./.github/actions/agents/gemini
+        uses: sw2m/ci-agents/agent@main
         env:
+          INPUT_NAMESPACE: dedup
+          INPUT_AGENT: gemini
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_ACTOR_OVERRIDE: ${{ steps.resolve-owner.outputs.owner }}
+          INPUT_ORG: sw2m
+          INPUT_ACTOR: ${{ steps.resolve-owner.outputs.owner }}
 
       - name: Open non-duplicate gap issues
         env:

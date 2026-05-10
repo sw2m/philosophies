@@ -7,6 +7,43 @@ runs:
   using: composite
   steps:
     - uses: sw2m/octoscript/action@main
-    - id: run
-      run: (await import("./scripts/vsdd/promote/to-pr/red.ts")).red();
+
+    - name: Build prompt
       shell: octoscript {0}
+      run: |
+        const HERE = "./.github/scripts/vsdd/promote/to-pr/";
+        const load = (name) => Deno.readTextFile(HERE + name);
+        const memory = await Deno.readTextFile("MEMORY.md");
+        const title = await shared.get("tech", "title") || "";
+        const body = await shared.get("tech", "body") || "";
+        const prompt = await load("red.prompt.md");
+        const tmpl = await load("red.input.mustache");
+        const cmd = inputs.get("default-test-cmd") || "";
+        const rendered = Mustache.render(tmpl, { prompt, cmd, memory, title, body });
+        await shared.set("red", "input", rendered);
+
+    - name: Run agent
+      id: run
+      uses: sw2m/ci-agents/agent@main
+      env:
+        INPUT_NAMESPACE: red
+        INPUT_AGENT: claude
+        INPUT_API_KEY: ${{ env.INPUT_ANTHROPIC_API_KEY }}
+        INPUT_PROMPT: ${{ env.INPUT_PROMPT || '' }}
+        INPUT_FORMAT: frontmatter
+        INPUT_RETRIES: ${{ env.INPUT_MAX_RETRIES || '3' }}
+        INPUT_TIMEOUT: ${{ env.INPUT_AGENT_TIMEOUT_SECONDS || '900' }}
+        INPUT_VALIDATOR: ./.github/scripts/vsdd/promote/to-pr/red.validator.ts
+        INPUT_ON_RETRY: ./.github/scripts/vsdd/promote/to-pr/on-retry.ts
+        INPUT_EXTRA_ARGS: "--allowed-tools Bash Edit Write Read Glob Grep --permission-mode bypassPermissions"
+
+    - name: Set bail output
+      shell: octoscript {0}
+      run: |
+        const raw = await shared.get("red", "raw");
+        if (!raw) {
+          await output.set("bailed", "true");
+          await output.set("bail", "Agent produced no output");
+        } else {
+          await output.set("bailed", "false");
+        }

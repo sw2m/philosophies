@@ -7,6 +7,50 @@ runs:
   using: composite
   steps:
     - uses: sw2m/octoscript/action@main
-    - id: run
-      run: (await import("./scripts/vsdd/promote/to-pr/green.ts")).green();
+
+    - name: Build prompt
       shell: octoscript {0}
+      run: |
+        const HERE = "./.github/scripts/vsdd/promote/to-pr/";
+        const load = (name) => Deno.readTextFile(HERE + name);
+        const memory = await Deno.readTextFile("MEMORY.md");
+        const title = await shared.get("tech", "title") || "";
+        const body = await shared.get("tech", "body") || "";
+        const noRunner = Deno.env.get("NO_RUNNER") === "true";
+        const RUNNER_TEMP = Deno.env.get("RUNNER_TEMP") || "/tmp";
+        let prompt, commands;
+        if (noRunner) {
+          prompt = await load("green-no-runner.prompt.md");
+          commands = null;
+        } else {
+          prompt = await load("green.prompt.md");
+          const j = JSON.parse(await Deno.readTextFile(RUNNER_TEMP + "/phase2-meta-final.json"));
+          commands = { "red-green": j["red-green"], regression: j.regression };
+        }
+        const tmpl = await load("green.input.mustache");
+        const rendered = Mustache.render(tmpl, { prompt, memory, title, body, commands });
+        await shared.set("green", "input", rendered);
+
+    - name: Run agent
+      id: run
+      uses: sw2m/ci-agents/agent@main
+      env:
+        INPUT_NAMESPACE: green
+        INPUT_AGENT: claude
+        INPUT_API_KEY: ${{ env.INPUT_ANTHROPIC_API_KEY }}
+        INPUT_RETRIES: ${{ env.INPUT_MAX_RETRIES || '3' }}
+        INPUT_TIMEOUT: ${{ env.INPUT_AGENT_TIMEOUT_SECONDS || '900' }}
+        INPUT_VALIDATOR: ./.github/scripts/vsdd/promote/to-pr/green.validator.ts
+        INPUT_ON_RETRY: ./.github/scripts/vsdd/promote/to-pr/green.on-retry.ts
+        INPUT_EXTRA_ARGS: "--allowed-tools Bash Edit Write Read Glob Grep --permission-mode bypassPermissions"
+
+    - name: Set bail output
+      shell: octoscript {0}
+      run: |
+        const raw = await shared.get("green", "raw");
+        if (!raw) {
+          await output.set("bailed", "true");
+          await output.set("bail", "Agent produced no output");
+        } else {
+          await output.set("bailed", "false");
+        }

@@ -414,20 +414,24 @@ jobs:
             const v = await artifact.get("prep", k);
             if (v) parts.push(v);
           }
-          await shared.set("agent", "prompt", parts.join("\n\n"));
+          await shared.set("review", "input", parts.join("\n\n"));
         shell: octoscript {0}
 
-      - name: Run Gemini (composite; org-member gate inside)
+      - name: Run Gemini
         id: review
-        uses: ./.github/actions/agents/gemini
+        uses: sw2m/ci-agents/agent@main
         env:
+          INPUT_NAMESPACE: review
+          INPUT_AGENT: gemini
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
-          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_ORG: sw2m
+          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
+          INPUT_PROMPT: ${{ env.PHASE_3_PROMPT }}
+          INPUT_FORMAT: frontmatter
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
         env:
-          REVIEW: ${{ steps.review.outputs.response }}
+          REVIEW: ${{ steps.review.outputs.result }}
         run: |
             const { extract } = await import("././.github/scripts/vsdd/verdict.ts");
             const raw = Deno.env.get("REVIEW") ?? "";
@@ -487,20 +491,24 @@ jobs:
             const v = await artifact.get("prep", k);
             if (v) parts.push(v);
           }
-          await shared.set("agent", "prompt", parts.join("\n\n"));
+          await shared.set("review", "input", parts.join("\n\n"));
         shell: octoscript {0}
 
-      - name: Run Claude (composite; org-member gate inside)
+      - name: Run Claude
         id: review
-        uses: ./.github/actions/agents/claude
+        uses: sw2m/ci-agents/agent@main
         env:
+          INPUT_NAMESPACE: review
+          INPUT_AGENT: claude
           INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
-          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_ORG: sw2m
+          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
+          INPUT_PROMPT: ${{ env.PHASE_3_PROMPT }}
+          INPUT_FORMAT: frontmatter
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         env:
-          REVIEW: ${{ steps.review.outputs.response }}
+          REVIEW: ${{ steps.review.outputs.result }}
         run: |
             const { extract } = await import("././.github/scripts/vsdd/verdict.ts");
             const raw = Deno.env.get("REVIEW") ?? "";

@@ -150,19 +150,23 @@ jobs:
         run: |
           const prompt = await artifact.get("prep", "prompt");
           if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
-          await shared.set("agent", "prompt", prompt);
+          await shared.set("review", "input", JSON.stringify({ prompt }));
         shell: octoscript {0}
 
-      - name: Run Gemini (composite action; org-member gate enforced inside)
+      - name: Run Gemini
         id: review
-        uses: ./.github/actions/agents/gemini
+        uses: sw2m/ci-agents/agent@main
         env:
+          INPUT_NAMESPACE: review
+          INPUT_AGENT: gemini
           INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
+          INPUT_ORG: sw2m
+          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
+          INPUT_FORMAT: frontmatter
 
       - name: Post review with budget-decay reclassification (gemini)
         env:
-          REVIEW: ${{ steps.review.outputs.response }}
+          REVIEW: ${{ steps.review.outputs.result }}
         run: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
             const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
@@ -235,19 +239,23 @@ jobs:
         run: |
           const prompt = await artifact.get("prep", "prompt");
           if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
-          await shared.set("agent", "prompt", prompt);
+          await shared.set("review", "input", JSON.stringify({ prompt }));
         shell: octoscript {0}
 
-      - name: Run Claude (composite action; org-member gate enforced inside)
+      - name: Run Claude
         id: review
-        uses: ./.github/actions/agents/claude
+        uses: sw2m/ci-agents/agent@main
         env:
+          INPUT_NAMESPACE: review
+          INPUT_AGENT: claude
           INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
+          INPUT_ORG: sw2m
+          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
+          INPUT_FORMAT: frontmatter
 
       - name: Post review with budget-decay reclassification (claude)
         env:
-          REVIEW: ${{ steps.review.outputs.response }}
+          REVIEW: ${{ steps.review.outputs.result }}
         run: |
             const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
             const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
