@@ -2,11 +2,6 @@ name: "Promote goal-spec to tech-specs"
 description: |
   Decomposes a goal-spec into N tech-spec sub-issues via Claude.
 
-inputs:
-  issue-number: { required: true }
-  owner-login: { required: true }
-  anthropic-api-key: { required: true }
-  github-token: { required: true }
 
 runs:
   using: composite
@@ -15,20 +10,17 @@ runs:
 
     - name: Read goal issue
       uses: ./.github/actions/github/issue/read
-      with:
-        github-token: ${{ inputs.github-token }}
-        issue-number: ${{ inputs.issue-number }}
-        prefix: goal
+      env:
+        INPUT_PREFIX: goal
 
     - name: Read orchestrator canonical tuple (#128)
       id: cardinality
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
         const { Comment } = await import("./.github/scripts/github/comment.ts");
         const { owner, repo } = context.repo;
-        const issue = ${{ inputs.issue-number }};
+        const issue = ${{ env.INPUT_ISSUE_NUMBER }};
         const comments = new Comment({ api: github, owner, repo, issue_number: issue });
         const bot = await comments.list({ bot: true });
         let hit = null;
@@ -56,7 +48,6 @@ runs:
 
     - name: Build agent prompt
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         const memory = await Deno.readTextFile("MEMORY.md");
         const title = await shared.get("goal-title") ?? "";
@@ -72,22 +63,18 @@ runs:
 
     - name: Run Claude
       uses: ./.github/actions/agents/claude
-      with:
-        api-key: ${{ inputs.anthropic-api-key }}
-        actor-override: ${{ inputs.owner-login }}
 
     - name: Parse tech-specs and open sub-issues
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         const { Decompose } = await import("./.github/scripts/vsdd/promote/to-tech/decompose.ts");
         const { owner, repo } = context.repo;
         const response = "${{ steps.invoke.outputs.response }}" || await shared.get("response") || "";
         const dc = new Decompose({
           api: github, owner, repo,
-          issue_number: ${{ inputs.issue-number }},
+          issue_number: ${{ env.INPUT_ISSUE_NUMBER }},
           raw: response,
-          actor: "${{ inputs.owner-login }}",
+          actor: "${{ env.INPUT_OWNER_LOGIN }}",
         });
         await dc.run();
       shell: octoscript {0}

@@ -1,14 +1,5 @@
 name: "Create or reuse draft PR"
 description: "Scaffold a branch + idempotent draft PR."
-inputs:
-  github-token: { required: true }
-  issue-number: { required: true }
-  base-branch: { required: false, default: "main" }
-  branch-prefix: { required: false, default: "feat/issue-" }
-  title: { required: true }
-  body: { required: false, default: "" }
-  bot-name: { required: false, default: "promote[bot]" }
-  bot-email: { required: false, default: "promote@users.noreply.github.com" }
 outputs:
   branch: { value: "${{ steps.scaffold.outputs.branch}} " }
   pr-number: { value: "${{ steps.scaffold.outputs.pr-number}} " }
@@ -20,17 +11,16 @@ runs:
     - name: Configure git identity
       shell: bash
       run: |
-        git config user.name "${{ inputs.bot-name }}"
-        git config user.email "${{ inputs.bot-email }}"
+        git config user.name "${{ env.INPUT_BOT_NAME }}"
+        git config user.email "${{ env.INPUT_BOT_EMAIL }}"
     - id: scaffold
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         const { Pull } = await import("./.github/scripts/github/pr.ts");
         const { owner, repo } = context.repo;
-        const issue = ${{ inputs.issue-number }};
-        const base = "${{ inputs.base-branch }}";
-        const branch = "${{ inputs.branch-prefix }}" + issue + "-promote";
+        const issue = ${{ env.INPUT_ISSUE_NUMBER }};
+        const base = "${{ env.INPUT_BASE_BRANCH }}";
+        const branch = "${{ env.INPUT_BRANCH_PREFIX }}" + issue + "-promote";
 
         await git.fetch("origin", base);
         const branches = await git.branch(["-r"]);
@@ -55,8 +45,8 @@ runs:
           await output.set("created", "false");
           console.log(`Reusing existing PR #${pull.number}`);
         } else {
-          const body = `${{ inputs.body }}` || `Closes #${issue}`;
-          await pull.create({ head: branch, base, title: `${{ inputs.title }}`.trim(), body, draft: true });
+          const body = `${{ env.INPUT_BODY }}` || `Closes #${issue}`;
+          await pull.create({ head: branch, base, title: `${{ env.INPUT_TITLE }}`.trim(), body, draft: true });
           await output.set("pr-number", pull.number);
           await output.set("created", "true");
           console.log(`Opened draft PR #${pull.number}: ${pull.html_url}`);

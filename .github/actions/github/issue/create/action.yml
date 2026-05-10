@@ -1,11 +1,5 @@
 name: "Create issue"
 description: "Open an issue via the Issue class."
-inputs:
-  github-token: { required: true }
-  title: { required: true }
-  body: { required: false, default: "" }
-  labels: { required: false, default: "" }
-  prefix: { required: false, default: "" }
 outputs:
   number: { value: "${{ steps.create.outputs.number}} " }
   url: { value: "${{ steps.create.outputs.url}} " }
@@ -16,18 +10,17 @@ runs:
     - uses: sw2m/octoscript/action@main
     - id: create
       env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         const { Issue } = await import("./.github/scripts/github/issue.ts");
         const { owner, repo } = context.repo;
         const issue = new Issue({ api: github, owner, repo });
-        const labels = "${{ inputs.labels }}".split(",").map(s => s.trim()).filter(Boolean);
+        const labels = "${{ env.INPUT_LABELS }}".split(",").map(s => s.trim()).filter(Boolean);
         try {
-          await issue.create({ title: `${{ inputs.title }}`, body: `${{ inputs.body }}`, labels: labels.length ? labels : undefined });
+          await issue.create({ title: `${{ env.INPUT_TITLE }}`, body: `${{ env.INPUT_BODY }}`, labels: labels.length ? labels : undefined });
         } catch {
-          await issue.create({ title: `${{ inputs.title }}`, body: `${{ inputs.body }}` });
+          await issue.create({ title: `${{ env.INPUT_TITLE }}`, body: `${{ env.INPUT_BODY }}` });
         }
-        const prefix = "${{ inputs.prefix }}";
+        const prefix = "${{ env.INPUT_PREFIX }}";
         const key = (name) => prefix ? `${prefix}-${name}` : name;
         await shared.set(key("title"), issue.title);
         await shared.set(key("url"), issue.html_url);

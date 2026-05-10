@@ -229,10 +229,10 @@ jobs:
       - name: Run Gemini (composite action; org-member gate enforced inside)
         id: review
         uses: ./.github/actions/agents/gemini
-        with:
-          api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: stdin.txt
-          actor-override: ${{ needs.ownership.outputs.owner }}
+        env:
+          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_STDIN_FILE: stdin.txt
+          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (gemini)
         env:
@@ -311,10 +311,10 @@ jobs:
       - name: Run Claude (composite action; org-member gate enforced inside)
         id: review
         uses: ./.github/actions/agents/claude
-        with:
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          stdin-file: stdin.txt
-          actor-override: ${{ needs.ownership.outputs.owner }}
+        env:
+          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_STDIN_FILE: stdin.txt
+          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (claude)
         env:

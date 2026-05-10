@@ -3,16 +3,6 @@ description: |
   Invokes Claude Code CLI. Reads content from $GITHUB_SHARED_DIR.
   Returns response as `response` step output.
 
-inputs:
-  org: { required: false, default: "sw2m" }
-  actor-override: { required: false, default: "" }
-  trust-github-actions-bot: { required: false, default: "false" }
-  prompt: { required: false, default: "" }
-  model: { required: false, default: "claude-opus-4-5" }
-  fallback-model: { required: false, default: "claude-sonnet-4-5" }
-  api-key: { required: true }
-  allowed-tools: { required: false, default: "" }
-  permission-mode: { required: false, default: "" }
 
 outputs:
   response:
@@ -25,15 +15,14 @@ runs:
 
     - name: Verify org membership
       env:
-        GITHUB_TOKEN: ${{ inputs.api-key }}
       run: |
         const org = await import("./.github/scripts/github/org.ts");
         await org.verify({
           api: github, core,
-          org: "${{ inputs.org }}",
-          actor: "${{ inputs.actor-override }}",
+          org: "${{ env.INPUT_ORG }}",
+          actor: "${{ env.INPUT_ACTOR_OVERRIDE }}",
           sender: "${{ github.event.sender.login }}" || "${{ github.actor }}",
-          bot: "${{ inputs.trust-github-actions-bot }}" === "true",
+          bot: "${{ env.INPUT_TRUST_GITHUB_ACTIONS_BOT }}" === "true",
         });
       shell: octoscript {0}
 
@@ -50,13 +39,11 @@ runs:
       shell: bash
       run: |
         mkdir -p "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}"
-        printf '%s' "${{ inputs.prompt }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}/prompt"
+        printf '%s' "${{ env.INPUT_PROMPT }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}/prompt"
 
     - name: Invoke claude
       id: invoke
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
-        GITHUB_TOKEN: ${{ inputs.api-key }}
       run: |
         const { Claude } = await import("./.github/scripts/agents/claude.ts");
         const parts = [];
@@ -68,10 +55,10 @@ runs:
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);
         const claude = new Claude({
-          primary: "${{ inputs.model }}",
-          fallback: "${{ inputs.fallback-model }}",
-          tools: `${{ inputs.allowed-tools }}`,
-          mode: "${{ inputs.permission-mode }}",
+          primary: "${{ env.INPUT_MODEL }}",
+          fallback: "${{ env.INPUT_FALLBACK_MODEL }}",
+          tools: `${{ env.INPUT_ALLOWED_TOOLS }}`,
+          mode: "${{ env.INPUT_PERMISSION_MODE }}",
         });
         const r = await claude.run(new Blob([body]).stream());
         const response = new TextDecoder().decode(r.output);

@@ -3,14 +3,6 @@ description: |
   Invokes gemini-cli. Reads content from $GITHUB_SHARED_DIR.
   Returns response as `response` step output.
 
-inputs:
-  org: { required: false, default: "sw2m" }
-  actor-override: { required: false, default: "" }
-  trust-github-actions-bot: { required: false, default: "false" }
-  prompt: { required: false, default: "" }
-  model: { required: false, default: "gemini-3-pro-preview" }
-  fallback-model: { required: false, default: "gemini-2.5-pro" }
-  api-key: { required: true }
 
 outputs:
   response:
@@ -23,15 +15,14 @@ runs:
 
     - name: Verify org membership
       env:
-        GITHUB_TOKEN: ${{ inputs.api-key }}
       run: |
         const org = await import("./.github/scripts/github/org.ts");
         await org.verify({
           api: github, core,
-          org: "${{ inputs.org }}",
-          actor: "${{ inputs.actor-override }}",
+          org: "${{ env.INPUT_ORG }}",
+          actor: "${{ env.INPUT_ACTOR_OVERRIDE }}",
           sender: "${{ github.event.sender.login }}" || "${{ github.actor }}",
-          bot: "${{ inputs.trust-github-actions-bot }}" === "true",
+          bot: "${{ env.INPUT_TRUST_GITHUB_ACTIONS_BOT }}" === "true",
         });
       shell: octoscript {0}
 
@@ -48,13 +39,11 @@ runs:
       shell: bash
       run: |
         mkdir -p "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}"
-        printf '%s' "${{ inputs.prompt }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}/prompt"
+        printf '%s' "${{ env.INPUT_PROMPT }}" > "${GITHUB_SHARED_DIR:-${RUNNER_TEMP}/shared}/prompt"
 
     - name: Invoke gemini
       id: invoke
       env:
-        GEMINI_API_KEY: ${{ inputs.api-key }}
-        GITHUB_TOKEN: ${{ inputs.api-key }}
       run: |
         const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
         const parts = [];
@@ -66,8 +55,8 @@ runs:
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);
         const gemini = new Gemini({
-          primary: "${{ inputs.model }}",
-          fallback: "${{ inputs.fallback-model }}",
+          primary: "${{ env.INPUT_MODEL }}",
+          fallback: "${{ env.INPUT_FALLBACK_MODEL }}",
         });
         const r = await gemini.run(new Blob([body]).stream());
         const response = new TextDecoder().decode(r.output);

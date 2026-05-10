@@ -1,14 +1,5 @@
 name: "Green gate"
 description: "Implement + Green gate with retry."
-inputs:
-  anthropic-api-key: { required: true }
-  github-token: { required: true }
-  issue-number: { required: true }
-  branch: { required: true }
-  pr-number: { required: true }
-  no-runner: { required: false, default: "false" }
-  max-retries: { required: false, default: "3" }
-  agent-timeout-seconds: { required: false, default: "900" }
 outputs:
   bailed: { value: "${{ steps.run.outputs.bailed }}" }
   bail: { value: "${{ steps.run.outputs.bail }}" }
@@ -18,13 +9,5 @@ runs:
     - uses: sw2m/octoscript/action@main
     - id: run
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        GH_TOKEN: ${{ inputs.github-token }}
-        ISSUE_NUMBER: ${{ inputs.issue-number }}
-        BRANCH: ${{ inputs.branch }}
-        PR_NUMBER: ${{ inputs.pr-number }}
-        NO_RUNNER: ${{ inputs.no-runner }}
-        MAX_RETRIES: ${{ inputs.max-retries }}
-        AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
       run: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).green();
       shell: octoscript {0}
