@@ -20,10 +20,9 @@ runs:
         } catch {
           await issue.create({ title: `${{ env.INPUT_TITLE }}`, body: `${{ env.INPUT_BODY }}` });
         }
-        const prefix = "${{ env.INPUT_PREFIX }}";
-        const key = (name) => prefix ? `${prefix}-${name}` : name;
-        await shared.set(key("title"), issue.title);
-        await shared.set(key("url"), issue.html_url);
+        const ns = "${{ env.INPUT_PREFIX }}" || "issue";
+        await shared.set(ns, "title", issue.title);
+        await shared.set(ns, "url", issue.html_url);
         await output.set("number", issue.number);
         await output.set("url", issue.html_url);
         await output.set("title", issue.title);

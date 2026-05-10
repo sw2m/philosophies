@@ -1,52 +1,38 @@
-// Directory-backed named-input accessor. Complements `output.ts` —
-// output writes to $GITHUB_OUTPUT (step-scoped kv); input reads from
-// a directory where each file IS a named value (cross-step, any size).
+// Directory-backed cross-step kv with dot-delimited namespacing.
+// Namespaces map to subdirectories of $GITHUB_SHARED_DIR.
 //
-// The directory path comes from $GITHUB_SHARED_DIR (set by the calling
-// step or composite). If unset, falls back to $RUNNER_TEMP/input.
-//
-// Callers write inputs (bash):
-//   mkdir -p "$GITHUB_SHARED_DIR"
-//   cp MEMORY.md "$GITHUB_SHARED_DIR/memory"
-//   cat pr.diff > "$GITHUB_SHARED_DIR/diff"
-//
-// Consumers read inputs (TS):
-//   import * as shared from "./.github/scripts/github/shared.ts";
-//   const memory = await shared.get("memory");
-//   const diff = await shared.get("diff");
+// Usage:
+//   shared.set("steps.producer", "val", "hello");
+//   shared.get("steps.producer", "val");       // "hello"
+//   shared.list("steps.producer");              // ["val"]
+//   shared.set("global", "memory", content);    // top-level namespace
 
 function dir(): string {
   return Deno.env.get("GITHUB_SHARED_DIR")
-    ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/input`;
+    ?? `${Deno.env.get("RUNNER_TEMP") ?? "/tmp"}/shared`;
 }
 
-/** Read the named input. Returns undefined if the file doesn't exist. */
-async function get(name: string): Promise<string | undefined> {
-  try {
-    return await Deno.readTextFile(`${dir()}/${name}`);
-  } catch {
-    return undefined;
-  }
+function resolve(ns: string): string {
+  return `${dir()}/${ns.replaceAll(".", "/")}`;
 }
 
-/** Write a named input (creates the directory if needed). */
-async function set(name: string, value: string): Promise<void> {
-  const d = dir();
+export async function get(ns: string, name: string): Promise<string | undefined> {
+  try { return await Deno.readTextFile(`${resolve(ns)}/${name}`); }
+  catch { return undefined; }
+}
+
+export async function set(ns: string, name: string, value: string): Promise<void> {
+  const d = resolve(ns);
   await Deno.mkdir(d, { recursive: true });
   await Deno.writeTextFile(`${d}/${name}`, value);
 }
 
-/** List every name in the directory. */
-async function list(): Promise<string[]> {
+export async function list(ns: string): Promise<string[]> {
   try {
     const out: string[] = [];
-    for await (const e of Deno.readDir(dir())) {
+    for await (const e of Deno.readDir(resolve(ns))) {
       if (e.isFile) out.push(e.name);
     }
     return out.sort();
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
-
-export { get, set, list };

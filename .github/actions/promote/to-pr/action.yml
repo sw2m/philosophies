@@ -26,7 +26,7 @@ runs:
       id: pr-body
       env:
       run: |
-        const techBody = await shared.get("tech-body") ?? "";
+        const techBody = await shared.get("tech", "body") ?? "";
         const body = await template(
           new URL("./.github/scripts/vsdd/promote/to-pr/scaffold.mustache", `file://${Deno.cwd()}/`),
           { issue: ${{ env.INPUT_ISSUE_NUMBER }}, owner: "${{ env.INPUT_OWNER_LOGIN }}", body: techBody },

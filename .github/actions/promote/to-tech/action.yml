@@ -50,14 +50,14 @@ runs:
       env:
       run: |
         const memory = await Deno.readTextFile("MEMORY.md");
-        const title = await shared.get("goal-title") ?? "";
-        const body = await shared.get("goal-body") ?? "";
+        const title = await shared.get("goal", "title") ?? "";
+        const body = await shared.get("goal", "body") ?? "";
         const min = "${{ steps.cardinality.outputs.min-cardinality }}";
         const prompt = await template(
           new URL("./.github/scripts/vsdd/promote/to-tech/prompt.mustache", `file://${Deno.cwd()}/`),
           { memory, title, body, atomic: min === "1" },
         );
-        await shared.set("prompt", prompt);
+        await shared.set("agent", "prompt", prompt);
         console.log(`stdin bytes: ${prompt.length}`);
       shell: octoscript {0}
 
@@ -69,7 +69,7 @@ runs:
       run: |
         const { Decompose } = await import("./.github/scripts/vsdd/promote/to-tech/decompose.ts");
         const { owner, repo } = context.repo;
-        const response = "${{ steps.invoke.outputs.response }}" || await shared.get("response") || "";
+        const response = "${{ steps.invoke.outputs.response }}" || await shared.get("agent", "response") || "";
         const dc = new Decompose({
           api: github, owner, repo,
           issue_number: ${{ env.INPUT_ISSUE_NUMBER }},

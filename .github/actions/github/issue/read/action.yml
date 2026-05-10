@@ -13,17 +13,16 @@ runs:
       env:
       run: |
         const { Issue } = await import("./.github/scripts/github/issue.ts");
-        const prefix = "${{ env.INPUT_PREFIX }}";
-        const key = (name) => prefix ? `${prefix}-${name}` : name;
+        const ns = "${{ env.INPUT_PREFIX }}" || "issue";
         const { owner, repo } = context.repo;
         const issue = new Issue({ api: github, owner, repo });
         await issue.get({ issue_number: ${{ env.INPUT_ISSUE_NUMBER }} });
-        await shared.set(key("title"), issue.title);
-        await shared.set(key("body"), issue.body ?? "");
-        await shared.set(key("url"), issue.html_url);
+        await shared.set(ns, "title", issue.title);
+        await shared.set(ns, "body", issue.body ?? "");
+        await shared.set(ns, "url", issue.html_url);
         await output.set("title", issue.title);
         await output.set("body", issue.body ?? "");
         await output.set("url", issue.html_url);
         await output.set("number", issue.number);
-        console.log(`${key("title")}: ${issue.title}`);
+        console.log(`${ns}.title: ${issue.title}`);
       shell: octoscript {0}
