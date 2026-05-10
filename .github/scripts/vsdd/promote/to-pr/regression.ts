@@ -37,7 +37,7 @@ export async function regression(): Promise<void> {
 
     const raw = new TextDecoder().decode(r.output);
     let meta: { files: string[]; command: string } | null = null;
-    for (const block of (await import("../../frontmatter.ts")).parse(raw)) {
+    for (const block of serde.parse(raw, "frontmatter")) {
       if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
       const ns = (block as Record<string, unknown>).vsdd;
       if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;

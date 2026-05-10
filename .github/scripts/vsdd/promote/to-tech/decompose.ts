@@ -13,7 +13,6 @@
 // outcomes (sub-issues + summary comment).
 
 import { Comment as Base, type Ctx } from "../../comment.ts";
-import { marks } from "../../frontmatter.ts";
 import { Spec } from "./spec.ts";
 
 const KEY = "tech-spec";  // subkey under vsdd: namespace
@@ -40,7 +39,7 @@ export class Decompose extends Base {
    *  silently. Pure; does not call the GitHub API. */
   parsed(): Array<{ title: string; body: string }> {
     const matching: Array<{ title: string; start: number; end: number }> = [];
-    for (const m of marks(this.raw)) {
+    for (const m of serde.marks(this.raw)) {
       const v = m.value;
       if (typeof v !== "object" || v === null || Array.isArray(v)) continue;
       const ns = (v as Record<string, unknown>).vsdd;

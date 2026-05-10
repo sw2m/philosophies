@@ -22,7 +22,6 @@
 // Used by pr-review.yml's gemini-review and claude-review post-steps via
 // the github-deno action.
 
-import { parse as fm } from "./frontmatter.ts";
 
 export type Verdict = "pass" | "fail";
 export type Result = { verdict: Verdict | null; body: string };
@@ -34,7 +33,7 @@ export type Result = { verdict: Verdict | null; body: string };
  *  metadata from the same comment. When no verdict can be resolved,
  *  returns `{verdict: null, body: text}`. */
 export function extract(text: string, subkey: string): Result {
-  for (const block of fm(text)) {
+  for (const block of serde.parse(text, "frontmatter")) {
     if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
     const ns = (block as Record<string, unknown>).vsdd;
     if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;

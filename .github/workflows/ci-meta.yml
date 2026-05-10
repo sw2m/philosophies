@@ -226,14 +226,14 @@ jobs:
         env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
-          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          
           const raw = Deno.env.get("REVIEW") ?? "";
 
             // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary
             // and write the JSON for downstream consensus consumption.
             let payload = null;
-            for (const block of fm.parse(raw)) {
+            for (const block of serde.parse(raw, "frontmatter")) {
               if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
               const ns = (block as Record<string, unknown>).vsdd;
               if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
@@ -396,14 +396,14 @@ jobs:
         env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
-          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          
           const raw = Deno.env.get("REVIEW") ?? "";
 
             // Find the vsdd:ci-meta block. Block content has
             // {verdict, rationale, gaps}; we attach reviewer + summary
             // and write the JSON for downstream consensus consumption.
             let payload = null;
-            for (const block of fm.parse(raw)) {
+            for (const block of serde.parse(raw, "frontmatter")) {
               if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
               const ns = (block as Record<string, unknown>).vsdd;
               if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;

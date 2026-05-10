@@ -27,7 +27,6 @@
 // The action.yml wires the meta-out-path to `${RUNNER_TEMP}/phase2-meta.json`
 // so the file isn't swept by Phase 4's `git add .` (#65).
 
-import { parse as fm } from "../frontmatter.ts";
 
 const KEY = "phase-2";  // registered in symbols.yaml frontmatter.subkeys
 
@@ -38,7 +37,7 @@ export function read(raw: string): Meta | null {
   // of its response (it uses tools first, summarizes after). Last
   // matching block wins.
   let hit: Record<string, unknown> | null = null;
-  for (const block of fm(raw)) {
+  for (const block of serde.parse(raw, "frontmatter")) {
     if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
     const ns = (block as Record<string, unknown>).vsdd;
     if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
