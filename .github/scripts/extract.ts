@@ -41,7 +41,6 @@
 
 import jsonata from "npm:jsonata@^2";
 import { parse as parseBlocks } from "./vsdd/frontmatter.ts";
-import { dump } from "./github/serde.ts";
 import { encodeHex } from "jsr:@std/encoding@^1/hex";
 
 type Args = {
@@ -132,7 +131,7 @@ export async function extract(opts: Args): Promise<string[]> {
   const paths: string[] = [];
   for (let i = 0; i < matches.length; i++) {
     const v = matches[i];
-    const content = dump(v, opts.format);
+    const content = serde.dump(v, opts.format);
     let stem: string;
     if (opts.naming === "index") stem = String(i);
     else if (opts.naming === "alpha") stem = alpha(i);
