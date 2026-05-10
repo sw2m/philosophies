@@ -115,13 +115,13 @@ jobs:
       - name: Run panel
         id: panel
         uses: sw2m/ci-agents/panel@main
-        env:
-          INPUT_NAMESPACE: eval
-          INPUT_CONFIG: .github/ci-agents/ci-meta.yml
-          INPUT_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_ORG: sw2m
-          INPUT_DEBUG: "true"
+        with:
+          namespace: eval
+          config: .github/ci-agents/ci-meta.yml
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          org: sw2m
+          debug: "true"
 
       - name: Process consensus + dedup + open gap issues
         env:
@@ -133,27 +133,27 @@ jobs:
           import json, os, re, subprocess, sys
 
           ruling_raw = subprocess.run(
-              ['bash', '-c', 'cat ${GITHUB_SHARED_DIR:-${RUNNER_TEMP:-/tmp}/shared}/eval/ruling'],
-              capture_output=True, text=True
+            ['bash', '-c', 'cat ${GITHUB_SHARED_DIR:-${RUNNER_TEMP:-/tmp}/shared}/eval/ruling'],
+            capture_output=True, text=True
           ).stdout.strip()
 
           if not ruling_raw:
-              print("::error::No ruling from panel")
-              sys.exit(1)
+            print("::error::No ruling from panel")
+            sys.exit(1)
 
           ruling = json.loads(ruling_raw)
           print(f"ruling keys: {list(ruling.keys())}")
           categories = ruling.get('categories', {})
           print(f"categories: {list(categories.keys())}")
           for name, cat in categories.items():
-              print(f"  {name}: outputs={len(cat.get('outputs', []))}, alignment={cat.get('alignment')}")
+            print(f"  {name}: outputs={len(cat.get('outputs', []))}, alignment={cat.get('alignment')}")
 
           def extract_output(cat_data):
-              outputs = cat_data.get('outputs', [])
-              if not outputs:
-                  return {}
-              first = outputs[0]
-              return first.get('output') or {}
+            outputs = cat_data.get('outputs', [])
+            if not outputs:
+                return {}
+            first = outputs[0]
+            return first.get('output') or {}
 
           gemini_output = extract_output(categories.get('gemini') or {})
           claude_output = extract_output(categories.get('claude') or {})
@@ -162,9 +162,9 @@ jobs:
           claude_verdict = claude_output.get('verdict', 'unknown')
 
           if gemini_verdict == 'unknown':
-              print("::error::Gemini produced no usable verdict. Output:", json.dumps(gemini_output)[:500])
+            print("::error::Gemini produced no usable verdict. Output:", json.dumps(gemini_output)[:500])
           if claude_verdict == 'unknown':
-              print("::error::Claude produced no usable verdict. Output:", json.dumps(claude_output)[:500])
+            print("::error::Claude produced no usable verdict. Output:", json.dumps(claude_output)[:500])
 
           fail = gemini_verdict != 'pass' or claude_verdict != 'pass'
 
@@ -174,81 +174,81 @@ jobs:
           # Merge gap lists
           all_gaps = []
           for g in gemini_output.get('gaps', []):
-              all_gaps.append({**g, 'flagged_by': ['gemini']})
+            all_gaps.append({**g, 'flagged_by': ['gemini']})
           for g in claude_output.get('gaps', []):
-              norm = re.sub(r'\W+', ' ', g['title'].lower()).strip()
-              merged = False
-              for existing in all_gaps:
-                  if re.sub(r'\W+', ' ', existing['title'].lower()).strip() == norm:
-                      existing['flagged_by'].append('claude')
-                      merged = True
-                      break
-              if not merged:
-                  all_gaps.append({**g, 'flagged_by': ['claude']})
+            norm = re.sub(r'\W+', ' ', g['title'].lower()).strip()
+            merged = False
+            for existing in all_gaps:
+                if re.sub(r'\W+', ' ', existing['title'].lower()).strip() == norm:
+                    existing['flagged_by'].append('claude')
+                    merged = True
+                    break
+            if not merged:
+                all_gaps.append({**g, 'flagged_by': ['claude']})
 
           # Fetch existing ci-meta issues for dedup
           candidates = []
           if all_gaps:
-              r = subprocess.run(
-                  ['gh', 'issue', 'list', '--state', 'all', '--label', 'ci-meta',
-                   '--limit', '200', '--json', 'number,title,body,state,stateReason'],
-                  capture_output=True, text=True, check=True,
-              )
-              candidates = json.loads(r.stdout)
+            r = subprocess.run(
+                ['gh', 'issue', 'list', '--state', 'all', '--label', 'ci-meta',
+                 '--limit', '200', '--json', 'number,title,body,state,stateReason'],
+                capture_output=True, text=True, check=True,
+            )
+            candidates = json.loads(r.stdout)
 
           # Title-exact dedup fallback
           duplicate_map = {}
           for i, p in enumerate(all_gaps):
-              r = subprocess.run(
-                  ['gh', 'issue', 'list', '--state', 'open', '--search', p['title'],
-                   '--json', 'number,title'],
-                  capture_output=True, text=True, check=True,
-              )
-              for item in json.loads(r.stdout):
-                  if item['title'] == p['title']:
-                      duplicate_map[i] = item['number']
-                      break
+            r = subprocess.run(
+                ['gh', 'issue', 'list', '--state', 'open', '--search', p['title'],
+                 '--json', 'number,title'],
+                capture_output=True, text=True, check=True,
+            )
+            for item in json.loads(r.stdout):
+                if item['title'] == p['title']:
+                    duplicate_map[i] = item['number']
+                    break
 
           pr_url = os.environ.get('PR_URL', '')
           opened = []
           for i, g in enumerate(all_gaps):
-              if i in duplicate_map:
-                  print(f"  skip (dup of #{duplicate_map[i]}): {g['title']}")
-                  opened.append(None)
-                  continue
-              flagged_by = ' + '.join(sorted(g['flagged_by']))
-              body = (
-                  f"_Flagged by **{flagged_by}** in the VSDD CI meta-review._\n\n"
-                  f"{g['body']}\n\n---\n"
-                  f"PR triggering this evaluation: {pr_url or '(self-evaluation)'}\n"
-              )
-              r = subprocess.run(
-                  ['gh', 'issue', 'create', '--title', g['title'], '--body', body,
-                   '--label', 'ci-meta', '--label', 'spec:goal'],
-                  capture_output=True, text=True,
-              )
-              if r.returncode != 0:
-                  r = subprocess.run(
-                      ['gh', 'issue', 'create', '--title', g['title'], '--body', body],
-                      capture_output=True, text=True, check=True,
-                  )
-              url = r.stdout.strip().splitlines()[-1]
-              print(f"  opened: {url}")
-              opened.append(url)
+            if i in duplicate_map:
+                print(f"  skip (dup of #{duplicate_map[i]}): {g['title']}")
+                opened.append(None)
+                continue
+            flagged_by = ' + '.join(sorted(g['flagged_by']))
+            body = (
+                f"_Flagged by **{flagged_by}** in the VSDD CI meta-review._\n\n"
+                f"{g['body']}\n\n---\n"
+                f"PR triggering this evaluation: {pr_url or '(self-evaluation)'}\n"
+            )
+            r = subprocess.run(
+                ['gh', 'issue', 'create', '--title', g['title'], '--body', body,
+                 '--label', 'ci-meta', '--label', 'spec:goal'],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                r = subprocess.run(
+                    ['gh', 'issue', 'create', '--title', g['title'], '--body', body],
+                    capture_output=True, text=True, check=True,
+                )
+            url = r.stdout.strip().splitlines()[-1]
+            print(f"  opened: {url}")
+            opened.append(url)
 
           # Write state for the review posting step
           state = {
-              'verdict': 'fail' if fail else 'pass',
-              'gemini_verdict': gemini_verdict,
-              'claude_verdict': claude_verdict,
-              'gemini_rationale': gemini_output.get('rationale', ''),
-              'claude_rationale': claude_output.get('rationale', ''),
-              'gaps': all_gaps,
-              'opened_issue_urls': [u for u in opened if u],
-              'duplicate_map': {str(k): v for k, v in duplicate_map.items()},
+            'verdict': 'fail' if fail else 'pass',
+            'gemini_verdict': gemini_verdict,
+            'claude_verdict': claude_verdict,
+            'gemini_rationale': gemini_output.get('rationale', ''),
+            'claude_rationale': claude_output.get('rationale', ''),
+            'gaps': all_gaps,
+            'opened_issue_urls': [u for u in opened if u],
+            'duplicate_map': {str(k): v for k, v in duplicate_map.items()},
           }
           with open('consensus-state.json', 'w') as f:
-              json.dump(state, f, indent=2)
+            json.dump(state, f, indent=2)
 
           opened_count = sum(1 for u in opened if u)
           skipped_count = len(duplicate_map)
@@ -264,36 +264,36 @@ jobs:
           const state = JSON.parse(await Deno.readTextFile("consensus-state.json"));
           const event = state.verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
           const lines = [
-            "**VSDD CI Meta-Review** _(advisory; status check is what gates merge)_  ",
-            "_Consensus: `" + state.verdict + "` · Gemini: `" + state.gemini_verdict + "` · Claude: `" + state.claude_verdict + "`_",
-            "",
-            "**Gemini rationale.** " + state.gemini_rationale,
-            "",
-            "**Claude rationale.** " + state.claude_rationale,
-            "",
+          "**VSDD CI Meta-Review** _(advisory; status check is what gates merge)_  ",
+          "_Consensus: `" + state.verdict + "` · Gemini: `" + state.gemini_verdict + "` · Claude: `" + state.claude_verdict + "`_",
+          "",
+          "**Gemini rationale.** " + state.gemini_rationale,
+          "",
+          "**Claude rationale.** " + state.claude_rationale,
+          "",
           ];
           if (state.gaps.length > 0) {
-            lines.push("### Gaps (" + state.gaps.length + ")", "");
-            for (let i = 0; i < state.gaps.length; i++) {
-              const g = state.gaps[i];
-              const flagged = (g.flagged_by || []).sort().join(" + ");
-              const url = state.opened_issue_urls[i];
-              lines.push("- " + g.title + " _(flagged by " + flagged + ")_" + (url ? " — " + url : ""));
-            }
-            lines.push("");
+          lines.push("### Gaps (" + state.gaps.length + ")", "");
+          for (let i = 0; i < state.gaps.length; i++) {
+            const g = state.gaps[i];
+            const flagged = (g.flagged_by || []).sort().join(" + ");
+            const url = state.opened_issue_urls[i];
+            lines.push("- " + g.title + " _(flagged by " + flagged + ")_" + (url ? " — " + url : ""));
+          }
+          lines.push("");
           }
           lines.push("---", "_Automated meta-review per MEMORY.md §I (Adversary)._");
 
           const author = context.payload.pull_request?.user?.login;
           if (author === "github-actions[bot]") {
-            await github.rest.issues.createComment({
-              ...context.repo, issue_number: context.issue.number,
-              body: lines.join("\n"),
-            });
+          await github.rest.issues.createComment({
+            ...context.repo, issue_number: context.issue.number,
+            body: lines.join("\n"),
+          });
           } else {
-            await github.rest.pulls.createReview({
-              ...context.repo, pull_number: context.issue.number,
-              event, body: lines.join("\n"),
-            });
+          await github.rest.pulls.createReview({
+            ...context.repo, pull_number: context.issue.number,
+            event, body: lines.join("\n"),
+          });
           }
         shell: octoscript {0}

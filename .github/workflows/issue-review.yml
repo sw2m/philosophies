@@ -159,13 +159,13 @@ jobs:
       - name: Run panel
         id: panel
         uses: sw2m/ci-agents/panel@main
-        env:
-          INPUT_NAMESPACE: review
-          INPUT_CONFIG: .github/ci-agents/issue-review.yml
-          INPUT_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_ORG: sw2m
-          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
+        with:
+          namespace: review
+          config: .github/ci-agents/issue-review.yml
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          org: sw2m
+          actor: ${{ needs.ownership.outputs.owner }}
 
       - name: Post reviews + orchestrate cardinality
         run: |
@@ -177,94 +177,94 @@ jobs:
           const ruling = JSON.parse(rulingJson);
 
           const allComments = await github.paginate(
-            github.rest.issues.listComments,
-            { ...context.repo, issue_number: context.issue.number, per_page: 100 },
+          github.rest.issues.listComments,
+          { ...context.repo, issue_number: context.issue.number, per_page: 100 },
           );
 
           const issueLabels = (context.payload.issue?.labels || [])
-            .map((l) => typeof l === "string" ? l : l.name);
+          .map((l) => typeof l === "string" ? l : l.name);
           const isGoal = issueLabels.includes("spec:goal");
 
           // Post each reviewer's output as a comment
           for (const [slug, cat] of Object.entries(ruling.categories)) {
-            const agentOutput = cat.outputs?.[0];
-            if (!agentOutput?.output) continue;
-            const result = agentOutput.output;
+          const agentOutput = cat.outputs?.[0];
+          if (!agentOutput?.output) continue;
+          const result = agentOutput.output;
 
-            const budget = new budgetMod.Budget({ key: "phase-1c" });
-            const round = budget.round(allComments, slug);
-            const cap = budget.budget(round);
+          const budget = new budgetMod.Budget({ key: "phase-1c" });
+          const round = budget.round(allComments, slug);
+          const cap = budget.budget(round);
 
-            // Build review body from structured concerns
-            const concerns = result.concerns || [];
-            const bullets = concerns.map((c) => {
-              const sev = c.severity === "blocking" ? "(blocking) " : "";
-              return "- " + sev + c.text;
-            }).join("\n");
-            const reviewBody = bullets || "No Phase 1c concerns identified.";
+          // Build review body from structured concerns
+          const concerns = result.concerns || [];
+          const bullets = concerns.map((c) => {
+            const sev = c.severity === "blocking" ? "(blocking) " : "";
+            return "- " + sev + c.text;
+          }).join("\n");
+          const reviewBody = bullets || "No Phase 1c concerns identified.";
 
-            const processed = budget.process({ body: reviewBody, round, budget: cap });
+          const processed = budget.process({ body: reviewBody, round, budget: cap });
 
-            // Build frontmatter for the comment
-            const fm = serde.dump({
-              vsdd: {
-                "phase-1c": {
-                  reviewer: slug,
-                  verdict: processed.verdict,
-                  ...(isGoal && result.subjects !== undefined ? { subjects: result.subjects, outcomes: result.outcomes } : {}),
-                }
+          // Build frontmatter for the comment
+          const fm = serde.dump({
+            vsdd: {
+              "phase-1c": {
+                reviewer: slug,
+                verdict: processed.verdict,
+                ...(isGoal && result.subjects !== undefined ? { subjects: result.subjects, outcomes: result.outcomes } : {}),
               }
-            }, "frontmatter");
+            }
+          }, "frontmatter");
 
-            const label = slug.charAt(0).toUpperCase() + slug.slice(1);
-            const header = "**VSDD Phase 1c — " + label + "**\n\n";
-            const footer = "\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._";
+          const label = slug.charAt(0).toUpperCase() + slug.slice(1);
+          const header = "**VSDD Phase 1c — " + label + "**\n\n";
+          const footer = "\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._";
 
-            await github.rest.issues.createComment({
-              ...context.repo, issue_number: context.issue.number,
-              body: fm + "\n" + header + processed.body + footer,
-            });
+          await github.rest.issues.createComment({
+            ...context.repo, issue_number: context.issue.number,
+            body: fm + "\n" + header + processed.body + footer,
+          });
           }
 
           // Cardinality orchestrator (goal-specs only)
           if (isGoal) {
-            const gemResult = ruling.categories.gemini?.outputs?.[0]?.output;
-            const claResult = ruling.categories.claude?.outputs?.[0]?.output;
+          const gemResult = ruling.categories.gemini?.outputs?.[0]?.output;
+          const claResult = ruling.categories.claude?.outputs?.[0]?.output;
 
-            const concerns = [];
-            let canonical = null;
+          const concerns = [];
+          let canonical = null;
 
-            const gTuple = gemResult?.subjects !== undefined ? { subjects: gemResult.subjects, outcomes: gemResult.outcomes } : null;
-            const cTuple = claResult?.subjects !== undefined ? { subjects: claResult.subjects, outcomes: claResult.outcomes } : null;
+          const gTuple = gemResult?.subjects !== undefined ? { subjects: gemResult.subjects, outcomes: gemResult.outcomes } : null;
+          const cTuple = claResult?.subjects !== undefined ? { subjects: claResult.subjects, outcomes: claResult.outcomes } : null;
 
-            if (!gTuple) concerns.push("(blocking) Gemini missing subjects/outcomes counts.");
-            if (!cTuple) concerns.push("(blocking) Claude missing subjects/outcomes counts.");
+          if (!gTuple) concerns.push("(blocking) Gemini missing subjects/outcomes counts.");
+          if (!cTuple) concerns.push("(blocking) Claude missing subjects/outcomes counts.");
 
-            if (gTuple && cTuple) {
-              const g = cardinality.classify(gTuple);
-              const c = cardinality.classify(cTuple);
-              if (g.single !== c.single) {
-                concerns.push(
-                  "(blocking) Reviewers disagree on classification: " +
-                  "gemini=" + JSON.stringify(gTuple) + " (" + (g.single ? "atomic" : "decomposable") + "); " +
-                  "claude=" + JSON.stringify(cTuple) + " (" + (c.single ? "atomic" : "decomposable") + ")."
-                );
-              } else {
-                canonical = cardinality.combine(gTuple, cTuple);
-              }
+          if (gTuple && cTuple) {
+            const g = cardinality.classify(gTuple);
+            const c = cardinality.classify(cTuple);
+            if (g.single !== c.single) {
+              concerns.push(
+                "(blocking) Reviewers disagree on classification: " +
+                "gemini=" + JSON.stringify(gTuple) + " (" + (g.single ? "atomic" : "decomposable") + "); " +
+                "claude=" + JSON.stringify(cTuple) + " (" + (c.single ? "atomic" : "decomposable") + ")."
+              );
+            } else {
+              canonical = cardinality.combine(gTuple, cTuple);
             }
+          }
 
-            const orchVerdict = concerns.length === 0 ? "pass" : "fail";
-            const fm = cardinality.emit({ verdict: orchVerdict, ...(canonical || {}) });
-            const orchHeader = "**VSDD Phase 1c — Orchestrator (cardinality)**\n\n";
-            const orchBody = concerns.length === 0
-              ? "Reviewer counts agreed. Canonical tuple: subjects=" + canonical.subjects + ", outcomes=" + canonical.outcomes + "."
-              : concerns.map((x) => "- " + x).join("\n");
-            const orchFooter = "\n\n---\n_Per #128: cardinality orchestrator._";
+          const orchVerdict = concerns.length === 0 ? "pass" : "fail";
+          const fm = cardinality.emit({ verdict: orchVerdict, ...(canonical || {}) });
+          const orchHeader = "**VSDD Phase 1c — Orchestrator (cardinality)**\n\n";
+          const orchBody = concerns.length === 0
+            ? "Reviewer counts agreed. Canonical tuple: subjects=" + canonical.subjects + ", outcomes=" + canonical.outcomes + "."
+            : concerns.map((x) => "- " + x).join("\n");
+          const orchFooter = "\n\n---\n_Per #128: cardinality orchestrator._";
 
-            await github.rest.issues.createComment({
-              ...context.repo, issue_number: context.issue.number,
-              body: fm + "\n\n" + orchHeader + orchBody + orchFooter,
-            });
+          await github.rest.issues.createComment({
+            ...context.repo, issue_number: context.issue.number,
+            body: fm + "\n\n" + orchHeader + orchBody + orchFooter,
+          });
           }
         shell: octoscript {0}

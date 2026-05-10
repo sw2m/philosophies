@@ -62,12 +62,12 @@ runs:
     - name: Run Claude
       id: invoke
       uses: sw2m/ci-agents/agent@main
-      env:
-        INPUT_NAMESPACE: decompose
-        INPUT_AGENT: claude
-        INPUT_API_KEY: ${{ env.INPUT_ANTHROPIC_API_KEY }}
-        INPUT_ORG: sw2m
-        INPUT_ACTOR: ${{ env.INPUT_OWNER_LOGIN }}
+        with:
+          namespace: decompose
+          agent: claude
+          api-key: ${{ env.INPUT_ANTHROPIC_API_KEY }}
+          org: sw2m
+          actor: ${{ env.INPUT_OWNER_LOGIN }}
 
     - name: Parse tech-specs and open sub-issues
       run: |
