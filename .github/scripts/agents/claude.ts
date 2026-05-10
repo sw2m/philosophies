@@ -29,6 +29,17 @@ export class Claude extends Agent {
   tools: string;
   mode: string;
 
+  static installed = false;
+  static async install(): Promise<void> {
+    if (Claude.installed) return;
+    const check = new Deno.Command("claude", { args: ["--version"], stdout: "null", stderr: "null" });
+    try { if ((await check.output()).code === 0) { Claude.installed = true; return; } } catch {}
+    const proc = new Deno.Command("npm", { args: ["install", "-g", "@anthropic-ai/claude-code@latest"], stdout: "inherit", stderr: "inherit" });
+    const { code } = await proc.output();
+    if (code !== 0) throw new Error("Failed to install Claude Code CLI");
+    Claude.installed = true;
+  }
+
   constructor(opts: Opts = {}) {
     super({
       primary: opts.primary ?? "claude-opus-4-5",
@@ -41,6 +52,16 @@ export class Claude extends Agent {
 
   protected override get cmd(): string {
     return "claude";
+  }
+
+  override async run(input: ReadableStream<Uint8Array>) {
+    await Claude.install();
+    return super.run(input);
+  }
+
+  override async prompt(model: string, input: ReadableStream<Uint8Array>) {
+    await Claude.install();
+    return super.prompt(model, input);
   }
 
   protected override args({ model }: { model: string }): string[] {

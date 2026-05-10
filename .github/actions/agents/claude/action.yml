@@ -21,13 +21,6 @@ runs:
         INPUT_ORG: ${{ env.INPUT_ORG }}
         INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ env.INPUT_TRUST_GITHUB_ACTIONS_BOT }}
 
-    - uses: actions/setup-node@v6
-      with:
-        node-version: "20"
-
-    - name: Install Claude Code CLI
-      shell: bash
-      run: npm install -g @anthropic-ai/claude-code@latest
 
 
     - name: Invoke claude
