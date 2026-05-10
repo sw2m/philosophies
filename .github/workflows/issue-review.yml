@@ -135,187 +135,11 @@ jobs:
             await artifact.set("prep", "prompt", prompt);
             console.log("Uploaded prep/prompt artifact");
 
-  gemini-review:
-    name: Gemini VSDD Phase 1c review
+
+  review:
+    name: Phase 1c adversarial review
     needs: [ownership, prep]
-    # Skip cleanly when GEMINI_API_KEY isn't available rather than fail
-    # noisily — the workflow is advisory and must not gate anything.
-    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.has-gemini-key == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: sw2m/octoscript/action@main
-
-      - name: Load prompt
-        run: |
-          const prompt = await artifact.get("prep", "prompt");
-          if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
-          await shared.set("review", "input", JSON.stringify({ prompt }));
-        shell: octoscript {0}
-
-      - name: Run Gemini
-        id: review
-        uses: sw2m/ci-agents/agent@main
-        env:
-          INPUT_NAMESPACE: review
-          INPUT_AGENT: gemini
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_ORG: sw2m
-          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
-          INPUT_FORMAT: frontmatter
-
-      - name: Post review with budget-decay reclassification (gemini)
-        run: |
-            const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
-            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
-            const budget = new budgetMod.Budget({ key: "phase-1c" });
-            const SLUG = "gemini";
-            const reviewBody = await shared.get("review", "raw") ?? "";
-            // Round counting: paginate through all issue comments, count
-            // prior frontmatter comments authored by this reviewer.
-            const allComments = await github.paginate(
-              github.rest.issues.listComments,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                per_page: 100,
-              },
-            );
-            const round = budget.round(allComments, SLUG);
-            const cap = budget.budget(round);
-            const result = budget.process({ body: reviewBody, round, budget: cap });
-            // Per #128: extract subjects/outcomes counts from the LLM
-            // prose body for goal-specs and add them to the kv-block so
-            // the orchestrator step can read them.
-            const issueLabels = (context.payload.issue?.labels || [])
-              .map((l) => (typeof l === "string" ? l : l.name));
-            const isGoal = issueLabels.includes("spec:goal");
-            let subjects, outcomes;
-            if (isGoal) {
-              const sm = reviewBody.match(/subjects:\s*(\S+)/);
-              const om = reviewBody.match(/outcomes:\s*(\S+)/);
-              if (sm && om && cardinality.valid(sm[1]) && cardinality.valid(om[1])) {
-                subjects = parseInt(sm[1], 10);
-                outcomes = parseInt(om[1], 10);
-              } else {
-                subjects = 0;
-                outcomes = 0;
-              }
-            }
-            const fm = [
-              "<!--",
-              "vsdd:",
-              "  phase-1c:",
-              `    reviewer: ${SLUG}`,
-              `    verdict: ${result.verdict}`,
-              ...(subjects !== undefined ? [`    subjects: ${subjects}`, `    outcomes: ${outcomes}`] : []),
-              "-->",
-              "",
-            ].join("\n");
-            const header = `**VSDD Phase 1c — Gemini**\n\n`;
-            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: fm + "\n" + header + result.body + footer,
-            });
-
-  claude-review:
-    name: Claude VSDD Phase 1c review
-    needs: [ownership, prep]
-    # Same guard as gemini-review — skip cleanly when ANTHROPIC_API_KEY isn't
-    # available rather than fail noisily.
-    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.has-anthropic-key == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: sw2m/octoscript/action@main
-
-      - name: Load prompt
-        run: |
-          const prompt = await artifact.get("prep", "prompt");
-          if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
-          await shared.set("review", "input", JSON.stringify({ prompt }));
-        shell: octoscript {0}
-
-      - name: Run Claude
-        id: review
-        uses: sw2m/ci-agents/agent@main
-        env:
-          INPUT_NAMESPACE: review
-          INPUT_AGENT: claude
-          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          INPUT_ORG: sw2m
-          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
-          INPUT_FORMAT: frontmatter
-
-      - name: Post review with budget-decay reclassification (claude)
-        run: |
-            const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
-            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
-            const budget = new budgetMod.Budget({ key: "phase-1c" });
-            const SLUG = "claude";
-            const reviewBody = await shared.get("review", "raw") ?? "";
-            // Round counting: paginate through all issue comments, count
-            // prior frontmatter comments authored by this reviewer.
-            const allComments = await github.paginate(
-              github.rest.issues.listComments,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                per_page: 100,
-              },
-            );
-            const round = budget.round(allComments, SLUG);
-            const cap = budget.budget(round);
-            const result = budget.process({ body: reviewBody, round, budget: cap });
-            // Per #128: extract subjects/outcomes counts from the LLM
-            // prose body for goal-specs and add them to the kv-block so
-            // the orchestrator step can read them.
-            const issueLabels = (context.payload.issue?.labels || [])
-              .map((l) => (typeof l === "string" ? l : l.name));
-            const isGoal = issueLabels.includes("spec:goal");
-            let subjects, outcomes;
-            if (isGoal) {
-              const sm = reviewBody.match(/subjects:\s*(\S+)/);
-              const om = reviewBody.match(/outcomes:\s*(\S+)/);
-              if (sm && om && cardinality.valid(sm[1]) && cardinality.valid(om[1])) {
-                subjects = parseInt(sm[1], 10);
-                outcomes = parseInt(om[1], 10);
-              } else {
-                subjects = 0;
-                outcomes = 0;
-              }
-            }
-            const fm = [
-              "<!--",
-              "vsdd:",
-              "  phase-1c:",
-              `    reviewer: ${SLUG}`,
-              `    verdict: ${result.verdict}`,
-              ...(subjects !== undefined ? [`    subjects: ${subjects}`, `    outcomes: ${outcomes}`] : []),
-              "-->",
-              "",
-            ].join("\n");
-            const header = `**VSDD Phase 1c — Claude**\n\n`;
-            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: fm + "\n" + header + result.body + footer,
-            });
-
-  orchestrator:
-    name: Cardinality orchestrator (goal-specs)
-    needs: [ownership, gemini-review, claude-review]
-    # Only run when the issue is a spec:goal AND ownership succeeded.
-    # No-op for tech-specs and any other issue type — absent count
-    # frontmatter on tech-spec reviews never triggers validation.
-    if: ${{ needs.ownership.outputs.owned == 'true' && contains(toJSON(github.event.issue.labels), 'spec:goal') }}
+    if: ${{ needs.ownership.outputs.owned == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -324,79 +148,123 @@ jobs:
       - uses: actions/checkout@v6
       - uses: sw2m/octoscript/action@main
 
-      - name: Read tuples + post orchestrator verdict
+      - name: Load prompt
         run: |
-            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
+          const prompt = await artifact.get("prep", "prompt");
+          if (!prompt) { core.setFailed("prep/prompt artifact missing"); exit(1); }
+          await shared.set("review.gemini", "input", prompt);
+          await shared.set("review.claude", "input", prompt);
+        shell: octoscript {0}
 
-            const allComments = await github.paginate(
-              github.rest.issues.listComments,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                per_page: 100,
-              },
-            );
+      - name: Run panel
+        id: panel
+        uses: sw2m/ci-agents/panel@main
+        env:
+          INPUT_NAMESPACE: review
+          INPUT_CONFIG: .github/ci-agents/issue-review.yml
+          INPUT_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_ORG: sw2m
+          INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
 
-            const t = cardinality.tuples(allComments);
+      - name: Post reviews + orchestrate cardinality
+        run: |
+          const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
+          const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
+
+          const rulingJson = await shared.get("review", "ruling");
+          if (!rulingJson) { core.setFailed("No ruling from panel"); exit(1); }
+          const ruling = JSON.parse(rulingJson);
+
+          const allComments = await github.paginate(
+            github.rest.issues.listComments,
+            { ...context.repo, issue_number: context.issue.number, per_page: 100 },
+          );
+
+          const issueLabels = (context.payload.issue?.labels || [])
+            .map((l) => typeof l === "string" ? l : l.name);
+          const isGoal = issueLabels.includes("spec:goal");
+
+          // Post each reviewer's output as a comment
+          for (const [slug, cat] of Object.entries(ruling.categories)) {
+            const agentOutput = cat.outputs?.[0];
+            if (!agentOutput?.output) continue;
+            const result = agentOutput.output;
+
+            const budget = new budgetMod.Budget({ key: "phase-1c" });
+            const round = budget.round(allComments, slug);
+            const cap = budget.budget(round);
+
+            // Build review body from structured concerns
+            const concerns = result.concerns || [];
+            const bullets = concerns.map((c) => {
+              const sev = c.severity === "blocking" ? "(blocking) " : "";
+              return "- " + sev + c.text;
+            }).join("\n");
+            const reviewBody = bullets || "No Phase 1c concerns identified.";
+
+            const processed = budget.process({ body: reviewBody, round, budget: cap });
+
+            // Build frontmatter for the comment
+            const fm = serde.dump({
+              vsdd: {
+                "phase-1c": {
+                  reviewer: slug,
+                  verdict: processed.verdict,
+                  ...(isGoal && result.subjects !== undefined ? { subjects: result.subjects, outcomes: result.outcomes } : {}),
+                }
+              }
+            }, "frontmatter");
+
+            const label = slug.charAt(0).toUpperCase() + slug.slice(1);
+            const header = "**VSDD Phase 1c — " + label + "**\n\n";
+            const footer = "\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._";
+
+            await github.rest.issues.createComment({
+              ...context.repo, issue_number: context.issue.number,
+              body: fm + "\n" + header + processed.body + footer,
+            });
+          }
+
+          // Cardinality orchestrator (goal-specs only)
+          if (isGoal) {
+            const gemResult = ruling.categories.gemini?.outputs?.[0]?.output;
+            const claResult = ruling.categories.claude?.outputs?.[0]?.output;
+
             const concerns = [];
             let canonical = null;
 
-            if (!t.gemini) {
-              concerns.push(
-                "(blocking) Gemini's most-recent review is missing or has " +
-                "invalid `subjects`/`outcomes` counts (treated as 0). The " +
-                "goal text may be missing subjects or acceptance criteria; " +
-                "edit the goal body and re-run Phase 1c.",
-              );
-            }
-            if (!t.claude) {
-              concerns.push(
-                "(blocking) Claude's most-recent review is missing or has " +
-                "invalid `subjects`/`outcomes` counts (treated as 0). The " +
-                "goal text may be missing subjects or acceptance criteria; " +
-                "edit the goal body and re-run Phase 1c.",
-              );
-            }
+            const gTuple = gemResult?.subjects !== undefined ? { subjects: gemResult.subjects, outcomes: gemResult.outcomes } : null;
+            const cTuple = claResult?.subjects !== undefined ? { subjects: claResult.subjects, outcomes: claResult.outcomes } : null;
 
-            if (t.gemini && t.claude) {
-              const g = cardinality.classify(t.gemini);
-              const c = cardinality.classify(t.claude);
+            if (!gTuple) concerns.push("(blocking) Gemini missing subjects/outcomes counts.");
+            if (!cTuple) concerns.push("(blocking) Claude missing subjects/outcomes counts.");
+
+            if (gTuple && cTuple) {
+              const g = cardinality.classify(gTuple);
+              const c = cardinality.classify(cTuple);
               if (g.single !== c.single) {
                 concerns.push(
-                  `(blocking) Reviewers disagree on classification: ` +
-                  `gemini reports ${JSON.stringify(t.gemini)} ` +
-                  `(min=${g.min}, ${g.single ? "atomic" : "decomposable"}); ` +
-                  `claude reports ${JSON.stringify(t.claude)} ` +
-                  `(min=${c.min}, ${c.single ? "atomic" : "decomposable"}). ` +
-                  `Edit the goal body to clarify until both reviewers ` +
-                  `read the same shape.`,
+                  "(blocking) Reviewers disagree on classification: " +
+                  "gemini=" + JSON.stringify(gTuple) + " (" + (g.single ? "atomic" : "decomposable") + "); " +
+                  "claude=" + JSON.stringify(cTuple) + " (" + (c.single ? "atomic" : "decomposable") + ")."
                 );
               } else {
-                canonical = cardinality.combine(t.gemini, t.claude);
+                canonical = cardinality.combine(gTuple, cTuple);
               }
             }
 
-            const verdict = concerns.length === 0 ? "pass" : "fail";
-            const fm = cardinality.emit({
-              verdict,
-              ...(canonical || {}),
-            });
-            const header = `**VSDD Phase 1c — Orchestrator (cardinality)**\n\n`;
-            let body;
-            if (concerns.length === 0) {
-              const tupleStr = canonical
-                ? `subjects=${canonical.subjects}, outcomes=${canonical.outcomes}, min=${Math.min(canonical.subjects, canonical.outcomes)}`
-                : "(no canonical tuple — check orchestrator state)";
-              body = `Reviewer counts agreed on classification. Canonical tuple: ${tupleStr}.`;
-            } else {
-              body = concerns.map((x) => `- ${x}`).join("\n");
-            }
-            const footer = `\n\n---\n_Per #128: cardinality orchestrator. Verdict gates promotion when fail; canonical tuple consumed by promote-goal-to-tech._`;
+            const orchVerdict = concerns.length === 0 ? "pass" : "fail";
+            const fm = cardinality.emit({ verdict: orchVerdict, ...(canonical || {}) });
+            const orchHeader = "**VSDD Phase 1c — Orchestrator (cardinality)**\n\n";
+            const orchBody = concerns.length === 0
+              ? "Reviewer counts agreed. Canonical tuple: subjects=" + canonical.subjects + ", outcomes=" + canonical.outcomes + "."
+              : concerns.map((x) => "- " + x).join("\n");
+            const orchFooter = "\n\n---\n_Per #128: cardinality orchestrator._";
+
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: fm + "\n\n" + header + body + footer,
+              ...context.repo, issue_number: context.issue.number,
+              body: fm + "\n\n" + orchHeader + orchBody + orchFooter,
             });
+          }
         shell: octoscript {0}

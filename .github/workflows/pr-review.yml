@@ -33,128 +33,8 @@ permissions:
 # and output-format spec live in exactly one place. Reviewer-specific
 # framing (gemini's stdin intro, claude's anti-hallucination guard) stays
 # inline at the call site.
-env:
-  # Single source of truth for the Phase 3 reviewer prompt. Both reviewers
-  # (Gemini, Claude) receive this identical text — the only mechanical
-  # difference is HOW the input substrate (MEMORY.md + repo tree + diff)
-  # is attached: Gemini reads it via stdin; Claude's composite action
-  # prepends this prompt to the same prompt file. Adding a new review
-  # rule means editing this one block.
-  PHASE_3_PROMPT: |-
-    # CRITICAL OUTPUT FORMAT (read this FIRST)
-
-    Your response MUST start, on the very first line, with an HTML-comment frontmatter block in exactly this shape, then your bullet list:
-
-    Acceptable response example:
-
-    ```
-    <!--
-    vsdd:
-      phase-3:
-        verdict: fail
-    -->
-
-    - **(blocking)** path/to/file.ts:42 — Bug description. Fix: …
-    - path/to/other.ts:10 — Nitpick. Fix: …
-    ```
-
-    The `<!--` and `-->` must each sit alone on their own line — no content sharing the wrapper line. The `verdict` value must be exactly `pass` or `fail`. If you do not produce this frontmatter as your first output, the workflow will fail and your review will be discarded. Non-negotiable.
-
-    # TASK
-
-    You are an adversarial Phase 3 reviewer (MEMORY.md §II — Verified Spec-Driven Development / VSDD).
-
-    The canonical VSDD doc (MEMORY.md), the PR body and any linked tech-spec issues (in `<pr-context>` and `<linked-issue n="N">` tags), and the PR diff are provided below. You also have the full repo checkout available — read files from disk when you need context beyond the diff. For spec-fidelity findings (whether the diff matches the spec it's supposed to satisfy), cite from the linked-issue or pr-context content. The diff gives you WHAT changed; the checkout gives you WHERE it fits.
-
-    # DIFF-TRUNCATION CHECK
-
-    If you see `[diff truncated to 5000 lines]` anywhere in the embedded diff, START your review's body (after the frontmatter) with this exact bullet:
-
-    `- **(blocking) DIFF TRUNCATED.** This review only saw the first 5000 lines of the diff. The human reviewer must read the rest of the diff manually before merging.`
-
-    That bullet must appear before any other findings. Set `verdict: fail` because partial coverage is a correctness concern. This rule overrides the usual pass-with-nitpicks logic.
-
-    Apply these review rules. Look ONLY for:
-
-    - Code that diverges from the spec it's supposed to satisfy
-    - Tautological tests
-    - Hidden coupling, race conditions, missing cleanup
-    - Multi-word symbols (camelCase / snake_case), per §IX:
-      - Functions/methods: should they be `Subject.verb` on a state machine?
-      - Vars at large: is the symbol genuinely ambiguous, or is it verbose-when-unambiguous? `archiveUrl` reduces to `archive` or `url`.
-      - Localized/scoped collisions: if multi-word is forced by collision, the scope is doing too much.
-      - Do NOT flag: PascalCase types/classes/interfaces; serde-leak fields whose name matches an at-rest schema (`c_type` matching a YAML/JSON field); external-library symbols you don't control.
-    - Error-structure inconsistency (§IX): mixed error types, mixed throw/return/null, partial error-code coverage, try/catch vs assertThrows mismatches.
-    - Inconsistent error handling
-    - Spec-discipline violations: tech-spec issues bundling >1 problem (§VII)
-    - Security Surface (§II Phase 3): input validation gaps, injection vectors (SQL/command/path), unsafe deserialization, missing auth/authz checks
-    - Spec gaps revealed by implementation (§II Phase 3): behavior in the diff that the spec doesn't cover
-    - Purity-boundary violations (§II Phase 5): newly-introduced side effects (I/O, mutable globals, time/random reads, network calls) inside a function or module the spec marks as a pure core. Flag any new dependency from a pure unit on impure infrastructure.
-
-    # CONCERN CLASSIFICATION (mandatory on every concern bullet)
-
-    Every concern you raise must be classified as either **PR-scope** or **out-of-scope**, using a literal token:
-
-    - `[PR-scope]` — the concern is about content in the PR's diff hunks, OR about behavior the diff *introduces* (new code path), *modifies* (changes existing behavior), or *newly exposes* (the diff makes a previously-unreachable code path reachable for the first time).
-    - `[out-of-scope]` — the concern is about pre-existing code, CI infrastructure, MEMORY.md gaps, or repo-wide patterns that the diff does not modify, and whose failure mode is neither introduced, modified, nor newly exposed by the diff.
-
-    **Boundary case — newly exposed blast radius.** If function A is in the diff and now calls unmodified function B, and the concern is in B: PR-scope iff this diff is what *first* makes B reachable from A's call site. Adding a second call to B from already-callable code does NOT count as "newly exposed" — B was already reachable.
-
-    **Boundary case — mixed-scope concerns.** A concern with both new-code and pre-existing-pattern aspects is classified by *dominant cause*: if the broken pattern already exists in the repo and was not introduced, modified, or newly exposed by this diff, classify as out-of-scope; otherwise PR-scope.
-
-    **Output syntax — token position.** The scope token appears *after* the severity marker (`(blocking)`), and immediately follows the bullet marker plus any markdown emphasis when no severity marker is present. The full ordering is:
-
-    ```
-    - (blocking) [PR-scope] <concern text>
-    - [out-of-scope] <concern text>
-    ```
-
-    The scope token is **mandatory on every concern bullet**. Non-concern commentary (commendations, neutral observations, context the reviewer wants to share) must NOT use bullet form — put non-concern commentary in prose paragraphs or under a `Notes:` heading outside the concern list. This eliminates ambiguity between an untokenized concern and a non-concern bullet.
-
-    **Fail-closed default.** If a downstream parser sees a concern bullet missing or with an unrecognized scope token, it routes that concern as `[PR-scope]` (fail-closed). Recognized tokens are exactly `[PR-scope]` and `[out-of-scope]`, case-sensitive.
-
-    **Verdict semantics.** The `verdict: pass | fail` line reflects **PR-scope concerns only** — out-of-scope concerns do not trigger a `fail` verdict. Out-of-scope concerns flow to a separate gap-issue tracker downstream.
-
-    # OUTPUT FORMAT (strict)
-
-    Begin your response with the HTML-comment frontmatter block, exactly this shape:
-
-    <!--
-    vsdd:
-      phase-3:
-        verdict: pass | fail
-    -->
-
-    The verdict answers "should this PR be approved?", **not** "are
-    there zero concerns?". A `pass` with listed nitpicks is correct
-    and expected — concerns can exist without blocking.
-
-    - `verdict: pass` ⇔ concerns are nits/style/nice-to-have. The PR
-      is acceptable as-is; the human can address the nits or dismiss
-      them. Translates to APPROVE.
-    - `verdict: fail` ⇔ at least one concern is genuinely blocking
-      (correctness, security, broken contract, spec violation that
-      invalidates the change). Translates to REQUEST_CHANGES.
-
-    The frontmatter MUST be the first thing in your output (no leading
-    whitespace, no preamble).
-
-    After the closing `-->`, list every concern (blocking and
-    nitpicks alike) as terse bullets. Each bullet: a concrete flaw
-    with `file:line` and a proposed fix. Mark blocking concerns
-    explicitly with **(blocking)** at the start of the bullet so the
-    human reading can scan for them.
-
-    If you genuinely have nothing to say, the body may be a single
-    line.
 
 jobs:
-  # Ownership gate. A PR is "owned" when its author is an sw2m org member
-  # OR any of its current assignees is. Unowned PRs (e.g. fork PRs from
-  # external contributors with no org-member assignee) are dormant — CI
-  # skips so an external contributor cannot consume agent budget. To wake
-  # an external PR up, an org member assigns themselves; `pull_request:
-  # [assigned]` re-fires this workflow and the gate now lets it through.
   ownership:
     name: Verify org-member ownership
     if: github.event.pull_request.draft != true
@@ -385,20 +265,15 @@ jobs:
           });
         shell: octoscript {0}
 
-  gemini-review:
-    name: Gemini adversarial review
+  adversarial-review:
+    name: Phase 3 adversarial review
     needs: [ownership, prep]
-    # Skip cleanly when GEMINI_API_KEY isn't available (e.g. fork PR without
-    # secret access). Without this guard the composite action would fail
-    # noisily, violating the 'advisory only — never gates' contract.
-    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.has-gemini-key == 'true' }}
+    if: ${{ needs.ownership.outputs.owned == 'true' && (needs.ownership.outputs.has-gemini-key == 'true' || needs.ownership.outputs.has-anthropic-key == 'true') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: sw2m/octoscript/action@main
 
-      # Fetch philosophies' scripts (vsdd/verdict.ts) for downstream
-      # callers that don't have them in their checkout.
       - name: Fetch sw2m/philosophies scripts
         uses: actions/checkout@v6
         with:
@@ -414,30 +289,36 @@ jobs:
             const v = await artifact.get("prep", k);
             if (v) parts.push(v);
           }
-          await shared.set("review", "input", parts.join("\n\n"));
+          const prompt = parts.join("\n\n");
+          await shared.set("review.gemini", "input", prompt);
+          await shared.set("review.claude", "input", prompt);
         shell: octoscript {0}
 
-      - name: Run Gemini
-        id: review
-        uses: sw2m/ci-agents/agent@main
+      - name: Run panel
+        id: panel
+        uses: sw2m/ci-agents/panel@main
         env:
           INPUT_NAMESPACE: review
-          INPUT_AGENT: gemini
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_CONFIG: .github/ci-agents/pr-review.yml
+          INPUT_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           INPUT_ORG: sw2m
           INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
-          INPUT_PROMPT: ${{ env.PHASE_3_PROMPT }}
-          INPUT_FORMAT: frontmatter
 
-      - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
-        env:
-          
+      - name: Post reviews
         run: |
-            const resultJson = await shared.get("review", "result");
-            const raw = await shared.get("review", "raw") ?? "";
+          const rulingJson = await shared.get("review", "ruling");
+          if (!rulingJson) { core.setFailed("No ruling from panel"); exit(1); }
+          const ruling = JSON.parse(rulingJson);
+
+          for (const [name, cat] of Object.entries(ruling.categories)) {
+            const agentOutput = cat.outputs?.[0];
+            if (!agentOutput) continue;
+
+            const result = agentOutput.output;
+            const raw = await shared.get("review." + name, "raw") ?? "";
             let verdict = null;
-            if (resultJson) {
-              const result = JSON.parse(resultJson);
+            if (result) {
               const blocks = Array.isArray(result) ? result : [result];
               for (const block of blocks) {
                 const v = block?.vsdd?.["phase-3"]?.verdict;
@@ -445,114 +326,101 @@ jobs:
               }
             }
             const body = raw.includes("-->") ? raw.slice(raw.indexOf("-->") + 3).trim() : raw;
-            if (verdict !== "pass" && verdict !== "fail") {
-              core.setFailed("Gemini output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
-            }
+
+            const label = name === "gemini" ? "Gemini" : "Claude";
             const event = verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
-            const header = `**VSDD Phase 3 — Gemini adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? "unparseable"}\`_\n\n`;
-            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
-            // Self-review guard — see ci-meta.yml's consensus step
-            // for the rationale and the spec annotation about hardcoding.
+            const header = "**VSDD Phase 3 — " + label + " adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`" + (verdict ?? "unparseable") + "\`_\n\n";
+            const footer = "\n\n---\n_Automated review per MEMORY.md §II Phase 3._";
+
             const author = context.payload.pull_request?.user?.login;
             if (author === "github-actions[bot]") {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: header + `_(${event} would be rejected: PR author == review actor, posting as comment)_\n\n` + body + footer,
+                ...context.repo, issue_number: context.issue.number,
+                body: header + "_(" + event + " would be rejected: PR author == review actor, posting as comment)_\n\n" + body + footer,
               });
             } else {
               await github.rest.pulls.createReview({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                event,
-                body: header + body + footer,
+                ...context.repo, pull_number: context.issue.number,
+                event, body: header + body + footer,
               });
             }
+          }
         shell: octoscript {0}
 
-  claude-review:
-    name: Claude adversarial review
+  adversarial-review:
+    name: Phase 3 adversarial review
     needs: [ownership, prep]
-    # Same guard as gemini-review — skip cleanly when ANTHROPIC_API_KEY isn't
-    # available rather than fail noisily.
-    if: ${{ needs.ownership.outputs.owned == 'true' && needs.ownership.outputs.has-anthropic-key == 'true' }}
+    if: ${{ needs.ownership.outputs.owned == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: sw2m/octoscript/action@main
 
-      # Fetch philosophies' scripts (vsdd/verdict.ts) for downstream
-      # callers that don't have them in their checkout.
-      - name: Fetch sw2m/philosophies scripts
-        uses: actions/checkout@v6
-        with:
-          repository: sw2m/philosophies
-          ref: main
-          path: .vsdd-philosophies
-
       - name: Build prompt
         run: |
           const keys = ["memory", "pr-context", "diff"];
-          const parts = [Deno.env.get("PHASE_3_PROMPT") ?? ""];
+          const parts = [];
+          const prompt = await Deno.readTextFile("./.github/scripts/vsdd/phase-3/prompt.mustache");
+          parts.push(prompt);
           for (const k of keys) {
             const v = await artifact.get("prep", k);
             if (v) parts.push(v);
           }
-          await shared.set("review", "input", parts.join("\n\n"));
+          const input = parts.join("\n\n");
+          await shared.set("review.gemini", "input", input);
+          await shared.set("review.claude", "input", input);
         shell: octoscript {0}
 
-      - name: Run Claude
-        id: review
-        uses: sw2m/ci-agents/agent@main
+      - name: Run panel
+        id: panel
+        uses: sw2m/ci-agents/panel@main
         env:
           INPUT_NAMESPACE: review
-          INPUT_AGENT: claude
-          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_CONFIG: .github/ci-agents/pr-review.yml
+          INPUT_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           INPUT_ORG: sw2m
           INPUT_ACTOR: ${{ needs.ownership.outputs.owner }}
-          INPUT_PROMPT: ${{ env.PHASE_3_PROMPT }}
-          INPUT_FORMAT: frontmatter
 
-      - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
-        env:
-          
+      - name: Post reviews
         run: |
-            const resultJson = await shared.get("review", "result");
-            const raw = await shared.get("review", "raw") ?? "";
-            let verdict = null;
-            if (resultJson) {
-              const result = JSON.parse(resultJson);
-              const blocks = Array.isArray(result) ? result : [result];
-              for (const block of blocks) {
-                const v = block?.vsdd?.["phase-3"]?.verdict;
-                if (v === "pass" || v === "fail") { verdict = v; break; }
-              }
-            }
-            const body = raw.includes("-->") ? raw.slice(raw.indexOf("-->") + 3).trim() : raw;
-            if (verdict !== "pass" && verdict !== "fail") {
-              core.setFailed("Claude output had no extractable verdict (no vsdd:phase-3 frontmatter). Failing the workflow; raw output is preserved in the review body for human triage.");
-            }
+          const rulingJson = await shared.get("review", "ruling");
+          if (!rulingJson) { core.setFailed("No ruling from panel"); exit(1); }
+          const ruling = JSON.parse(rulingJson);
+
+          for (const [name, cat] of Object.entries(ruling.categories)) {
+            const agentOutput = cat.outputs?.[0];
+            if (!agentOutput?.output) continue;
+            const result = agentOutput.output;
+            const verdict = result.verdict;
+            const concerns = result.concerns || [];
+
+            const label = name.charAt(0).toUpperCase() + name.slice(1);
             const event = verdict === "pass" ? "APPROVE" : "REQUEST_CHANGES";
-            const header = `**VSDD Phase 3 — Claude adversarial review** _(advisory; status check is what gates merge)_  \n_Verdict: \`${verdict ?? "unparseable"}\`_\n\n`;
-            const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 3._`;
-            // Self-review guard — same as the gemini-review step.
+
+            // Build review body from structured concerns
+            const bullets = concerns.map((c) => {
+              const sev = c.severity === "blocking" ? "**(blocking)** " : "";
+              const scope = "[" + c.scope + "] ";
+              const loc = c.file ? c.file + (c.line ? ":" + c.line : "") + " — " : "";
+              return "- " + sev + scope + loc + c.text;
+            }).join("\n");
+
+            const header = "**VSDD Phase 3 — " + label + " adversarial review** _(advisory; status check is what gates merge)_\n_Verdict: `" + (verdict || "unparseable") + "`_\n\n";
+            const footer = "\n\n---\n_Automated review per MEMORY.md §II Phase 3._";
+            const body = bullets || "No concerns.";
+
             const author = context.payload.pull_request?.user?.login;
             if (author === "github-actions[bot]") {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: header + `_(${event} would be rejected: PR author == review actor, posting as comment)_\n\n` + body + footer,
+                ...context.repo, issue_number: context.issue.number,
+                body: header + body + footer,
               });
             } else {
               await github.rest.pulls.createReview({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                event,
-                body: header + body + footer,
+                ...context.repo, pull_number: context.issue.number,
+                event, body: header + body + footer,
               });
             }
+          }
         shell: octoscript {0}

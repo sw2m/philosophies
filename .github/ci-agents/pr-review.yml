@@ -1,0 +1,10 @@
+categories:
+  gemini:
+    agent: gemini
+    readonly: true
+    schema: .github/ci-agents/schemas/phase-3.json
+  claude:
+    agent: claude
+    readonly: true
+    schema: .github/ci-agents/schemas/phase-3.json
+ruling: any-fail
