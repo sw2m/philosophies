@@ -491,7 +491,7 @@ jobs:
         env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
-            const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
+            const { extract } = await import("././.github/scripts/vsdd/verdict.ts");
             const raw = Deno.env.get("REVIEW") ?? "";
             const { verdict, body } = extract(raw, "phase-3");
             if (verdict !== "pass" && verdict !== "fail") {
@@ -564,7 +564,7 @@ jobs:
         env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
-            const { extract } = await import("./.vsdd-philosophies/.github/scripts/vsdd/verdict.ts");
+            const { extract } = await import("././.github/scripts/vsdd/verdict.ts");
             const raw = Deno.env.get("REVIEW") ?? "";
             const { verdict, body } = extract(raw, "phase-3");
             if (verdict !== "pass" && verdict !== "fail") {

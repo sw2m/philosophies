@@ -296,26 +296,27 @@ jobs:
           INPUT_PROMPT: |
             # CRITICAL OUTPUT FORMAT (read this FIRST)
 
-            Your response MUST start, on the very first line, with exactly the three characters `---` (no leading whitespace, no preamble, no markdown heading), then a YAML block, then `---` to close, then optional prose.
+            Begin your output with an HTML-comment frontmatter block, then prose. The block MUST be the first thing — no leading whitespace, no preamble. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line).
 
             Concrete example of an acceptable response:
 
             ```
-            ---
-            verdict: pass
-            rationale: |
-              All applicable VSDD requirements are enforced. Phase 1c, 3, §VII,
-              §IX are implemented; 2a/2b/§VIII are N/A on a docs repo.
-            gaps:
-              - title: "[ci-meta] sample non-blocking gap"
-                body: |
-                  Optional improvement that doesn't block merge.
-            ---
+            <!--
+            vsdd:
+              ci-meta:
+                verdict: pass
+                rationale: |
+                  All applicable VSDD requirements are enforced.
+                gaps:
+                  - title: "[ci-meta] sample non-blocking gap"
+                    body: |
+                      Optional improvement that doesn't block merge.
+            -->
 
             (any free-form summary may follow here, ignored by the parser)
             ```
 
-            If you do not produce frontmatter as your first output, the workflow
+            If you do not produce this frontmatter as your first output, the workflow
             will fail and your analysis will be discarded. This is non-negotiable.
 
             # TASK
@@ -358,7 +359,7 @@ jobs:
 
             # OUTPUT FORMAT (strict)
 
-            Write a single file at the path you were told to use as `output-file`. Begin the file with an HTML-comment frontmatter block. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line):
+            Begin your output with an HTML-comment frontmatter block, then prose. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line):
 
             <!--
             vsdd:
