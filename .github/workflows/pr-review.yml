@@ -38,7 +38,7 @@ env:
   # (Gemini, Claude) receive this identical text — the only mechanical
   # difference is HOW the input substrate (MEMORY.md + repo tree + diff)
   # is attached: Gemini reads it via stdin; Claude's composite action
-  # prepends this prompt to the same stdin-file. Adding a new review
+  # prepends this prompt to the same prompt file. Adding a new review
   # rule means editing this one block.
   PHASE_3_PROMPT: |-
     # CRITICAL OUTPUT FORMAT (read this FIRST)
@@ -403,7 +403,7 @@ jobs:
           # preamble first, then role, anti-hallucination guard, review rules,
           # output format spec. The only per-reviewer difference is HOW the
           # content gets embedded — Gemini reads stdin (this file), Claude
-          # gets the same file as its `stdin-file` input.
+          # gets the same file as its `prompt file` input.
           # Pick the MEMORY.md to embed. Prefer the consumer's own copy
           # (philosophies has one; downstream repos like clesty don't);
           # fall back to philosophies' canonical copy fetched above.
@@ -511,21 +511,22 @@ jobs:
           ref: main
           path: .vsdd-philosophies
 
+      - name: Load prompt
+        run: |
+          {
+            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
+            cat gemini-stdin.txt
+            echo '__PROMPT_EOF__'
+          } >> "$GITHUB_ENV"
+        shell: bash
+
       - name: Run Gemini (composite; org-member gate inside)
         id: review
         uses: ./.github/actions/agents/gemini
-        with:
-          api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: gemini-stdin.txt
-          # The owner login was identified by the ownership gate. Pass it
-          # as actor-override so the action's inner gate validates against
-          # the *PR owner*, not the workflow trigger sender (which on a
-          # fork-PR `synchronize` event can be the external pusher).
-          actor-override: ${{ needs.ownership.outputs.owner }}
-          # Per #112/#116 — opt in to bot trust ONLY when the PR's head
-          # branch is in this repo (not a fork). Fork PRs evaluate to
-          # 'false' and fall through to the existing org-member check.
-          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
+          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Gemini review (APPROVE / REQUEST_CHANGES)
         env:
@@ -584,22 +585,22 @@ jobs:
           ref: main
           path: .vsdd-philosophies
 
+      - name: Load prompt
+        run: |
+          {
+            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
+            cat gemini-stdin.txt
+            echo '__PROMPT_EOF__'
+          } >> "$GITHUB_ENV"
+        shell: bash
+
       - name: Run Claude (composite; org-member gate inside)
         id: review
         uses: ./.github/actions/agents/claude
-        with:
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Same stdin-file as Gemini — `gemini-stdin.txt` already starts
-          # with `${{ env.PHASE_3_PROMPT }}`, followed by MEMORY.md, the PR /
-          # linked-issue context, the full repo tree, and pr.diff. Do NOT
-          # also pass `prompt: PHASE_3_PROMPT` here — the claude composite
-          # concatenates `prompt` + `stdin-file`, so a separate `prompt:`
-          # would deliver the system prompt twice. The gemini-review step
-          # is the correct shape (stdin-file only).
-          stdin-file: gemini-stdin.txt
-          actor-override: ${{ needs.ownership.outputs.owner }}
-          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
-          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
+          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Submit Claude review (APPROVE / REQUEST_CHANGES)
         env:

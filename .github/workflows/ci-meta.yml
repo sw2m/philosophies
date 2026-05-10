@@ -144,14 +144,22 @@ jobs:
           path: ./
 
       - name: Run Gemini
+      - name: Load prompt
+        run: |
+          {
+            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
+            cat eval-input.txt
+            echo '__PROMPT_EOF__'
+          } >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Run Gemini
         id: review
         uses: ./.github/actions/agents/gemini
-        with:
-          api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: eval-input.txt
-          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
-          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          prompt: |
+        env:
+          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_PROMPT: |
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
             Read the canonical VSDD doc inside <vsdd-canonical> tags.
@@ -292,18 +300,22 @@ jobs:
           path: ./
 
       - name: Run Claude
+      - name: Load prompt
+        run: |
+          {
+            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
+            cat eval-input.txt
+            echo '__PROMPT_EOF__'
+          } >> "$GITHUB_ENV"
+        shell: bash
+
+      - name: Run Claude
         id: review
         uses: ./.github/actions/agents/claude
-        with:
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Same stdin-file pattern as Gemini — Claude has no filesystem
-          # access via the Messages API, so we embed eval-input.txt
-          # (canonical MEMORY.md + every workflow + every composite action)
-          # directly in the prompt rather than asking Claude to "read" files.
-          stdin-file: eval-input.txt
-          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
-          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          prompt: |
+        env:
+          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_PROMPT: |
             # CRITICAL OUTPUT FORMAT (read this FIRST)
 
             Your response MUST start, on the very first line, with exactly the three characters `---` (no leading whitespace, no preamble, no markdown heading), then a YAML block, then `---` to close, then optional prose.
@@ -711,14 +723,22 @@ jobs:
           fi
           echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
 
+      - name: Load dedup prompt
+        if: steps.prep-dedup.outputs.dedup-needed == 'true'
+        run: |
+          {
+            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
+            cat dedup-input.txt
+            echo '__PROMPT_EOF__'
+          } >> "$GITHUB_ENV"
+        shell: bash
+
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
         uses: ./.github/actions/agents/gemini
-        with:
-          api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: dedup-input.txt
-          output-file: dedup-output.md
-          actor-override: ${{ steps.resolve-owner.outputs.owner }}
+        env:
+          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_ACTOR_OVERRIDE: ${{ steps.resolve-owner.outputs.owner }}
 
       - name: Open non-duplicate gap issues
         env:
