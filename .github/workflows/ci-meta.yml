@@ -141,10 +141,21 @@ jobs:
               sys.exit(1)
 
           ruling = json.loads(ruling_raw)
+          print(f"ruling keys: {list(ruling.keys())}")
           categories = ruling.get('categories', {})
+          print(f"categories: {list(categories.keys())}")
+          for name, cat in categories.items():
+              print(f"  {name}: outputs={len(cat.get('outputs', []))}, alignment={cat.get('alignment')}")
 
-          gemini_output = categories.get('gemini', {}).get('outputs', [{}])[0].get('output', {})
-          claude_output = categories.get('claude', {}).get('outputs', [{}])[0].get('output', {})
+          def extract_output(cat_data):
+              outputs = cat_data.get('outputs', [])
+              if not outputs:
+                  return {}
+              first = outputs[0]
+              return first.get('output') or {}
+
+          gemini_output = extract_output(categories.get('gemini') or {})
+          claude_output = extract_output(categories.get('claude') or {})
 
           gemini_verdict = gemini_output.get('verdict', 'unknown')
           claude_verdict = claude_output.get('verdict', 'unknown')
