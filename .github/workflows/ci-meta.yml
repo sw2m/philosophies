@@ -66,6 +66,7 @@ jobs:
         uses: ./.github/actions/git/repo-shape
       - name: Print VSDD §VIII applicability to job summary
         shell: bash
+        env:
           HAS_TESTS: ${{ steps.shape.outputs.has-tests }}
           REPO_KIND: ${{ steps.shape.outputs.repo-kind }}
         run: |
@@ -89,6 +90,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Fetch canonical MEMORY.md
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -f MEMORY.md ] && [ "${{ inputs.memory_md_repo || 'sw2m/philosophies' }}" = "${{ github.repository }}" ]; then
@@ -144,9 +146,9 @@ jobs:
       - name: Run Gemini
         id: review
         uses: ./.github/actions/agents/gemini
-        env:
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_STDIN_FILE: eval-input.txt
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: eval-input.txt
           # Per #112/#116 — opt in to bot trust on in-repo head branches only.
           trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           prompt: |
@@ -228,6 +230,7 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
+        env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
           const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
@@ -291,8 +294,8 @@ jobs:
       - name: Run Claude
         id: review
         uses: ./.github/actions/agents/claude
-        env:
-          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           # Same stdin-file pattern as Gemini — Claude has no filesystem
           # access via the Messages API, so we embed eval-input.txt
           # (canonical MEMORY.md + every workflow + every composite action)
@@ -399,6 +402,7 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
+        env:
           REVIEW: ${{ steps.review.outputs.response }}
         run: |
           const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
@@ -491,6 +495,7 @@ jobs:
 
       - name: Build proposed gaps + fetch existing tracked gaps
         id: prep-dedup
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 - <<'PY'
@@ -663,6 +668,7 @@ jobs:
       - name: Resolve org-member owner for dedup actor-override
         id: resolve-owner
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
+        env:
           GH_TOKEN: ${{ github.token }}
           ORG: sw2m
           AUTHOR: ${{ github.event.pull_request.user.login }}
@@ -708,13 +714,14 @@ jobs:
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
         uses: ./.github/actions/agents/gemini
-        env:
-          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          INPUT_STDIN_FILE: dedup-input.txt
-          INPUT_OUTPUT_FILE: dedup-output.md
-          INPUT_ACTOR_OVERRIDE: ${{ steps.resolve-owner.outputs.owner }}
+        with:
+          api-key: ${{ secrets.GEMINI_API_KEY }}
+          stdin-file: dedup-input.txt
+          output-file: dedup-output.md
+          actor-override: ${{ steps.resolve-owner.outputs.owner }}
 
       - name: Open non-duplicate gap issues
+        env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_URL: ${{ github.event.pull_request.html_url }}
