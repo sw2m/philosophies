@@ -11,9 +11,10 @@ import { parse as toml } from "jsr:@std/toml@^1";
 
 type Format = "json" | "yaml" | "toml";
 
+import { parse as jsonc } from "jsr:@std/jsonc@^1";
+
 function json(text: string): unknown {
-  // Strip JSONC comments before parsing
-  return JSON.parse(text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, ""));
+  return jsonc(text);
 }
 
 function sniff(text: string): unknown {
