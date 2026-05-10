@@ -397,55 +397,18 @@ jobs:
           echo "embedded payload bytes: $total"
           wc -c repo-files.xml repo-manifest.txt
 
-      - name: Build prompts (gemini + claude)
+      - uses: sw2m/octoscript/action@main
+
+      - name: Upload prep data
         run: |
-          # Both reviewers receive the same prompt structure: the strict-output
-          # preamble first, then role, anti-hallucination guard, review rules,
-          # output format spec. The only per-reviewer difference is HOW the
-          # content gets embedded — Gemini reads stdin (this file), Claude
-          # gets the same file as its `prompt file` input.
-          # Pick the MEMORY.md to embed. Prefer the consumer's own copy
-          # (philosophies has one; downstream repos like clesty don't);
-          # fall back to philosophies' canonical copy fetched above.
-          if [ -f MEMORY.md ]; then
-            MEMORY_PATH="MEMORY.md"
-          else
-            MEMORY_PATH=".vsdd-philosophies/MEMORY.md"
-          fi
-          cat > gemini-stdin.txt <<'PROMPT_EOF'
-          ${{ env.PHASE_3_PROMPT }}
-
-          --- MEMORY.md ---
-          PROMPT_EOF
-          cat "$MEMORY_PATH" >> gemini-stdin.txt
-          {
-            printf '\n--- PR + LINKED ISSUE CONTEXT ---\n'
-            cat pr-context.txt
-            printf '\n--- REPO MANIFEST (every tracked file, sizes in bytes) ---\n'
-            cat repo-manifest.txt
-            printf '\n--- REPO FILES (full contents where under budget) ---\n'
-            cat repo-files.xml
-            printf '\n--- PR DIFF ---\n'
-            cat pr.diff
-          } >> gemini-stdin.txt
-          echo "gemini-stdin.txt size:"
-          wc -c gemini-stdin.txt
-          # Stash the chosen MEMORY.md path next to the artifact so the
-          # downstream reviewer jobs (which run on fresh runners) can
-          # find it via the same fallback. The artifact uploads it as
-          # `MEMORY.md` either way (canonical content).
-          cp "$MEMORY_PATH" MEMORY-canonical.md
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: pr-context
-          path: |
-            gemini-stdin.txt
-            pr.diff
-            pr-context.txt
-            MEMORY-canonical.md
-            repo-manifest.txt
-            repo-files.xml
+          const memoryPath = await Deno.stat("MEMORY.md").then(() => "MEMORY.md").catch(() => ".vsdd-philosophies/MEMORY.md");
+          await artifact.set("prep", "memory", await Deno.readTextFile(memoryPath));
+          await artifact.set("prep", "diff", await Deno.readTextFile("pr.diff"));
+          await artifact.set("prep", "pr-context", await Deno.readTextFile("pr-context.txt"));
+          await artifact.set("prep", "manifest", await Deno.readTextFile("repo-manifest.txt"));
+          await artifact.set("prep", "repo-files", await Deno.readTextFile("repo-files.xml"));
+          console.log("Uploaded 5 prep artifacts");
+        shell: octoscript {0}
 
   symbol-audit:
     name: §IX symbol audit (advisory)
@@ -458,10 +421,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: pr-context
-          path: ./
+      - uses: sw2m/octoscript/action@main
 
       # Fetch philosophies' scripts so this workflow works when called
       # from a downstream sw2m repo via workflow_call (the consumer's
@@ -475,13 +435,12 @@ jobs:
 
       - name: Run symbol audit
         run: |
-          bash .vsdd-philosophies/.github/scripts/symbol-audit.sh pr.diff symbol-audit.md
-          echo '--- symbol-audit.md ---'
-          cat symbol-audit.md
-
-      - name: Post symbol-audit comment
-        run: |
-          const body = await Deno.readTextFile('symbol-audit.md');
+          const diff = await artifact.get("prep", "diff");
+          if (!diff) { core.setFailed("prep/diff artifact missing"); return; }
+          await Deno.writeTextFile("pr.diff", diff);
+          await shell("bash .vsdd-philosophies/.github/scripts/symbol-audit.sh pr.diff symbol-audit.md");
+          const body = await Deno.readTextFile("symbol-audit.md");
+          console.log(body);
           await github.rest.issues.createComment({
             ...context.repo, issue_number: context.issue.number, body,
           });
@@ -497,10 +456,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: pr-context
-          path: ./
+      - uses: sw2m/octoscript/action@main
 
       # Fetch philosophies' scripts (vsdd/verdict.ts) for downstream
       # callers that don't have them in their checkout.
@@ -511,14 +467,16 @@ jobs:
           ref: main
           path: .vsdd-philosophies
 
-      - name: Load prompt
+      - name: Build prompt
         run: |
-          {
-            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
-            cat gemini-stdin.txt
-            echo '__PROMPT_EOF__'
-          } >> "$GITHUB_ENV"
-        shell: bash
+          const keys = ["memory", "pr-context", "manifest", "repo-files", "diff"];
+          const parts = [Deno.env.get("PHASE_3_PROMPT") ?? ""];
+          for (const k of keys) {
+            const v = await artifact.get("prep", k);
+            if (v) parts.push(v);
+          }
+          await shared.set("agent", "prompt", parts.join("\n\n"));
+        shell: octoscript {0}
 
       - name: Run Gemini (composite; org-member gate inside)
         id: review
@@ -571,10 +529,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: pr-context
-          path: ./
+      - uses: sw2m/octoscript/action@main
 
       # Fetch philosophies' scripts (vsdd/verdict.ts) for downstream
       # callers that don't have them in their checkout.
@@ -585,14 +540,16 @@ jobs:
           ref: main
           path: .vsdd-philosophies
 
-      - name: Load prompt
+      - name: Build prompt
         run: |
-          {
-            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
-            cat gemini-stdin.txt
-            echo '__PROMPT_EOF__'
-          } >> "$GITHUB_ENV"
-        shell: bash
+          const keys = ["memory", "pr-context", "manifest", "repo-files", "diff"];
+          const parts = [Deno.env.get("PHASE_3_PROMPT") ?? ""];
+          for (const k of keys) {
+            const v = await artifact.get("prep", k);
+            if (v) parts.push(v);
+          }
+          await shared.set("agent", "prompt", parts.join("\n\n"));
+        shell: octoscript {0}
 
       - name: Run Claude (composite; org-member gate inside)
         id: review

@@ -27,9 +27,11 @@ runs:
       id: invoke
       run: |
         const { Claude } = await import("./.github/scripts/agents/claude.ts");
-        const prompt = inputs.get("prompt");
         const parts = [];
+        const prompt = inputs.get("prompt") || await shared.get("agent", "prompt");
         if (prompt && prompt.trim()) parts.push(prompt);
+        const ctx = await shared.get("agent", "context");
+        if (ctx && ctx.trim()) parts.push(ctx);
         if (!parts.length) { core.setFailed("No content to send to claude."); return; }
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);

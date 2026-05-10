@@ -102,33 +102,27 @@ jobs:
           fi
           wc -l memory-canonical.md
 
-      - name: Build eval-input.txt
-        run: |
-          {
-            echo "<vsdd-canonical>"
-            cat memory-canonical.md
-            echo "</vsdd-canonical>"
-            echo ""
-            # Per #198: trigger is .github/** and the eval payload mirrors it.
-            # Recursive so any new sub-tree under .github/ (e.g. prompts/)
-            # auto-inherits coverage — the path filter and the embed loop
-            # stay in sync without per-directory edits to this workflow.
-            # Action helpers (e.g. .github/actions/*/runner.ts) are also
-            # picked up here, not just the action.yml manifests.
-            find .github -type f | sort | while read -r f; do
-              echo "<file path=\"$f\">"
-              cat "$f"
-              echo "</file>"
-            done
-          } > eval-input.txt
-          wc -l eval-input.txt
+      - uses: sw2m/octoscript/action@main
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: eval-input
-          path: |
-            eval-input.txt
-            memory-canonical.md
+      - name: Upload eval context
+        run: |
+          const memory = await Deno.readTextFile("memory-canonical.md");
+          const files = [];
+          for await (const entry of (await Deno.readDir(".github"))) {
+            // Handled recursively below
+          }
+          const { stdout } = await shell("find .github -type f | sort");
+          const paths = new TextDecoder().decode(stdout).trim().split("\n");
+          const parts = [`<vsdd-canonical>\n${memory}\n</vsdd-canonical>`, ""];
+          for (const p of paths) {
+            const content = await Deno.readTextFile(p);
+            parts.push(`<file path="${p}">\n${content}\n</file>`);
+          }
+          const evalInput = parts.join("\n");
+          await artifact.set("eval", "input", evalInput);
+          await artifact.set("eval", "memory", memory);
+          console.log(\`Uploaded eval artifacts (\${evalInput.length} bytes)\`);
+        shell: octoscript {0}
 
   gemini-eval:
     name: Gemini VSDD CI evaluation
@@ -138,20 +132,14 @@ jobs:
       verdict: ${{ steps.parse.outputs.verdict }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: eval-input
-          path: ./
+      - uses: sw2m/octoscript/action@main
 
-      - name: Run Gemini
-      - name: Load prompt
+      - name: Load eval context
         run: |
-          {
-            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
-            cat eval-input.txt
-            echo '__PROMPT_EOF__'
-          } >> "$GITHUB_ENV"
-        shell: bash
+          const evalInput = await artifact.get("eval", "input");
+          if (!evalInput) { core.setFailed("eval/input artifact missing"); return; }
+          await shared.set("agent", "context", evalInput);
+        shell: octoscript {0}
 
       - name: Run Gemini
         id: review
@@ -271,20 +259,12 @@ jobs:
             const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
 
             const out = { ...payload, reviewer: "gemini", summary };
-            await Deno.writeTextFile("gemini-eval.json", JSON.stringify(out, null, 2));
-            await Deno.writeTextFile(
-              Deno.env.get("GITHUB_OUTPUT")!,
-              `verdict=${payload.verdict}\n`,
-              { append: true },
-            );
+            const outJson = JSON.stringify(out, null, 2);
+            await artifact.set("eval", "gemini", outJson);
+            await output.set("verdict", String(payload.verdict));
             const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
             console.log(`gemini verdict: ${payload.verdict}, gaps: ${gaps.length}`);
         shell: octoscript {0}
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: gemini-eval
-          path: gemini-eval.json
 
   claude-eval:
     name: Claude VSDD CI evaluation
@@ -294,20 +274,14 @@ jobs:
       verdict: ${{ steps.parse.outputs.verdict }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: eval-input
-          path: ./
+      - uses: sw2m/octoscript/action@main
 
-      - name: Run Claude
-      - name: Load prompt
+      - name: Load eval context
         run: |
-          {
-            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
-            cat eval-input.txt
-            echo '__PROMPT_EOF__'
-          } >> "$GITHUB_ENV"
-        shell: bash
+          const evalInput = await artifact.get("eval", "input");
+          if (!evalInput) { core.setFailed("eval/input artifact missing"); return; }
+          await shared.set("agent", "context", evalInput);
+        shell: octoscript {0}
 
       - name: Run Claude
         id: review
@@ -447,18 +421,11 @@ jobs:
             const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
 
             const out = { ...payload, reviewer: "claude", summary };
-            await Deno.writeTextFile("claude-eval.json", JSON.stringify(out, null, 2));
-            await Deno.writeTextFile(
-              Deno.env.get("GITHUB_OUTPUT")!,
-              `verdict=${payload.verdict}\n`,
-              { append: true },
-            );
+            const outJson = JSON.stringify(out, null, 2);
+            await artifact.set("eval", "claude", outJson);
+            await output.set("verdict", String(payload.verdict));
             const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
             console.log(`claude verdict: ${payload.verdict}, gaps: ${gaps.length}`);
-      - uses: actions/upload-artifact@v7
-        with:
-          name: claude-eval
-          path: claude-eval.json
 
   consensus:
     name: Consensus + open issues for gaps
@@ -496,14 +463,16 @@ jobs:
           fi
 
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: gemini-eval
-          path: ./eval/
-      - uses: actions/download-artifact@v8
-        with:
-          name: claude-eval
-          path: ./eval/
+      - uses: sw2m/octoscript/action@main
+
+      - name: Load eval results
+        run: |
+          const gemini = await artifact.get("eval", "gemini");
+          const claude = await artifact.get("eval", "claude");
+          await Deno.mkdir("eval", { recursive: true });
+          if (gemini) await Deno.writeTextFile("eval/gemini-eval.json", gemini);
+          if (claude) await Deno.writeTextFile("eval/claude-eval.json", claude);
+        shell: octoscript {0}
 
       - name: Build proposed gaps + fetch existing tracked gaps
         id: prep-dedup
@@ -671,10 +640,15 @@ jobs:
               out.append("</body>")
               out.append("</proposed>")
 
-          with open('dedup-input.txt', 'w') as f:
-              f.write('\n'.join(out))
-          import os
-          print(f"dedup-input.txt: {os.path.getsize('dedup-input.txt')} bytes")
+          dedup_content = '\n'.join(out)
+          import subprocess, os
+          # Write to shared module for the agent composite to read
+          shared_dir = os.environ.get('GITHUB_SHARED_DIR', os.environ.get('RUNNER_TEMP', '/tmp') + '/shared')
+          agent_dir = os.path.join(shared_dir, 'agent')
+          os.makedirs(agent_dir, exist_ok=True)
+          with open(os.path.join(agent_dir, 'prompt'), 'w') as f:
+              f.write(dedup_content)
+          print(f"dedup prompt: {len(dedup_content)} bytes")
           PY
 
       - name: Resolve org-member owner for dedup actor-override
@@ -722,16 +696,6 @@ jobs:
             echo "::notice::No org-member assignee or author resolvable. Leaving actor-override empty; gemini composite action will fall back to its sender-based check."
           fi
           echo "owner=$OWNER" >> "$GITHUB_OUTPUT"
-
-      - name: Load dedup prompt
-        if: steps.prep-dedup.outputs.dedup-needed == 'true'
-        run: |
-          {
-            echo 'INPUT_PROMPT<<__PROMPT_EOF__'
-            cat dedup-input.txt
-            echo '__PROMPT_EOF__'
-          } >> "$GITHUB_ENV"
-        shell: bash
 
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
