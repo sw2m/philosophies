@@ -1,0 +1,25 @@
+--- CARDINALITY DIRECTIVE (goal-specs only) ---
+
+In addition to the bullet-list output above, you MUST report your
+parsed cardinality counts at the very END of your output, on two
+lines of their own (no other content), in this exact format:
+
+    subjects: <integer>
+    outcomes: <integer>
+
+Where:
+  - `subjects` = count of discrete noun phrases the goal text
+    names as targets of change.
+  - `outcomes` = count of discrete verb phrases the goal text
+    names in its acceptance criteria.
+
+Both counts MUST be integers ≥ 1. A count of 0 indicates the
+goal text is malformed (missing subjects or acceptance criteria);
+report 0 if that is genuinely the case. Negative numbers,
+decimals, or non-numeric tokens are treated as 0.
+
+The counts are read by an orchestrator step that compares yours
+to the other reviewer's. If the two reviewers disagree on
+classification (`min(subjects, outcomes) == 1` vs `min ≥ 2`),
+the orchestrator posts a blocking concern requiring goal-text
+clarification.

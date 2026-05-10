@@ -109,108 +109,31 @@ jobs:
           is_goal=$(jq -r 'any(.name == "spec:goal")' <<<"$LABELS_JSON")
           echo "is-goal-spec=$is_goal" >> "$GITHUB_OUTPUT"
 
+      - uses: sw2m/octoscript/action@main
+
       - name: Build prompt
         env:
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
           IS_GOAL_SPEC: ${{ steps.label-check.outputs.is-goal-spec }}
-        run: |
-          cat > stdin.txt <<'PROMPT_EOF'
-          You are Sarcasmotron, the adversarial reviewer described in MEMORY.md
-          (Verified Spec-Driven Development). You are running Phase 1c (Spec
-          Review Gate) on a freshly-filed or freshly-edited GitHub issue.
-
-          Read MEMORY.md (provided below) for VSDD context, then review the
-          issue body below. Look ONLY for:
-            - Ambiguous wording that could be interpreted multiple ways
-            - Missing edge cases (null, empty, max size, negative, unicode,
-              concurrent, etc.)
-            - Implicit assumptions that are not stated
-            - Contradictions between different parts of the issue
-            - Properties claimed as "testable only" that should be provable
-            - Purity-boundary violations
-            - Verification-tool mismatches
-            - Spec discipline violations (§VII), both sides of the rule:
-              * Tech-spec issue: does it cover exactly ONE discrete
-                technical problem? Bundled tech specs (multiple
-                technical problems in one issue body) violate §VII.
-              * Goal-spec issue: does it stay focused on goals (WHAT
-                must be true) without leaking technical / implementation
-                content (HOW)? Goal specs may have many goals (that's
-                fine, do not flag breadth), but they must not include
-                solution design — that belongs in tech specs.
-
-          Output rules:
-            - Be terse. Bullet points only. No preamble.
-            - Each bullet: a concrete flaw with a specific quote/location and
-              a proposed fix or clarifying question. Lead each blocking
-              concern with the literal token `(blocking)`; advisory nits
-              do not need a marker.
-            - If genuinely no concerns: output exactly "No Phase 1c concerns identified."
-            - End your output with EXACTLY one verdict line, on its own
-              line, in this format (no other text on the line):
-                _Verdict: `pass`_     (no blocking concerns)
-                _Verdict: `fail`_     (one or more `(blocking)` concerns)
-              The verdict line gates promotion of this issue: the CI
-              extracts it into a structured frontmatter block at the
-              top of your posted comment, and `promote.yml`'s
-              `phase-1c-clearance` job blocks goal→tech / tech→PR if
-              EITHER reviewer's latest verdict is `fail` or stale (older
-              than the issue's last edit). Edit the issue body to
-              re-run Phase 1c.
-
-          --- MEMORY.md ---
-          PROMPT_EOF
-          # Prefer the consumer's own MEMORY.md if it exists; fall back
-          # to philosophies' canonical copy fetched above.
-          if [ -f MEMORY.md ]; then
-            cat MEMORY.md >> stdin.txt
-          else
-            cat .vsdd-philosophies/MEMORY.md >> stdin.txt
-          fi
-          # Per #128: append cardinality count-reporting directive only
-          # when reviewing a spec:goal issue. Tech-spec reviews are
-          # unaffected.
-          if [ "$IS_GOAL_SPEC" = "true" ]; then
-            cat >> stdin.txt <<'CARDINALITY_EOF'
-
-          --- CARDINALITY DIRECTIVE (goal-specs only) ---
-
-          In addition to the bullet-list output above, you MUST report your
-          parsed cardinality counts at the very END of your output, on two
-          lines of their own (no other content), in this exact format:
-
-              subjects: <integer>
-              outcomes: <integer>
-
-          Where:
-            - `subjects` = count of discrete noun phrases the goal text
-              names as targets of change.
-            - `outcomes` = count of discrete verb phrases the goal text
-              names in its acceptance criteria.
-
-          Both counts MUST be integers ≥ 1. A count of 0 indicates the
-          goal text is malformed (missing subjects or acceptance criteria);
-          report 0 if that is genuinely the case. Negative numbers,
-          decimals, or non-numeric tokens are treated as 0.
-
-          The counts are read by an orchestrator step that compares yours
-          to the other reviewer's. If the two reviewers disagree on
-          classification (`min(subjects, outcomes) == 1` vs `min ≥ 2`),
-          the orchestrator posts a blocking concern requiring goal-text
-          clarification.
-          CARDINALITY_EOF
-          fi
-          {
-            printf '\n--- ISSUE TITLE ---\n%s\n' "$ISSUE_TITLE"
-            printf '\n--- ISSUE BODY ---\n%s\n' "$ISSUE_BODY"
-          } >> stdin.txt
-
-      - uses: actions/upload-artifact@v7
+        uses: sw2m/octoscript@main
         with:
-          name: issue-context
-          path: |
-            stdin.txt
+          script: |
+            const memoryPath = await Deno.stat("MEMORY.md").then(() => "MEMORY.md").catch(() => ".vsdd-philosophies/MEMORY.md");
+            const memory = await Deno.readTextFile(memoryPath);
+            const promptTmpl = await Deno.readTextFile("./.github/scripts/vsdd/phase-1c/prompt.mustache");
+            const isGoal = Deno.env.get("IS_GOAL_SPEC") === "true";
+            const cardinalityTmpl = isGoal
+              ? await Deno.readTextFile("./.github/scripts/vsdd/phase-1c/cardinality.mustache")
+              : "";
+            const prompt = Mustache.render(promptTmpl, {
+              memory,
+              cardinality: cardinalityTmpl,
+              title: Deno.env.get("ISSUE_TITLE") ?? "",
+              body: Deno.env.get("ISSUE_BODY") ?? "",
+            });
+            await artifact.set("prep", "prompt", prompt);
+            console.log("Uploaded prep/prompt artifact");
 
   gemini-review:
     name: Gemini VSDD Phase 1c review
@@ -221,31 +144,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: issue-context
-          path: ./
+      - uses: sw2m/octoscript/action@main
+
+      - name: Load prompt
+        run: |
+          const prompt = await artifact.get("prep", "prompt");
+          if (!prompt) { core.setFailed("prep/prompt artifact missing"); return; }
+          await shared.set("agent", "prompt", prompt);
+        shell: octoscript {0}
 
       - name: Run Gemini (composite action; org-member gate enforced inside)
+        id: review
         uses: ./.github/actions/agents/gemini
-        with:
-          api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: stdin.txt
-          output-file: review.md
-          actor-override: ${{ needs.ownership.outputs.owner }}
+        env:
+          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (gemini)
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const budget = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-budget.js',
-            ));
-            const REVIEWER = 'gemini';
-            const reviewBody = fs.readFileSync('review.md', 'utf8');
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
+        run: |
+            const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
+            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
+            const budget = new budgetMod.Budget({ key: "phase-1c" });
+            const SLUG = "gemini";
+            const reviewBody = Deno.env.get("REVIEW") ?? "";
             // Round counting: paginate through all issue comments, count
             // prior frontmatter comments authored by this reviewer.
             const allComments = await github.paginate(
@@ -257,47 +180,44 @@ jobs:
                 per_page: 100,
               },
             );
-            const round = budget.computeRound(allComments, REVIEWER);
-            const budgetN = budget.computeBudget(round);
-            const result = budget.processReview({
-              body: reviewBody,
-              round,
-              budget: budgetN,
-            });
+            const round = budget.round(allComments, SLUG);
+            const cap = budget.budget(round);
+            const result = budget.process({ body: reviewBody, round, budget: cap });
             // Per #128: extract subjects/outcomes counts from the LLM
-            // output for goal-specs and add them to the frontmatter so
+            // prose body for goal-specs and add them to the kv-block so
             // the orchestrator step can read them.
-            const cardinality = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-cardinality.js',
-            ));
             const issueLabels = (context.payload.issue?.labels || [])
-              .map((l) => (typeof l === 'string' ? l : l.name));
-            const isGoalSpec = issueLabels.includes('spec:goal');
-            let countLines = '';
-            if (isGoalSpec) {
-              const tuple = cardinality.parseCountTuple(reviewBody);
-              if (tuple) {
-                countLines =
-                  `subjects: ${tuple.subjects}\n` +
-                  `outcomes: ${tuple.outcomes}\n`;
+              .map((l) => (typeof l === "string" ? l : l.name));
+            const isGoal = issueLabels.includes("spec:goal");
+            let subjects, outcomes;
+            if (isGoal) {
+              const sm = reviewBody.match(/subjects:\s*(\S+)/);
+              const om = reviewBody.match(/outcomes:\s*(\S+)/);
+              if (sm && om && cardinality.valid(sm[1]) && cardinality.valid(om[1])) {
+                subjects = parseInt(sm[1], 10);
+                outcomes = parseInt(om[1], 10);
               } else {
-                countLines = `subjects: 0\noutcomes: 0\n`;
+                subjects = 0;
+                outcomes = 0;
               }
             }
-            const frontmatter =
-              `<!-- vsdd-phase-1c\n` +
-              `reviewer: ${REVIEWER}\n` +
-              `verdict: ${result.verdict}\n` +
-              countLines +
-              `-->\n\n`;
+            const fm = [
+              "<!--",
+              "vsdd:",
+              "  phase-1c:",
+              `    reviewer: ${SLUG}`,
+              `    verdict: ${result.verdict}`,
+              ...(subjects !== undefined ? [`    subjects: ${subjects}`, `    outcomes: ${outcomes}`] : []),
+              "-->",
+              "",
+            ].join("\n");
             const header = `**VSDD Phase 1c — Gemini**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: frontmatter + header + result.body + footer,
+              body: fm + "\n" + header + result.body + footer,
             });
 
   claude-review:
@@ -309,31 +229,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: issue-context
-          path: ./
+      - uses: sw2m/octoscript/action@main
+
+      - name: Load prompt
+        run: |
+          const prompt = await artifact.get("prep", "prompt");
+          if (!prompt) { core.setFailed("prep/prompt artifact missing"); return; }
+          await shared.set("agent", "prompt", prompt);
+        shell: octoscript {0}
 
       - name: Run Claude (composite action; org-member gate enforced inside)
+        id: review
         uses: ./.github/actions/agents/claude
-        with:
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          stdin-file: stdin.txt
-          output-file: review.md
-          actor-override: ${{ needs.ownership.outputs.owner }}
+        env:
+          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_ACTOR_OVERRIDE: ${{ needs.ownership.outputs.owner }}
 
       - name: Post review with budget-decay reclassification (claude)
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const budget = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-budget.js',
-            ));
-            const REVIEWER = 'claude';
-            const reviewBody = fs.readFileSync('review.md', 'utf8');
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
+        run: |
+            const budgetMod = await import("./.github/scripts/vsdd/budget.ts");
+            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
+            const budget = new budgetMod.Budget({ key: "phase-1c" });
+            const SLUG = "claude";
+            const reviewBody = Deno.env.get("REVIEW") ?? "";
+            // Round counting: paginate through all issue comments, count
+            // prior frontmatter comments authored by this reviewer.
             const allComments = await github.paginate(
               github.rest.issues.listComments,
               {
@@ -343,47 +265,44 @@ jobs:
                 per_page: 100,
               },
             );
-            const round = budget.computeRound(allComments, REVIEWER);
-            const budgetN = budget.computeBudget(round);
-            const result = budget.processReview({
-              body: reviewBody,
-              round,
-              budget: budgetN,
-            });
+            const round = budget.round(allComments, SLUG);
+            const cap = budget.budget(round);
+            const result = budget.process({ body: reviewBody, round, budget: cap });
             // Per #128: extract subjects/outcomes counts from the LLM
-            // output for goal-specs and add them to the frontmatter so
+            // prose body for goal-specs and add them to the kv-block so
             // the orchestrator step can read them.
-            const cardinality = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-cardinality.js',
-            ));
             const issueLabels = (context.payload.issue?.labels || [])
-              .map((l) => (typeof l === 'string' ? l : l.name));
-            const isGoalSpec = issueLabels.includes('spec:goal');
-            let countLines = '';
-            if (isGoalSpec) {
-              const tuple = cardinality.parseCountTuple(reviewBody);
-              if (tuple) {
-                countLines =
-                  `subjects: ${tuple.subjects}\n` +
-                  `outcomes: ${tuple.outcomes}\n`;
+              .map((l) => (typeof l === "string" ? l : l.name));
+            const isGoal = issueLabels.includes("spec:goal");
+            let subjects, outcomes;
+            if (isGoal) {
+              const sm = reviewBody.match(/subjects:\s*(\S+)/);
+              const om = reviewBody.match(/outcomes:\s*(\S+)/);
+              if (sm && om && cardinality.valid(sm[1]) && cardinality.valid(om[1])) {
+                subjects = parseInt(sm[1], 10);
+                outcomes = parseInt(om[1], 10);
               } else {
-                countLines = `subjects: 0\noutcomes: 0\n`;
+                subjects = 0;
+                outcomes = 0;
               }
             }
-            const frontmatter =
-              `<!-- vsdd-phase-1c\n` +
-              `reviewer: ${REVIEWER}\n` +
-              `verdict: ${result.verdict}\n` +
-              countLines +
-              `-->\n\n`;
+            const fm = [
+              "<!--",
+              "vsdd:",
+              "  phase-1c:",
+              `    reviewer: ${SLUG}`,
+              `    verdict: ${result.verdict}`,
+              ...(subjects !== undefined ? [`    subjects: ${subjects}`, `    outcomes: ${outcomes}`] : []),
+              "-->",
+              "",
+            ].join("\n");
             const header = `**VSDD Phase 1c — Claude**\n\n`;
             const footer = `\n\n---\n_Automated review per MEMORY.md §II Phase 1c. Verdict gates promotion._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: frontmatter + header + result.body + footer,
+              body: fm + "\n" + header + result.body + footer,
             });
 
   orchestrator:
@@ -399,16 +318,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
+      - uses: sw2m/octoscript/action@main
 
       - name: Read tuples + post orchestrator verdict
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const path = require('path');
-            const cardinality = require(path.join(
-              process.env.GITHUB_WORKSPACE,
-              '.github/scripts/phase-1c-cardinality.js',
-            ));
+        run: |
+            const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
 
             const allComments = await github.paginate(
               github.rest.issues.listComments,
@@ -420,12 +334,11 @@ jobs:
               },
             );
 
-            const tuples = cardinality.extractReviewerTuples(allComments);
+            const t = cardinality.tuples(allComments);
             const concerns = [];
             let canonical = null;
 
-            // Validation: zero/missing counts on either reviewer.
-            if (!tuples.gemini) {
+            if (!t.gemini) {
               concerns.push(
                 "(blocking) Gemini's most-recent review is missing or has " +
                 "invalid `subjects`/`outcomes` counts (treated as 0). The " +
@@ -433,7 +346,7 @@ jobs:
                 "edit the goal body and re-run Phase 1c.",
               );
             }
-            if (!tuples.claude) {
+            if (!t.claude) {
               concerns.push(
                 "(blocking) Claude's most-recent review is missing or has " +
                 "invalid `subjects`/`outcomes` counts (treated as 0). The " +
@@ -442,30 +355,26 @@ jobs:
               );
             }
 
-            if (tuples.gemini && tuples.claude) {
-              const gMin = cardinality.computeClassification(tuples.gemini);
-              const cMin = cardinality.computeClassification(tuples.claude);
-              if (gMin.isSingleTechSpec !== cMin.isSingleTechSpec) {
+            if (t.gemini && t.claude) {
+              const g = cardinality.classify(t.gemini);
+              const c = cardinality.classify(t.claude);
+              if (g.single !== c.single) {
                 concerns.push(
                   `(blocking) Reviewers disagree on classification: ` +
-                  `gemini reports ${JSON.stringify(tuples.gemini)} ` +
-                  `(min=${gMin.min}, ` +
-                  `${gMin.isSingleTechSpec ? 'atomic' : 'decomposable'}); ` +
-                  `claude reports ${JSON.stringify(tuples.claude)} ` +
-                  `(min=${cMin.min}, ` +
-                  `${cMin.isSingleTechSpec ? 'atomic' : 'decomposable'}). ` +
+                  `gemini reports ${JSON.stringify(t.gemini)} ` +
+                  `(min=${g.min}, ${g.single ? "atomic" : "decomposable"}); ` +
+                  `claude reports ${JSON.stringify(t.claude)} ` +
+                  `(min=${c.min}, ${c.single ? "atomic" : "decomposable"}). ` +
                   `Edit the goal body to clarify until both reviewers ` +
                   `read the same shape.`,
                 );
               } else {
-                // Agreement on classification — compute canonical tuple
-                // (per-axis MIN; preserves agreed classification).
-                canonical = cardinality.perAxisMin(tuples.gemini, tuples.claude);
+                canonical = cardinality.combine(t.gemini, t.claude);
               }
             }
 
-            const verdict = concerns.length === 0 ? 'pass' : 'fail';
-            const fm = cardinality.buildOrchestratorFrontmatter({
+            const verdict = concerns.length === 0 ? "pass" : "fail";
+            const fm = cardinality.emit({
               verdict,
               ...(canonical || {}),
             });
@@ -474,15 +383,16 @@ jobs:
             if (concerns.length === 0) {
               const tupleStr = canonical
                 ? `subjects=${canonical.subjects}, outcomes=${canonical.outcomes}, min=${Math.min(canonical.subjects, canonical.outcomes)}`
-                : '(no canonical tuple — check orchestrator state)';
+                : "(no canonical tuple — check orchestrator state)";
               body = `Reviewer counts agreed on classification. Canonical tuple: ${tupleStr}.`;
             } else {
-              body = concerns.map((c) => `- ${c}`).join('\n');
+              body = concerns.map((x) => `- ${x}`).join("\n");
             }
             const footer = `\n\n---\n_Per #128: cardinality orchestrator. Verdict gates promotion when fail; canonical tuple consumed by promote-goal-to-tech._`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: fm + '\n\n' + header + body + footer,
+              body: fm + "\n\n" + header + body + footer,
             });
+        shell: octoscript {0}

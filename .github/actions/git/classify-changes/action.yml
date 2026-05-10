@@ -40,10 +40,6 @@ runs:
     - name: Classify changes
       id: classify
       shell: bash
-      env:
-        INPUT_COMMIT: ${{ inputs.commit }}
-        INPUT_RANGE: ${{ inputs.range }}
-        INPUT_PATTERNS: ${{ inputs.patterns }}
       run: |
         set -euo pipefail
         script="${GITHUB_ACTION_PATH}/../../scripts/classify-changes.sh"

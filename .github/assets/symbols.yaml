@@ -84,10 +84,37 @@ labels:
     ci-meta: ci-meta            # tagged on issues opened by ci-meta gap-finder
     needs-human: needs-human    # tagged when CI bails (e.g. promote-tech-to-pr Green Gate exhaustion)
 
-# HTML-comment frontmatter tokens that open verdict / brand / context blocks.
-# Consumers regex against these prefixes to find the structured frontmatter.
-frontmatter-tokens:
-  phase-1c:        vsdd-phase-1c       # `<!-- vsdd-phase-1c\nreviewer: ...\nverdict: ... -->` per phase-1c-budget.js
-  phase-3:         vsdd-phase-3        # `<!-- vsdd-phase-3\ncategory: ...\nreviewer: ... -->` per #182
-  opt-out-brand:   vsdd-opt-out-brand  # `<!-- vsdd-opt-out-brand -->` posted by vsdd-brand.yml
-  canonical:       vsdd-canonical      # `<vsdd-canonical>...</vsdd-canonical>` wraps embedded MEMORY.md in eval-input
+# HTML-comment frontmatter — namespaced under a single `vsdd:` top-level
+# key. Consumers parse via `.github/scripts/vsdd/frontmatter.ts` (#210);
+# all metadata flows through one parser, every emit/read goes through
+# `block.vsdd` (or `block.vsdd?.[subkey]` for nested blocks).
+#
+# Two emit shapes:
+#   - **Inline kv-marker** — `<!-- vsdd: {subkey} -->`
+#     → `{ vsdd: "{subkey}" }`. Marker-only, presence is the signal.
+#   - **Namespaced block** — `<!--\nvsdd:\n  {subkey}:\n    field: value\n    ...\n-->`
+#     → `{ vsdd: { "{subkey}": { field: value, ... } } }`.
+#
+# Subkeys live under `vsdd:` namespace; this catalog enumerates the
+# meaningful ones and their payload schema. `canonical` is separate
+# because it uses an XML-element shape, not HTML-comment frontmatter.
+frontmatter:
+  namespace: vsdd
+  # Subkeys are listed as an array — comments alongside each entry capture
+  # the schema info. Upgrade to a structured map only if a machine consumer
+  # needs to enumerate fields/consumers programmatically.
+  subkeys:
+    - phase-1c          # block: `{reviewer, verdict, subjects?, outcomes?}` — issue-review.yml + phase-1c/{budget,cardinality}.ts
+    - phase-2           # block: `{new_test_files, new_test_command, regression_test_command}` — promote-tech-to-pr agent output
+    - phase-3           # block: `{reviewer, verdict, category?}` — pr-review.yml per-reviewer verdict
+    - ci-meta           # block: `{reviewer, verdict, rationale, gaps}` — ci-meta.yml per-reviewer verdict
+    - tech-spec         # block: `{title}` — promote-goal-to-tech agent emits one per tech-spec; body is the prose between this marker and the next
+    - opt-out-brand     # inline kv-marker — vsdd-brand.yml
+    - red-gate-cleared  # inline kv-marker — red-conditions-gate.yml; consumed by non-test-blocker.yml + vsdd-brand.yml
+
+# Element-wrapped CONTENT regions, distinct from HTML-comment frontmatter.
+# Frontmatter marks adjacent metadata (single block, parsed once).
+# Element-wrapping delimits a content region that has natural open/close
+# semantics — XML elements pair, HTML comments don't. Use the right tool.
+xml-wrapped:
+  - canonical          # `<vsdd-canonical>...</vsdd-canonical>` wrap for embedded MEMORY.md in eval-input

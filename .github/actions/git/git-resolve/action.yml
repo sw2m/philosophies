@@ -69,11 +69,7 @@ runs:
       id: resolve
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        INPUT_REF: ${{ inputs.ref }}
-        INPUT_WHITELIST: ${{ inputs.whitelist-paths }}
-        INPUT_FORMAT: ${{ inputs.output-format }}
-        INPUT_PR_BASE: ${{ inputs.pr-shorthand-base }}
+        GH_TOKEN: ${{ env.INPUT_GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         RUNNER_TEMP: ${{ runner.temp }}
       run: |

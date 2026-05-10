@@ -12,7 +12,7 @@ name: VSDD Non-test-blocker (ancestry enforcement)
 # Fail iff:
 #   - PR is non-whitelist AND has impl content AND no earned marker.
 #
-# The marker is the comment containing `<!-- vsdd-red-gate-cleared -->`
+# The marker is the comment containing `<!-- vsdd: red-gate-cleared -->`
 # authored by github-actions[bot]. Per #129 it's a one-way diode for
 # the bot (the bot never revokes), but its ABSENCE still blocks merge —
 # the diode property is about persistence after earning, not about
@@ -60,6 +60,7 @@ jobs:
         with:
           ref: ${{ needs.resolve.outputs.head-sha }}
           fetch-depth: 0
+      - uses: sw2m/octoscript/action@main
 
       - name: Fetch PR file list
         env:
@@ -72,30 +73,23 @@ jobs:
           gh api --paginate "repos/${REPO}/pulls/${PR}/files" > pr-files.json
           echo "files: $(jq 'length' pr-files.json)"
 
-      - name: Compute whitelist via JS module
+      - name: Compute whitelist via brand.ts
         id: whitelist
         env:
           PR_FILES: pr-files.json
-        shell: bash
         run: |
-          set -euo pipefail
-          out=$(node -e '
-            const fs = require("fs");
-            const {isWhitelistPath} = require("./.github/scripts/vsdd-brand.js");
-            const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
-            const compute = () => {
-              if (arr.length === 0) return "false";
-              for (const f of arr) {
-                if (!isWhitelistPath(f.filename)) return "false";
-                if (f.previous_filename && !isWhitelistPath(f.previous_filename)) {
-                  return "false";
-                }
-              }
-              return "true";
-            };
-            console.log(compute());
-          ')
-          echo "whitelist=$out" >> "$GITHUB_OUTPUT"
+          const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
+          const arr = JSON.parse(await Deno.readTextFile(Deno.env.get("PR_FILES")!));
+          let out = "true";
+          if (arr.length === 0) out = "false";
+          else for (const f of arr) {
+            if (!whitelist(f.filename)) { out = "false"; break; }
+            if (f.previous_filename && !whitelist(f.previous_filename)) {
+              out = "false"; break;
+            }
+          }
+          await output.set("whitelist", out);
+        shell: octoscript {0}
 
       - name: Compute impl-content via classify-changes.sh
         id: impl

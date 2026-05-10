@@ -1,205 +1,56 @@
 name: "Claude agent"
 description: |
-  Invokes the Claude Code CLI (`@anthropic-ai/claude-code`) with a stdin
-  file (and optional inline prompt prepended), leaves stdout in an output
-  file the caller reads directly. Mirrors the gemini composite action's
-  shape so 'where do agents touch the CI?' is a single grep AND so both
-  agents have the same invocation contract.
+  Invokes Claude Code CLI. Reads content from $GITHUB_SHARED_DIR.
+  Returns response as `response` step output.
 
-inputs:
-  org:
-    description: "GitHub org whose members are allowed to invoke this agent. Non-members trigger a hard fail. Default sw2m."
-    required: false
-    default: "sw2m"
-  actor-override:
-    description: |
-      If set, validate this login against the org instead of the workflow
-      trigger sender. Used by callers that have already identified an
-      org-member owner via richer context (PR author + assignees, issue
-      assignees, etc.). Empty string (default) preserves the original
-      sender-based check.
-    required: false
-    default: ""
-  trust-github-actions-bot:
-    description: |
-      When 'true', accepts github-actions[bot] as a valid actor without
-      calling the org-member API. Used for safe contexts where the bot
-      is acting on behalf of an org-member-owned artifact. Default 'false'.
-    required: false
-    default: "false"
-  prompt:
-    description: "Optional inline prompt prepended to stdin-file before piping to claude."
-    required: false
-    default: ""
-  stdin-file:
-    description: "Path to a file whose contents are appended to `prompt` and piped as stdin to claude. Preferred over `prompt` for content larger than a few KB."
-    required: false
-    default: ""
-  model:
-    description: "Primary Claude model id."
-    required: false
-    default: "claude-opus-4-5"
-  fallback-model:
-    description: "Model to retry with if primary errors (capacity, transient API failure, etc.)."
-    required: false
-    default: "claude-sonnet-4-5"
-  api-key:
-    description: "ANTHROPIC_API_KEY value (caller passes via secret)."
-    required: true
-  output-file:
-    description: "Where claude's stdout is written. Caller reads from this path after the action runs."
-    required: false
-    default: "claude-output.txt"
-  allowed-tools:
-    description: |
-      Tools claude is permitted to invoke. Default `""` disables every
-      tool (pure inference). Pass e.g. `"Bash Edit Write Read"` to allow
-      filesystem and shell access for agentic phases (used by the
-      promote-tech-to-pr pipeline). Space-separated list.
-    required: false
-    default: ""
-  permission-mode:
-    description: |
-      Permission mode passed to claude. `default` (claude's default) for
-      inference; `bypassPermissions` for non-interactive autonomous runs
-      where `allowed-tools` is non-empty. Leave empty to omit the flag.
-    required: false
-    default: ""
 
 outputs:
-  output-file:
-    description: "Path to the file containing claude stdout (echoes back the input)."
-    value: ${{ inputs.output-file }}
+  response:
+    value: "${{ steps.invoke.outputs.response }}"
 
 runs:
-  using: "composite"
+  using: composite
   steps:
+    - uses: sw2m/octoscript/action@main
+
     - name: Verify org membership
-      shell: bash
+      uses: ./.github/actions/github/org/verify
       env:
-        GH_TOKEN: ${{ github.token }}
-        SENDER: ${{ github.event.sender.login || github.actor }}
-        OVERRIDE: ${{ inputs.actor-override }}
-        ORG: ${{ inputs.org }}
-        INPUT_TRUST_BOT: ${{ inputs.trust-github-actions-bot }}
-      run: |
-        # Normalize trust-github-actions-bot input to a boolean shell variable.
-        # Uses tr for POSIX-compatible lowercase (macOS runners have Bash 3.2).
-        case "$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')" in
-          true) trust_bot=true ;;
-          *)    trust_bot=false ;;
-        esac
-        # Hard gate: agents must not be invocable by non-org-members.
-        # NOTE: the default GITHUB_TOKEN can only see PUBLIC org memberships.
-        trust_bot=$(printf '%s' "${INPUT_TRUST_BOT:-}" | tr '[:upper:]' '[:lower:]')
-        ACTOR="${OVERRIDE:-$SENDER}"
-        if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "$SENDER" ]; then
-          echo "actor-override active: validating '$OVERRIDE' (caller-provided owner) instead of trigger sender '$SENDER'."
-        fi
-        if [ "${trust_bot}" = "true" ] && [ "${ACTOR}" = "github-actions[bot]" ]; then
-          echo "::notice::Accepting github-actions[bot] as actor under trust-github-actions-bot opt-in."
-        else
-          if ! gh api "orgs/$ORG/members/$ACTOR" >/dev/null 2>&1; then
-            echo "::error::$ACTOR is not a (publicly-visible) member of the '$ORG' GitHub org."
-            echo ""
-            echo "If you ARE a member but private: visit"
-            echo "https://github.com/orgs/$ORG/people and click 'Make public'"
-            echo "next to your row."
-            echo ""
-            echo "If you are not a member: agent invocations (Claude) are"
-            echo "restricted to org members. Self-assign on an issue or PR"
-            echo "to take ownership."
-            exit 1
-          fi
-          echo "✓ $ACTOR is a $ORG org member (public)."
-        fi
+        INPUT_ACTOR_OVERRIDE: ${{ env.INPUT_ACTOR_OVERRIDE }}
+        INPUT_SENDER: ${{ github.event.sender.login }}
+        INPUT_ORG: ${{ env.INPUT_ORG }}
+        INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ env.INPUT_TRUST_GITHUB_ACTIONS_BOT }}
 
-    - uses: actions/setup-node@v6
-      with:
-        node-version: "20"
 
-    - name: Install Claude Code CLI
-      shell: bash
-      run: npm install -g @anthropic-ai/claude-code@latest
 
-    - name: Invoke claude (--print, with fallback model on error)
-      shell: bash
+    - name: Invoke claude
+      id: invoke
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.api-key }}
-        PROMPT: ${{ inputs.prompt }}
-        STDIN_FILE: ${{ inputs.stdin-file }}
-        MODEL: ${{ inputs.model }}
-        FALLBACK: ${{ inputs.fallback-model }}
-        OUTPUT: ${{ inputs.output-file }}
-        TOOLS: ${{ inputs.allowed-tools }}
-        PMODE: ${{ inputs.permission-mode }}
+        ANTHROPIC_API_KEY: ${{ env.INPUT_API_KEY }}
       run: |
-        set -euo pipefail
-        : > combined-input.txt
-        if [ -n "$PROMPT" ]; then
-          printf '%s\n\n' "$PROMPT" >> combined-input.txt
-        fi
-        if [ -n "$STDIN_FILE" ]; then
-          if [ ! -f "$STDIN_FILE" ]; then
-            echo "::error::stdin-file '$STDIN_FILE' does not exist."
-            exit 1
-          fi
-          cat "$STDIN_FILE" >> combined-input.txt
-        fi
-        if [ ! -s combined-input.txt ]; then
-          echo "::error::No content to send to claude (both prompt and stdin-file were empty)."
-          exit 1
-        fi
-        echo "input bytes: $(wc -c < combined-input.txt)"
-
-        # Build the flag list. `--allowed-tools ""` (the default) is the
-        # original inference-only contract. When TOOLS is non-empty,
-        # callers (e.g. promote-tech-to-pr) get filesystem + shell access
-        # for agentic phases. `--permission-mode plan` was rejected
-        # earlier — plan mode produces a "what I would do" summary
-        # instead of doing it; promote-tech-to-pr needs `bypassPermissions`
-        # so non-interactive runs don't stall on tool prompts.
-        FLAGS=(--print --model "$MODEL" --allowed-tools "$TOOLS")
-        if [ -n "$PMODE" ]; then
-          FLAGS+=(--permission-mode "$PMODE")
-        fi
-        FALLBACK_FLAGS=(--print --model "$FALLBACK" --allowed-tools "$TOOLS")
-        if [ -n "$PMODE" ]; then
-          FALLBACK_FLAGS+=(--permission-mode "$PMODE")
-        fi
-
-        set +e
-        claude "${FLAGS[@]}" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
-        rc=$?
-        if [ $rc -ne 0 ]; then
-          echo "::warning::Primary model '$MODEL' exited $rc; falling back to '$FALLBACK'."
-          echo "--- primary stderr ---"
-          cat claude-stderr.log
-          claude "${FALLBACK_FLAGS[@]}" < combined-input.txt > "$OUTPUT" 2>claude-stderr.log
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "::error::Fallback model '$FALLBACK' also exited $rc."
-            echo "--- fallback stderr ---"
-            cat claude-stderr.log
-            echo "--- fallback stdout ---"
-            cat "$OUTPUT"
-            exit $rc
-          fi
-        fi
-        set -e
-        echo "stdout (first 500 chars):"
-        head -c 500 "$OUTPUT"
-        echo ""
-        echo "stderr (last 20 lines):"
-        tail -20 claude-stderr.log || true
-
-    - name: Verify output produced
-      shell: bash
-      env:
-        OUTPUT: ${{ inputs.output-file }}
-      run: |
-        if [ ! -s "$OUTPUT" ]; then
-          echo "::error::$OUTPUT is empty or missing."
-          exit 1
-        fi
-        echo "✓ $OUTPUT exists ($(wc -c < "$OUTPUT") bytes)"
+        const { Claude } = await import("./.github/scripts/agents/claude.ts");
+        const parts = [];
+        const prompt = inputs.get("prompt") || await shared.get("agent", "prompt");
+        if (prompt && prompt.trim()) parts.push(prompt);
+        const ctx = await shared.get("agent", "context");
+        if (ctx && ctx.trim()) parts.push(ctx);
+        if (!parts.length) { core.setFailed("No content to send to claude."); return; }
+        const body = parts.join("\n\n");
+        console.log(`input bytes: ${body.length}`);
+        const claude = new Claude({
+          primary: inputs.get("model"),
+          fallback: inputs.get("fallback-model"),
+          tools: inputs.get("allowed-tools"),
+          mode: inputs.get("permission-mode"),
+        });
+        const r = await claude.run(new Blob([body]).stream());
+        const response = new TextDecoder().decode(r.output);
+        await output.set("response", response);
+        if (r.rc !== 0) {
+          core.setFailed(`Claude exited ${r.rc} on both primary and fallback.`);
+          console.log(response.slice(0, 2000));
+          Deno.exit(r.rc);
+        }
+        console.log("stdout (first 500 chars):");
+        console.log(response.slice(0, 500));
+      shell: octoscript {0}

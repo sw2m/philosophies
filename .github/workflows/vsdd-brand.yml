@@ -9,7 +9,7 @@ name: VSDD opt-out brand
 #
 # Brand applied iff: whitelist-match OR (no marker AND has impl-content).
 # The brand is informational; it does not block merge. It is a bot-
-# authored comment containing the token `<!-- vsdd-opt-out-brand -->`
+# authored comment containing the token `<!-- vsdd: opt-out-brand -->`
 # (deliberately separate from the Red-gate-cleared token, and distinct
 # from labels because labels can be toggled by anyone with PR write
 # access; only github-actions[bot] can author comments under its own
@@ -43,46 +43,34 @@ jobs:
       head-sha:  ${{ steps.resolve.outputs.head-sha }}
       proceed:   ${{ steps.resolve.outputs.proceed }}
     steps:
-      - name: Resolve via actions/github-script (per #129 spec)
+      - uses: sw2m/octoscript/action@main
+      - name: Resolve PR event
         id: resolve
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const event = context.eventName;
-            const setOutput = (k, v) => core.setOutput(k, v);
-
-            if (event === 'pull_request') {
-              const pr = context.payload.pull_request;
-              setOutput('pr-number', String(pr.number));
-              setOutput('head-sha',  pr.head.sha);
-              setOutput('proceed',   'true');
-              core.info(`pull_request #${pr.number} head=${pr.head.sha}`);
+        run: |
+          const event = context.eventName;
+          if (event === 'pull_request') {
+            const pr = context.payload.pull_request;
+            await output.set('pr-number', String(pr.number));
+            await output.set('head-sha', pr.head.sha);
+            await output.set('proceed', 'true');
+            return;
+          }
+          if (event === 'issue_comment') {
+            const issue = context.payload.issue;
+            if (!issue || !issue.pull_request) {
+              await output.set('proceed', 'false');
               return;
             }
-
-            if (event === 'issue_comment') {
-              const issue = context.payload.issue;
-              if (!issue || !issue.pull_request) {
-                core.notice('issue_comment.deleted on a non-PR issue; nothing to brand.');
-                setOutput('proceed', 'false');
-                return;
-              }
-              // Fetch PR head/base via API since issue_comment payload
-              // doesn't carry it. Per spec: actions/github-script call.
-              const {data: pr} = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                pull_number: issue.number,
-              });
-              setOutput('pr-number', String(pr.number));
-              setOutput('head-sha',  pr.head.sha);
-              setOutput('proceed',   'true');
-              core.info(`issue_comment.deleted → PR #${pr.number} head=${pr.head.sha}`);
-              return;
-            }
-
-            core.notice(`Unhandled event: ${event}; skipping.`);
-            setOutput('proceed', 'false');
+            const {data: pr} = await github.rest.pulls.get({
+              ...context.repo, pull_number: issue.number,
+            });
+            await output.set('pr-number', String(pr.number));
+            await output.set('head-sha', pr.head.sha);
+            await output.set('proceed', 'true');
+            return;
+          }
+          await output.set('proceed', 'false');
+        shell: octoscript {0}
 
   marker:
     name: Marker presence
@@ -104,6 +92,7 @@ jobs:
           # `fetch-depth: 0` so classify-changes.sh's `--pr base...head`
           # has both refs locally for the git-diff walk.
           fetch-depth: 0
+      - uses: sw2m/octoscript/action@main
 
       - name: Fetch PR file list (single call; reused below)
         id: files
@@ -122,33 +111,23 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
           echo "Fetched $count file entries for PR #${PR}."
 
-      - name: Compute whitelist via JS module (isWhitelistPath)
+      - name: Compute whitelist via brand.ts
         id: whitelist
         env:
           PR_FILES: pr-files.json
-        shell: bash
         run: |
-          set -euo pipefail
-          # Route the path-prefix check through vsdd-brand.js's
-          # isWhitelistPath so the workflow and the pure module use the
-          # same predicate (no double-implementation in bash).
-          out=$(node -e '
-            const fs = require("fs");
-            const {isWhitelistPath} = require("./.github/scripts/vsdd-brand.js");
-            const arr = JSON.parse(fs.readFileSync(process.env.PR_FILES, "utf8"));
-            const compute = () => {
-              if (arr.length === 0) return "false";
-              for (const f of arr) {
-                if (!isWhitelistPath(f.filename)) return "false";
-                if (f.previous_filename && !isWhitelistPath(f.previous_filename)) {
-                  return "false";
-                }
-              }
-              return "true";
-            };
-            console.log(compute());
-          ')
-          echo "whitelist=$out" >> "$GITHUB_OUTPUT"
+          const { whitelist } = await import("./.github/scripts/vsdd/brand.ts");
+          const arr = JSON.parse(await Deno.readTextFile(Deno.env.get("PR_FILES")!));
+          let out = "true";
+          if (arr.length === 0) out = "false";
+          else for (const f of arr) {
+            if (!whitelist(f.filename)) { out = "false"; break; }
+            if (f.previous_filename && !whitelist(f.previous_filename)) {
+              out = "false"; break;
+            }
+          }
+          await output.set("whitelist", out);
+        shell: octoscript {0}
 
       - name: Compute impl-content via classify-changes.sh
         id: impl
@@ -185,25 +164,21 @@ jobs:
             echo "impl=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compute brand state via JS module (computeBrandState)
+      - name: Compute brand state via brand.ts
         id: brand-state
         env:
           WHITELIST: ${{ steps.whitelist.outputs.whitelist }}
           IMPL: ${{ steps.impl.outputs.impl }}
           MARKER: ${{ needs.marker.outputs.marker-present }}
-        shell: bash
         run: |
-          set -euo pipefail
-          # Brand iff (whitelist OR (impl AND no marker)).
-          node -e '
-            const {computeBrandState} = require("./.github/scripts/vsdd-brand.js");
-            const out = computeBrandState({
-              whitelist: process.env.WHITELIST === "true",
-              impl:      process.env.IMPL      === "true",
-              marker:    process.env.MARKER    === "true",
-            });
-            require("fs").appendFileSync(process.env.GITHUB_OUTPUT, "brand=" + out + "\n");
-          '
+          const { branded } = await import("./.github/scripts/vsdd/brand.ts");
+          const out = branded({
+            whitelist: Deno.env.get("WHITELIST") === "true",
+            impl:      Deno.env.get("IMPL")      === "true",
+            marker:    Deno.env.get("MARKER")    === "true",
+          });
+          await output.set("brand", out);
+        shell: octoscript {0}
 
       - name: Post or delete vsdd:opt-out brand comment
         env:
@@ -215,7 +190,7 @@ jobs:
         run: |
           set -euo pipefail
           # The brand is a github-actions[bot] comment containing the
-          # token `<!-- vsdd-opt-out-brand -->`. Bot identity is the
+          # token `<!-- vsdd: opt-out-brand -->`. Bot identity is the
           # only spoof-resistant signal: external collaborators can flip
           # labels but cannot post under github-actions[bot]'s identity.
           #
@@ -232,7 +207,7 @@ jobs:
             "repos/${REPO}/issues/${PR}/comments" \
             --jq '.[]
                   | select(.user.login == "github-actions[bot]")
-                  | select(.body | contains("<!-- vsdd-opt-out-brand -->"))
+                  | select(.body | contains("<!-- vsdd: opt-out-brand -->"))
                   | .id')
           count=${#existing_ids[@]}
           echo "Found $count existing bot brand comment(s) on PR #${PR}."
@@ -245,7 +220,7 @@ jobs:
           if [ "$BRAND" = "true" ]; then
             if [ "$count" -eq 0 ]; then
               {
-                printf '%s\n' '<!-- vsdd-opt-out-brand -->'
+                printf '%s\n' '<!-- vsdd: opt-out-brand -->'
                 printf '\n'
                 printf '%s\n' '**VSDD opt-out / out-of-process** — this PR has been branded `vsdd:opt-out` by `github-actions[bot]`. Either every changed file is under `.github/` (whitelist-match, no test-discipline expected) OR the PR has impl content without an earned `Red-gate-cleared` marker (divergence from VSDD best-effort).'
                 printf '\n'

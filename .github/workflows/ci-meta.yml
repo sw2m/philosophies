@@ -102,33 +102,24 @@ jobs:
           fi
           wc -l memory-canonical.md
 
-      - name: Build eval-input.txt
-        run: |
-          {
-            echo "<vsdd-canonical>"
-            cat memory-canonical.md
-            echo "</vsdd-canonical>"
-            echo ""
-            # Per #198: trigger is .github/** and the eval payload mirrors it.
-            # Recursive so any new sub-tree under .github/ (e.g. prompts/)
-            # auto-inherits coverage — the path filter and the embed loop
-            # stay in sync without per-directory edits to this workflow.
-            # Action helpers (e.g. .github/actions/*/runner.ts) are also
-            # picked up here, not just the action.yml manifests.
-            find .github -type f | sort | while read -r f; do
-              echo "<file path=\"$f\">"
-              cat "$f"
-              echo "</file>"
-            done
-          } > eval-input.txt
-          wc -l eval-input.txt
+      - uses: sw2m/octoscript/action@main
 
-      - uses: actions/upload-artifact@v7
+      - name: Upload eval context
+        uses: sw2m/octoscript@main
         with:
-          name: eval-input
-          path: |
-            eval-input.txt
-            memory-canonical.md
+          script: |
+            const memory = await Deno.readTextFile("memory-canonical.md");
+            const { stdout } = await shell("find .github -type f | sort");
+            const paths = new TextDecoder().decode(stdout).trim().split("\n");
+            const parts = ["<vsdd-canonical>\n" + memory + "\n</vsdd-canonical>", ""];
+            for (const p of paths) {
+              const content = await Deno.readTextFile(p);
+              parts.push("<file path=\"" + p + "\">\n" + content + "\n</file>");
+            }
+            const evalInput = parts.join("\n");
+            await artifact.set("eval", "input", evalInput);
+            await artifact.set("eval", "memory", memory);
+            console.log("Uploaded eval artifacts (" + evalInput.length + " bytes)");
 
   gemini-eval:
     name: Gemini VSDD CI evaluation
@@ -138,20 +129,22 @@ jobs:
       verdict: ${{ steps.parse.outputs.verdict }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: eval-input
-          path: ./
+      - uses: sw2m/octoscript/action@main
+
+      - name: Load eval context
+        run: |
+          const evalInput = await artifact.get("eval", "input");
+          if (!evalInput) { core.setFailed("eval/input artifact missing"); return; }
+          await shared.set("agent", "context", evalInput);
+        shell: octoscript {0}
 
       - name: Run Gemini
+        id: review
         uses: ./.github/actions/agents/gemini
-        with:
-          api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: eval-input.txt
-          output-file: gemini-output.txt
-          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
-          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          prompt: |
+        env:
+          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_PROMPT: |
             You are reviewing CI workflows against VSDD (Verified Spec-Driven Development).
 
             Read the canonical VSDD doc inside <vsdd-canonical> tags.
@@ -194,28 +187,30 @@ jobs:
 
             # OUTPUT FORMAT (strict)
 
-            Begin your output with YAML frontmatter, then prose. The frontmatter MUST be the first thing — no leading whitespace, no preamble.
+            Begin your output with an HTML-comment frontmatter block, then prose. The block MUST be the first thing — no leading whitespace, no preamble. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line).
 
-            ---
-            verdict: pass | fail
-            rationale: |
-              one paragraph summarizing the evaluation
-            gaps:
-              - title: "[ci-meta] short description (≤60 chars)"
-                body: |
-                  Goal-spec form. Describe the problem only — what's missing,
-                  what's broken, what symptom is observed, which §-reference
-                  the gap maps to. Concrete technical detail is welcome ONLY
-                  insofar as it characterizes the problem ("Phase 2a is
-                  unenforced because no workflow runs tests with new tests
-                  expected to fail").
-                  Do NOT propose a solution, fix, or implementation path.
-                  Solutions belong in tech-spec sub-issues, opened by the
-                  promotion pipeline once an org member assigns themselves.
-              - title: "..."
-                body: |
-                  ...
-            ---
+            <!--
+            vsdd:
+              ci-meta:
+                verdict: pass | fail
+                rationale: |
+                  one paragraph summarizing the evaluation
+                gaps:
+                  - title: "[ci-meta] short description (≤60 chars)"
+                  body: |
+                    Goal-spec form. Describe the problem only — what's missing,
+                    what's broken, what symptom is observed, which §-reference
+                    the gap maps to. Concrete technical detail is welcome ONLY
+                    insofar as it characterizes the problem ("Phase 2a is
+                    unenforced because no workflow runs tests with new tests
+                    expected to fail").
+                    Do NOT propose a solution, fix, or implementation path.
+                    Solutions belong in tech-spec sub-issues, opened by the
+                    promotion pipeline once an org member assigns themselves.
+                - title: "..."
+                  body: |
+                    ...
+            -->
 
             (free-form summary may follow but is ignored by the parser)
 
@@ -228,48 +223,52 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
         run: |
-          python3 - <<'PY'
-          import re, json, sys, os, yaml
-          with open('gemini-output.txt') as f:
-              raw = f.read()
-          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n?(.*)$', raw, re.DOTALL)
-          fm = None
-          summary = raw
-          if m:
-              try:
-                  fm = yaml.safe_load(m.group(1))
-                  summary = m.group(2).strip()
-              except yaml.YAMLError as e:
-                  print(f'WARN: frontmatter present but invalid YAML: {e}', file=sys.stderr)
-                  fm = None
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m2 = re.search(r'\n---\s*\n(verdict\s*:\s*(?:pass|fail).*?)\n---\s*\n', raw, re.DOTALL)
-              if m2:
-                  try:
-                      fm = yaml.safe_load(m2.group(1))
-                  except yaml.YAMLError:
-                      fm = None
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m3 = re.search(r'(?im)^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b', raw)
-              if m3:
-                  fm = {'verdict': m3.group(1).lower(), 'rationale': '(verdict extracted from prose; frontmatter missing)', 'gaps': []}
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              print('::error::Could not extract a verdict from gemini output (no frontmatter, no fallback match).', file=sys.stderr)
-              print('--- raw output ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
-          fm['reviewer'] = 'gemini'
-          fm['summary'] = summary
-          with open('gemini-eval.json', 'w') as f:
-              json.dump(fm, f, indent=2)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"verdict={fm['verdict']}\n")
-          print(f"gemini verdict: {fm['verdict']}, gaps: {len(fm.get('gaps') or [])}")
-          PY
+          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          const raw = Deno.env.get("REVIEW") ?? "";
 
-      - uses: actions/upload-artifact@v7
+            // Find the vsdd:ci-meta block. Block content has
+            // {verdict, rationale, gaps}; we attach reviewer + summary
+            // and write the JSON for downstream consensus consumption.
+            let payload = null;
+            for (const block of fm.parse(raw)) {
+              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+              const ns = (block as Record<string, unknown>).vsdd;
+              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+              const inner = (ns as Record<string, unknown>)["ci-meta"];
+              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
+              const v = (inner as Record<string, unknown>).verdict;
+              if (v !== "pass" && v !== "fail") continue;
+              payload = inner as Record<string, unknown>;
+              break;
+            }
+            if (!payload) {
+              console.error("::error::Could not extract a vsdd:ci-meta verdict from gemini output.");
+              console.error("--- raw output ---");
+              console.error(raw);
+              core.setFailed("verdict extraction failed");
+              return;
+            }
+            // Summary is whatever the agent appended after the closing -->
+            const closeIdx = raw.indexOf("-->");
+            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
+
+            const out = { ...payload, reviewer: "gemini", summary };
+            const outJson = JSON.stringify(out, null, 2);
+            await shared.set("eval", "gemini", outJson);
+            await output.set("verdict", String(payload.verdict));
+            const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
+            console.log("gemini verdict: " + payload.verdict + ", gaps: " + gaps.length);
+        shell: octoscript {0}
+
+      - name: Upload gemini eval
+        uses: sw2m/octoscript@main
         with:
-          name: gemini-eval
-          path: gemini-eval.json
+          script: |
+            const data = await shared.get("eval", "gemini");
+            if (data) await artifact.set("eval", "gemini", data);
 
   claude-eval:
     name: Claude VSDD CI evaluation
@@ -279,46 +278,45 @@ jobs:
       verdict: ${{ steps.parse.outputs.verdict }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: eval-input
-          path: ./
+      - uses: sw2m/octoscript/action@main
+
+      - name: Load eval context
+        run: |
+          const evalInput = await artifact.get("eval", "input");
+          if (!evalInput) { core.setFailed("eval/input artifact missing"); return; }
+          await shared.set("agent", "context", evalInput);
+        shell: octoscript {0}
 
       - name: Run Claude
+        id: review
         uses: ./.github/actions/agents/claude
-        with:
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          output-file: claude-eval.md
-          # Same stdin-file pattern as Gemini — Claude has no filesystem
-          # access via the Messages API, so we embed eval-input.txt
-          # (canonical MEMORY.md + every workflow + every composite action)
-          # directly in the prompt rather than asking Claude to "read" files.
-          stdin-file: eval-input.txt
-          # Per #112/#116 — opt in to bot trust on in-repo head branches only.
-          trust-github-actions-bot: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-          prompt: |
+        env:
+          INPUT_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          INPUT_TRUST_GITHUB_ACTIONS_BOT: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          INPUT_PROMPT: |
             # CRITICAL OUTPUT FORMAT (read this FIRST)
 
-            Your response MUST start, on the very first line, with exactly the three characters `---` (no leading whitespace, no preamble, no markdown heading), then a YAML block, then `---` to close, then optional prose.
+            Begin your output with an HTML-comment frontmatter block, then prose. The block MUST be the first thing — no leading whitespace, no preamble. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line).
 
             Concrete example of an acceptable response:
 
             ```
-            ---
-            verdict: pass
-            rationale: |
-              All applicable VSDD requirements are enforced. Phase 1c, 3, §VII,
-              §IX are implemented; 2a/2b/§VIII are N/A on a docs repo.
-            gaps:
-              - title: "[ci-meta] sample non-blocking gap"
-                body: |
-                  Optional improvement that doesn't block merge.
-            ---
+            <!--
+            vsdd:
+              ci-meta:
+                verdict: pass
+                rationale: |
+                  All applicable VSDD requirements are enforced.
+                gaps:
+                  - title: "[ci-meta] sample non-blocking gap"
+                    body: |
+                      Optional improvement that doesn't block merge.
+            -->
 
             (any free-form summary may follow here, ignored by the parser)
             ```
 
-            If you do not produce frontmatter as your first output, the workflow
+            If you do not produce this frontmatter as your first output, the workflow
             will fail and your analysis will be discarded. This is non-negotiable.
 
             # TASK
@@ -361,26 +359,28 @@ jobs:
 
             # OUTPUT FORMAT (strict)
 
-            Write a single file at the path you were told to use as `output-file`. Begin the file with YAML frontmatter:
+            Begin your output with an HTML-comment frontmatter block, then prose. The `<!--` and `-->` must each sit alone on their own line (no content sharing the wrapper line):
 
-            ---
-            verdict: pass | fail
-            rationale: |
-              one paragraph
-            gaps:
-              - title: "[ci-meta] short description ≤60 chars"
-                body: |
-                  Goal-spec form. Describe the problem only — what's missing,
-                  what's broken, what symptom is observed, which §-reference
-                  the gap maps to. Concrete technical detail is welcome ONLY
-                  insofar as it characterizes the problem.
-                  Do NOT propose a solution, fix, or implementation path.
-                  Solutions belong in tech-spec sub-issues, opened by the
-                  promotion pipeline once an org member assigns themselves.
-              - title: "..."
-                body: |
-                  ...
-            ---
+            <!--
+            vsdd:
+              ci-meta:
+                verdict: pass | fail
+                rationale: |
+                  one paragraph
+                gaps:
+                  - title: "[ci-meta] short description ≤60 chars"
+                  body: |
+                    Goal-spec form. Describe the problem only — what's missing,
+                    what's broken, what symptom is observed, which §-reference
+                    the gap maps to. Concrete technical detail is welcome ONLY
+                    insofar as it characterizes the problem.
+                    Do NOT propose a solution, fix, or implementation path.
+                    Solutions belong in tech-spec sub-issues, opened by the
+                    promotion pipeline once an org member assigns themselves.
+                - title: "..."
+                  body: |
+                    ...
+            -->
 
             (free-form summary may follow but is ignored by the parser)
 
@@ -393,53 +393,52 @@ jobs:
 
       - name: Parse frontmatter
         id: parse
+        env:
+          REVIEW: ${{ steps.review.outputs.response }}
         run: |
-          python3 - <<'PY'
-          import re, json, sys, os, yaml
-          if not os.path.exists('claude-eval.md'):
-              print('::error::claude-eval.md not produced'); sys.exit(1)
-          with open('claude-eval.md') as f:
-              raw = f.read()
-          # Primary: strict frontmatter block at the top.
-          m = re.match(r'^\s*---\s*\n(.*?)\n---\s*\n?(.*)$', raw, re.DOTALL)
-          fm = None
-          summary = raw
-          if m:
-              try:
-                  fm = yaml.safe_load(m.group(1))
-                  summary = m.group(2).strip()
-              except yaml.YAMLError as e:
-                  print(f'WARN: frontmatter present but invalid YAML: {e}', file=sys.stderr)
-                  fm = None
-          # Fallback 1: an embedded frontmatter block anywhere in the doc.
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m2 = re.search(r'\n---\s*\n(verdict\s*:\s*(?:pass|fail).*?)\n---\s*\n', raw, re.DOTALL)
-              if m2:
-                  try:
-                      fm = yaml.safe_load(m2.group(1))
-                  except yaml.YAMLError:
-                      fm = None
-          # Fallback 2: scan for a bare 'verdict: pass|fail' line.
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              m3 = re.search(r'(?im)^\s*\**\s*verdict\s*\**\s*[:=]\s*\**\s*(pass|fail)\b', raw)
-              if m3:
-                  fm = {'verdict': m3.group(1).lower(), 'rationale': '(verdict extracted from prose; frontmatter missing)', 'gaps': []}
-          if fm is None or fm.get('verdict') not in ('pass', 'fail'):
-              print('::error::Could not extract a verdict from claude output (no frontmatter, no fallback match).', file=sys.stderr)
-              print('--- raw output ---', file=sys.stderr); print(raw, file=sys.stderr); sys.exit(1)
-          fm['reviewer'] = 'claude'
-          fm['summary'] = summary
-          with open('claude-eval.json', 'w') as f:
-              json.dump(fm, f, indent=2)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"verdict={fm['verdict']}\n")
-          print(f"claude verdict: {fm['verdict']}, gaps: {len(fm.get('gaps') or [])}")
-          PY
+          const fm = await import("./.github/scripts/vsdd/frontmatter.ts");
+          const raw = Deno.env.get("REVIEW") ?? "";
 
-      - uses: actions/upload-artifact@v7
+            // Find the vsdd:ci-meta block. Block content has
+            // {verdict, rationale, gaps}; we attach reviewer + summary
+            // and write the JSON for downstream consensus consumption.
+            let payload = null;
+            for (const block of fm.parse(raw)) {
+              if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+              const ns = (block as Record<string, unknown>).vsdd;
+              if (typeof ns !== "object" || ns === null || Array.isArray(ns)) continue;
+              const inner = (ns as Record<string, unknown>)["ci-meta"];
+              if (typeof inner !== "object" || inner === null || Array.isArray(inner)) continue;
+              const v = (inner as Record<string, unknown>).verdict;
+              if (v !== "pass" && v !== "fail") continue;
+              payload = inner as Record<string, unknown>;
+              break;
+            }
+            if (!payload) {
+              console.error("::error::Could not extract a vsdd:ci-meta verdict from claude output.");
+              console.error("--- raw output ---");
+              console.error(raw);
+              core.setFailed("verdict extraction failed");
+              return;
+            }
+            // Summary is whatever the agent appended after the closing -->
+            const closeIdx = raw.indexOf("-->");
+            const summary = closeIdx === -1 ? raw : raw.slice(closeIdx + 3).trim();
+
+            const out = { ...payload, reviewer: "claude", summary };
+            const outJson = JSON.stringify(out, null, 2);
+            await shared.set("eval", "claude", outJson);
+            await output.set("verdict", String(payload.verdict));
+            const gaps = Array.isArray(payload.gaps) ? payload.gaps : [];
+            console.log("claude verdict: " + payload.verdict + ", gaps: " + gaps.length);
+        shell: octoscript {0}
+
+      - name: Upload claude eval
+        uses: sw2m/octoscript@main
         with:
-          name: claude-eval
-          path: claude-eval.json
+          script: |
+            const data = await shared.get("eval", "claude");
+            if (data) await artifact.set("eval", "claude", data);
 
   consensus:
     name: Consensus + open issues for gaps
@@ -477,14 +476,16 @@ jobs:
           fi
 
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        with:
-          name: gemini-eval
-          path: ./eval/
-      - uses: actions/download-artifact@v8
-        with:
-          name: claude-eval
-          path: ./eval/
+      - uses: sw2m/octoscript/action@main
+
+      - name: Load eval results
+        run: |
+          const gemini = await artifact.get("eval", "gemini");
+          const claude = await artifact.get("eval", "claude");
+          await Deno.mkdir("eval", { recursive: true });
+          if (gemini) await Deno.writeTextFile("eval/gemini-eval.json", gemini);
+          if (claude) await Deno.writeTextFile("eval/claude-eval.json", claude);
+        shell: octoscript {0}
 
       - name: Build proposed gaps + fetch existing tracked gaps
         id: prep-dedup
@@ -652,10 +653,15 @@ jobs:
               out.append("</body>")
               out.append("</proposed>")
 
-          with open('dedup-input.txt', 'w') as f:
-              f.write('\n'.join(out))
-          import os
-          print(f"dedup-input.txt: {os.path.getsize('dedup-input.txt')} bytes")
+          dedup_content = '\n'.join(out)
+          import subprocess, os
+          # Write to shared module for the agent composite to read
+          shared_dir = os.environ.get('GITHUB_SHARED_DIR', os.environ.get('RUNNER_TEMP', '/tmp') + '/shared')
+          agent_dir = os.path.join(shared_dir, 'agent')
+          os.makedirs(agent_dir, exist_ok=True)
+          with open(os.path.join(agent_dir, 'prompt'), 'w') as f:
+              f.write(dedup_content)
+          print(f"dedup prompt: {len(dedup_content)} bytes")
           PY
 
       - name: Resolve org-member owner for dedup actor-override
@@ -707,11 +713,9 @@ jobs:
       - name: Run Gemini semantic dedup
         if: steps.prep-dedup.outputs.dedup-needed == 'true'
         uses: ./.github/actions/agents/gemini
-        with:
-          api-key: ${{ secrets.GEMINI_API_KEY }}
-          stdin-file: dedup-input.txt
-          output-file: dedup-output.md
-          actor-override: ${{ steps.resolve-owner.outputs.owner }}
+        env:
+          INPUT_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INPUT_ACTOR_OVERRIDE: ${{ steps.resolve-owner.outputs.owner }}
 
       - name: Open non-duplicate gap issues
         env:
@@ -864,10 +868,11 @@ jobs:
           # tracked issue → opened_count == 0) pass cleanly even when the
           # underlying consensus is fail — the dedup signal IS the "already
           # known" signal.
-          sys.path.insert(0, os.path.join(os.environ.get('GITHUB_WORKSPACE', '.'), '.github', 'scripts'))
-          from consensus import decide_exit_code
+          # consensus exit-code: rc = 0 iff verdict==pass AND opened_count==0.
+          # If a future PR moves the surrounding state-write/dedup Python
+          # logic to TS, fold this into the unified consensus module then.
           verdict_str = 'fail' if fail else 'pass'
-          rc = decide_exit_code(verdict_str, opened_count)
+          rc = 1 if (verdict_str == 'fail' or opened_count > 0) else 0
           status = 'FAIL' if rc != 0 else 'PASS'
           print(f"\n{status}: {opened_count} gap issue(s) opened, {skipped_count} skipped as duplicates.")
           sys.exit(rc)
@@ -875,11 +880,8 @@ jobs:
 
       - name: Submit consensus PR review (APPROVE / REQUEST_CHANGES)
         if: always() && hashFiles('consensus-state.json') != '' && github.event_name == 'pull_request'
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const state = JSON.parse(fs.readFileSync('consensus-state.json', 'utf8'));
+        run: |
+          const state = JSON.parse(await Deno.readTextFile('consensus-state.json'));
             const event = state.verdict === 'pass' ? 'APPROVE' : 'REQUEST_CHANGES';
             const lines = [
               `**VSDD CI Meta-Review** _(advisory; status check is what gates merge)_  `,
@@ -935,3 +937,4 @@ jobs:
                 body: lines.join('\n'),
               });
             }
+        shell: octoscript {0}

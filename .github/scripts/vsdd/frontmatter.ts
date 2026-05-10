@@ -22,9 +22,10 @@
 // parses multiline YAML (typically a mapping). Discrimination between
 // blocks is the caller's job — typically one of:
 //
-//   1. inline marker scalar: `<!-- vsdd-opt-out-brand -->` → "vsdd-opt-out-brand"
-//   2. kv-discrimination:    `<!-- vsdd-phase-3: { state: clear } -->`
-//                            → { "vsdd-phase-3": { state: "clear" } }
+//   1. inline kv-marker:     `<!-- vsdd: opt-out-brand -->`
+//                            → { vsdd: "opt-out-brand" }
+//   2. namespaced block:     `<!-- vsdd: { phase-3: { verdict: pass } } -->`
+//                            → { vsdd: { "phase-3": { verdict: "pass" } } }
 //   3. field-discrimination: `<!-- {phase: 3, kind: verdict, ...} -->`
 //                            → { phase: 3, kind: "verdict", ... }
 //
@@ -32,11 +33,12 @@
 //
 //   import * as frontmatter from "../vsdd/frontmatter.ts";
 //   const blocks = frontmatter.parse(body);
-//   const verdict = blocks.find(
-//     (b) => isMapping(b) && "vsdd-phase-3-aggregate" in b,
-//   )?.["vsdd-phase-3-aggregate"];
+//   const phase3 = blocks
+//     .map((b) => isMapping(b) ? b.vsdd : undefined)
+//     .find((ns) => isMapping(ns) && "phase-3" in ns)
+//     ?.["phase-3"];
 
-import { parse as yaml } from "jsr:@std/yaml@^1";
+import { parse as deserialize } from "../github/serde.ts";
 
 const OPEN = "<!--";
 const CLOSE = "-->";
@@ -60,15 +62,35 @@ class Parse {
     return this.blocks;
   }
 
+  /** Drive the engine to exhaustion and return parsed blocks PLUS positions.
+   *  `start` points at the first char of `<!--`; `end` points at the char
+   *  AFTER the closing `-->`. Useful for callers that want to slice the
+   *  body between consecutive markers. */
+  marks(): Array<{ value: unknown; start: number; end: number }> {
+    const out: Array<{ value: unknown; start: number; end: number }> = [];
+    let i = 0;
+    while (i < this.body.length) {
+      const start = this.body.indexOf(OPEN, i);
+      if (start === -1) break;
+      const closeIdx = this.body.indexOf(CLOSE, start + OPEN.length);
+      if (closeIdx === -1) break;
+      const end = closeIdx + CLOSE.length;
+      i = end;
+      const value = Parse.content(this.body.slice(start + OPEN.length, closeIdx));
+      if (value !== null && value !== undefined) out.push({ value, start, end });
+    }
+    return out;
+  }
+
   /** One step: scan from the cursor for the next `<!--...-->`, classify it,
    *  push the parsed value if non-empty, advance the cursor. Returns
    *  false when no further block exists. */
   private step(): boolean {
     const start = this.body.indexOf(OPEN, this.pos);
     if (start === -1) return false;
-    const end = this.body.indexOf(CLOSE, start + OPEN.length);
-    if (end === -1) return false;
-    this.pos = end + CLOSE.length;
+    let end = this.body.indexOf(CLOSE, start + OPEN.length);
+    if (end === -1) end = this.body.length;
+    this.pos = end + (end < this.body.length ? CLOSE.length : 0);
 
     const value = Parse.content(this.body.slice(start + OPEN.length, end));
     if (value !== null && value !== undefined) this.blocks.push(value);
@@ -81,7 +103,7 @@ class Parse {
   static content(raw: string): unknown {
     if (!raw.includes("\n")) {
       const trimmed = raw.trim();
-      return trimmed === "" ? null : yaml(trimmed);
+      return trimmed === "" ? null : deserialize(trimmed, "yaml");
     }
 
     const head = raw.indexOf("\n");
@@ -91,7 +113,7 @@ class Parse {
     if (raw.slice(tail + 1).trim() !== "") return null;
 
     const dedented = Parse.dedent(raw.slice(head + 1, tail));
-    return dedented === "" ? null : yaml(dedented);
+    return dedented === "" ? null : deserialize(dedented, "yaml");
   }
 
   /** Strip the leading indentation common to every non-blank line.
@@ -140,4 +162,13 @@ class Parse {
  *  job — filter the returned array by whatever convention the emitter uses. */
 export function parse(body: string): unknown[] {
   return new Parse(body).run();
+}
+
+/** Parse every well-formed block AND return its position in `body`.
+ *  `{value, start, end}` triples in source order; `start` indexes the
+ *  first char of `<!--`, `end` indexes the char after the closing `-->`.
+ *  Useful for callers that section a body by markers — the slice
+ *  `body.slice(prev.end, next.start)` is the prose between two markers. */
+export function marks(body: string): Array<{ value: unknown; start: number; end: number }> {
+  return new Parse(body).marks();
 }

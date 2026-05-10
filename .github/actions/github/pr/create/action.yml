@@ -1,0 +1,53 @@
+name: "Create or reuse draft PR"
+description: "Scaffold a branch + idempotent draft PR."
+outputs:
+  branch: { value: "${{ steps.scaffold.outputs.branch}} " }
+  pr-number: { value: "${{ steps.scaffold.outputs.pr-number}} " }
+  created: { value: "${{ steps.scaffold.outputs.created}} " }
+runs:
+  using: composite
+  steps:
+    - uses: sw2m/octoscript/action@main
+    - name: Configure git identity
+      shell: bash
+      run: |
+        git config user.name inputs.get("bot-name")
+        git config user.email inputs.get("bot-email")
+    - id: scaffold
+      run: |
+        const { Pull } = await import("./.github/scripts/github/pr.ts");
+        const { owner, repo } = context.repo;
+        const issue = inputs.get("issue-number");
+        const base = inputs.get("base-branch");
+        const branch = inputs.get("branch-prefix") + issue + "-promote";
+
+        await git.fetch("origin", base);
+        const branches = await git.branch(["-r"]);
+        if (branches.all.includes(`origin/${branch}`)) {
+          await git.fetch("origin", branch);
+          await git.checkout(branch);
+          console.log(`Branch ${branch} already existed; resuming.`);
+        } else {
+          await git.checkoutBranch(branch, `origin/${base}`);
+          await git.commit(
+            `chore(promote): scaffold for #${issue}\n\nStarted: ${new Date().toISOString()}`,
+            { "--allow-empty": null },
+          );
+          await git.push(["-u", "origin", branch]);
+        }
+        await output.set("branch", branch);
+
+        const pull = new Pull({ api: github, owner, repo });
+        const found = await pull.find({ head: branch });
+        if (found) {
+          await output.set("pr-number", pull.number);
+          await output.set("created", "false");
+          console.log(`Reusing existing PR #${pull.number}`);
+        } else {
+          const body = inputs.get("body") || `Closes #${issue}`;
+          await pull.create({ head: branch, base, title: inputs.get("title").trim(), body, draft: true });
+          await output.set("pr-number", pull.number);
+          await output.set("created", "true");
+          console.log(`Opened draft PR #${pull.number}: ${pull.html_url}`);
+        }
+      shell: octoscript {0}

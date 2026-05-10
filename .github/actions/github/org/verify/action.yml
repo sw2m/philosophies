@@ -1,0 +1,18 @@
+name: "Verify org membership"
+description: "Verify the actor is a public member of the org."
+outputs:
+  actor:
+    value: "${{ steps.verify.outputs.result }}"
+runs:
+  using: composite
+  steps:
+    - uses: sw2m/octoscript/action@main
+    - id: verify
+      run: |
+        const org = await import("./.github/scripts/github/org.ts");
+        const actor = inputs.get("actor-override") || inputs.get("owner-login") || "";
+        const sender = inputs.get("sender") || Deno.env.get("GITHUB_ACTOR") || "";
+        const orgName = inputs.get("org") || "sw2m";
+        const bot = inputs.get("trust-github-actions-bot") === "true";
+        return await org.verify({ api: github, core, org: orgName, actor, sender, bot });
+      shell: octoscript {0}

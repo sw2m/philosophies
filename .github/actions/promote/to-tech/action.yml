@@ -1,0 +1,77 @@
+name: "Promote goal-spec to tech-specs"
+description: |
+  Decomposes a goal-spec into N tech-spec sub-issues via Claude.
+
+
+runs:
+  using: composite
+  steps:
+    - uses: sw2m/octoscript/action@main
+
+    - name: Read goal issue
+      uses: ./.github/actions/github/issue/read
+      env:
+        INPUT_PREFIX: goal
+
+    - name: Read orchestrator canonical tuple (#128)
+      id: cardinality
+      run: |
+        const cardinality = await import("./.github/scripts/vsdd/promote/to-tech/cardinality.ts");
+        const { Comment } = await import("./.github/scripts/github/comment.ts");
+        const { owner, repo } = context.repo;
+        const issue = inputs.get("issue-number");
+        const comments = new Comment({ api: github, owner, repo, issue_number: issue });
+        const bot = await comments.list({ bot: true });
+        let hit = null;
+        for (const c of bot) {
+          const r = cardinality.read(c.body || "", "orchestrator");
+          if (!r || r.verdict !== "pass") continue;
+          if (!hit || new Date(c.created_at) > new Date(hit.c.created_at)) {
+            hit = { c, r };
+          }
+        }
+        if (!hit) {
+          core.notice("No orchestrator pass; falling back to default decomposition.");
+          await output.set("min-cardinality", "");
+          return;
+        }
+        const { subjects, outcomes } = hit.r;
+        if (subjects === undefined || outcomes === undefined) {
+          await output.set("min-cardinality", "");
+          return;
+        }
+        const min = Math.min(subjects, outcomes);
+        await output.set("min-cardinality", min);
+        console.log(`Canonical tuple: subjects=${subjects}, outcomes=${outcomes}, min=${min}`);
+      shell: octoscript {0}
+
+    - name: Build agent prompt
+      run: |
+        const memory = await Deno.readTextFile("MEMORY.md");
+        const title = await shared.get("goal", "title") ?? "";
+        const body = await shared.get("goal", "body") ?? "";
+        const min = "${{ steps.cardinality.outputs.min-cardinality }}";
+        const prompt = await template(
+          new URL("./.github/scripts/vsdd/promote/to-tech/prompt.mustache", `file://${Deno.cwd()}/`),
+          { memory, title, body, atomic: min === "1" },
+        );
+        await shared.set("agent", "prompt", prompt);
+        console.log(`stdin bytes: ${prompt.length}`);
+      shell: octoscript {0}
+
+    - name: Run Claude
+      uses: ./.github/actions/agents/claude
+
+    - name: Parse tech-specs and open sub-issues
+      run: |
+        const { Decompose } = await import("./.github/scripts/vsdd/promote/to-tech/decompose.ts");
+        const { owner, repo } = context.repo;
+        const response = "${{ steps.invoke.outputs.response }}" || await shared.get("agent", "response") || "";
+        const dc = new Decompose({
+          api: github, owner, repo,
+          issue_number: inputs.get("issue-number"),
+          raw: response,
+          actor: inputs.get("owner-login"),
+        });
+        await dc.run();
+      shell: octoscript {0}
