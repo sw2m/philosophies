@@ -121,6 +121,7 @@ jobs:
           INPUT_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           INPUT_ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           INPUT_ORG: sw2m
+          INPUT_DEBUG: "true"
 
       - name: Process consensus + dedup + open gap issues
         env:
@@ -159,7 +160,13 @@ jobs:
 
           gemini_verdict = gemini_output.get('verdict', 'unknown')
           claude_verdict = claude_output.get('verdict', 'unknown')
-          fail = gemini_verdict == 'fail' or claude_verdict == 'fail'
+
+          if gemini_verdict == 'unknown':
+              print("::error::Gemini produced no usable verdict. Output:", json.dumps(gemini_output)[:500])
+          if claude_verdict == 'unknown':
+              print("::error::Claude produced no usable verdict. Output:", json.dumps(claude_output)[:500])
+
+          fail = gemini_verdict != 'pass' or claude_verdict != 'pass'
 
           print(f"gemini: verdict={gemini_verdict}, gaps={len(gemini_output.get('gaps', []))}")
           print(f"claude: verdict={claude_verdict}, gaps={len(claude_output.get('gaps', []))}")
