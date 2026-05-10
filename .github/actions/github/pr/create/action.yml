@@ -44,8 +44,8 @@ runs:
           await output.set("created", "false");
           console.log(`Reusing existing PR #${pull.number}`);
         } else {
-          const body = inputs.get("body")` || `Closes #${issue}`;
-          await pull.create({ head: branch, base, title: inputs.get("title")`.trim(), body, draft: true });
+          const body = inputs.get("body") || `Closes #${issue}`;
+          await pull.create({ head: branch, base, title: inputs.get("title").trim(), body, draft: true });
           await output.set("pr-number", pull.number);
           await output.set("created", "true");
           console.log(`Opened draft PR #${pull.number}: ${pull.html_url}`);

@@ -1,9 +1,9 @@
 name: "Create issue"
 description: "Open an issue via the Issue class."
 outputs:
-  number: { value: "${{ steps.create.outputs.number}} " }
-  url: { value: "${{ steps.create.outputs.url}} " }
-  title: { value: "${{ steps.create.outputs.title}} " }
+  number: { value: "${{ steps.create.outputs.number}}" }
+  url: { value: "${{ steps.create.outputs.url}}" }
+  title: { value: "${{ steps.create.outputs.title}}" }
 runs:
   using: composite
   steps:
@@ -15,9 +15,9 @@ runs:
         const issue = new Issue({ api: github, owner, repo });
         const labels = inputs.get("labels").split(",").map(s => s.trim()).filter(Boolean);
         try {
-          await issue.create({ title: inputs.get("title")`, body: inputs.get("body")`, labels: labels.length ? labels : undefined });
+          await issue.create({ title: inputs.get("title"), body: inputs.get("body"), labels: labels.length ? labels : undefined });
         } catch {
-          await issue.create({ title: inputs.get("title")`, body: inputs.get("body")` });
+          await issue.create({ title: inputs.get("title"), body: inputs.get("body") });
         }
         const ns = inputs.get("prefix") || "issue";
         await shared.set(ns, "title", issue.title);
