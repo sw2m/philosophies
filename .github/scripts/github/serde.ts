@@ -66,3 +66,13 @@ export async function query(input: string | unknown, expr: string): Promise<unkn
     return undefined;
   }
 }
+
+import { stringify as yamlStringify } from "jsr:@std/yaml@^1";
+import { stringify as tomlStringify } from "jsr:@std/toml@^1";
+
+/** Serialize a value to the given format. Default: JSON. */
+export function dump(value: unknown, format: Format = "json"): string {
+  if (format === "yaml") return yamlStringify(value as Record<string, unknown>);
+  if (format === "toml") return tomlStringify(value as Record<string, unknown>);
+  return JSON.stringify(value, null, 2);
+}

@@ -41,7 +41,7 @@
 
 import jsonata from "npm:jsonata@^2";
 import { parse as parseBlocks } from "./vsdd/frontmatter.ts";
-import { stringify as toYaml } from "jsr:@std/yaml@^1";
+import { dump } from "./github/serde.ts";
 import { encodeHex } from "jsr:@std/encoding@^1/hex";
 
 type Args = {
@@ -132,7 +132,7 @@ export async function extract(opts: Args): Promise<string[]> {
   const paths: string[] = [];
   for (let i = 0; i < matches.length; i++) {
     const v = matches[i];
-    const content = opts.format === "yaml" ? toYaml(v) : JSON.stringify(v, null, 2);
+    const content = dump(v, opts.format);
     let stem: string;
     if (opts.naming === "index") stem = String(i);
     else if (opts.naming === "alpha") stem = alpha(i);
