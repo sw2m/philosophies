@@ -33,12 +33,12 @@ runs:
         if (!hit) {
           core.notice("No orchestrator pass; falling back to default decomposition.");
           await output.set("min-cardinality", "");
-          return;
+          exit(0);
         }
         const { subjects, outcomes } = hit.r;
         if (subjects === undefined || outcomes === undefined) {
           await output.set("min-cardinality", "");
-          return;
+          exit(0);
         }
         const min = Math.min(subjects, outcomes);
         await output.set("min-cardinality", min);
