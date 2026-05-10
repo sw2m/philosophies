@@ -290,8 +290,8 @@ jobs:
             if (v) parts.push(v);
           }
           const prompt = parts.join("\n\n");
-          await shared.set("review.gemini", "input", prompt);
-          await shared.set("review.claude", "input", prompt);
+          await shared.set("review.gemini", "prompt", prompt);
+          await shared.set("review.claude", "prompt", prompt);
         shell: octoscript {0}
 
       - name: Run panel
@@ -367,8 +367,8 @@ jobs:
             if (v) parts.push(v);
           }
           const input = parts.join("\n\n");
-          await shared.set("review.gemini", "input", input);
-          await shared.set("review.claude", "input", input);
+          await shared.set("review.gemini", "prompt", input);
+          await shared.set("review.claude", "prompt", input);
         shell: octoscript {0}
 
       - name: Run panel
