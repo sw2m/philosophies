@@ -43,10 +43,6 @@ runs:
         const prompt = inputs.get("prompt");
         const parts = [];
         if (prompt) parts.push(prompt);
-        for (const name of await shared.list()) {
-          const content = await shared.get(name);
-          if (content) parts.push(content);
-        }
         if (!parts.length) { core.setFailed("No content to send to gemini."); return; }
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);
