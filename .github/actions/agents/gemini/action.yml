@@ -42,7 +42,7 @@ runs:
         const { Gemini } = await import("./.github/scripts/agents/gemini.ts");
         const prompt = inputs.get("prompt");
         const parts = [];
-        if (prompt) parts.push(prompt);
+        if (prompt && prompt.trim()) parts.push(prompt);
         if (!parts.length) { core.setFailed("No content to send to gemini."); return; }
         const body = parts.join("\n\n");
         console.log(`input bytes: ${body.length}`);
