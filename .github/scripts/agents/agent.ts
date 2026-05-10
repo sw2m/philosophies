@@ -77,8 +77,24 @@ export class Agent {
       }).spawn();
       try {
         const writer = proc.stdin.getWriter();
-        await writer.write(input);
-        await writer.close();
+        try {
+          await writer.write(input);
+          await writer.close();
+        } catch {
+          try { writer.releaseLock(); proc.stdin.close(); } catch {}
+          const [output, err] = await Promise.all([
+            new Response(proc.stdout).bytes(),
+            new Response(proc.stderr).bytes(),
+          ]);
+          const status = await proc.status;
+          const stderr = new TextDecoder().decode(err).trim();
+          const code = status.code ?? 1;
+          throw new Error(
+            this.cmd + " (model=" + this.args({ model }).join(" ") +
+            ") exited " + code + " before input was fully written." +
+            (stderr ? "\nstderr: " + stderr : "")
+          );
+        }
 
         const [output, err] = await Promise.all([
           new Response(proc.stdout).bytes(),
