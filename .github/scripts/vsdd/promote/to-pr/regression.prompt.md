@@ -16,7 +16,7 @@ vsdd:
 
 The command must exit 0 on pass, non-zero on fail.
 
-# TASK
+## TASK
 
 You are running the Regression gate of the VSDD tech-to-PR pipeline.
 This runs BEFORE implementation — alongside the Red gate. Your job:
@@ -40,6 +40,7 @@ After implementation (Green gate), these same regression tests run
 again. If they fail then, the implementation broke existing behavior.
 
 Constraints:
+
 - Focus on existing behavior, not the new feature. New-feature tests
   are the Red gate's job.
 - The tests must be independent of the Red tests (different files,

@@ -20,7 +20,7 @@ Both commands must exit 0 on pass, non-zero on fail. They will be
 run from the repo root. They are how Phase 3 (Red Gate) and Phase 5
 (Green Gate) classify results.
 
-# TASK
+## TASK
 
 You are running Phase 2 of the VSDD tech-to-PR pipeline. Read
 MEMORY.md §VIII (4-Result Rule) for context. Your job:
@@ -39,6 +39,7 @@ MEMORY.md §VIII (4-Result Rule) for context. Your job:
 5. Output the frontmatter block at the END of your response.
 
 Constraints:
+
 - One technical problem per tech-spec (per §VII). If the issue
   covers more than one, STOP and emit an empty `files: []` list
   with a comment in the response body explaining why; the pipeline
