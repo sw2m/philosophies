@@ -85,28 +85,14 @@ async function buildPhase4Input(
   meta: { "red-green": string; regression: string } | null,
 ): Promise<string> {
   const ctx = await techContext();
-  const memory = await Deno.readTextFile("MEMORY.md");
-  const head = meta === null ? GREEN_NORUN_PROMPT : GREEN_PROMPT;
-  const lines = [
-    head,
-    "--- MEMORY.md ---",
-    memory,
-    "",
-    "--- TECH-SPEC ISSUE TITLE ---",
-    ctx.title,
-    "",
-    "--- TECH-SPEC ISSUE BODY ---",
-    ctx.body,
-  ];
-  if (meta !== null) {
-    lines.push(
-      "",
-      "--- TEST RUN COMMANDS ---",
-      `New tests command (must end up exit 0): ${meta["red-green"]}`,
-      `Regression tests command (must end up exit 0): ${meta.regression}`,
-    );
-  }
-  return lines.join("\n");
+  const tmpl = await load("green.input.mustache");
+  return Mustache.render(tmpl, {
+    prompt: meta === null ? GREEN_NORUN_PROMPT : GREEN_PROMPT,
+    memory: await Deno.readTextFile("MEMORY.md"),
+    title: ctx.title,
+    body: ctx.body,
+    commands: meta ? { "red-green": meta["red-green"], regression: meta.regression } : null,
+  });
 }
 
 // =========================================================================
