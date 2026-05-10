@@ -70,10 +70,6 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ env.INPUT_GITHUB_TOKEN }}
-        INPUT_REF: ${{ env.INPUT_REF }}
-        INPUT_WHITELIST: ${{ env.INPUT_WHITELIST_PATHS }}
-        INPUT_FORMAT: ${{ env.INPUT_OUTPUT_FORMAT }}
-        INPUT_PR_BASE: ${{ env.INPUT_PR_SHORTHAND_BASE }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         RUNNER_TEMP: ${{ runner.temp }}
       run: |
