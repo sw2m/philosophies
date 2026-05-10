@@ -21,6 +21,7 @@ import { read as readPhase2 } from "../../phase-2/frontmatter.ts";
 import * as output from "../../../github/output.ts";
 
 import * as inputs from "../../../github/inputs.ts";
+import * as shared from "../../../github/shared.ts";
 // deno-lint-ignore no-explicit-any
 const git = (await import("npm:simple-git@^3")).default as any;
 const sg = git();
@@ -54,11 +55,11 @@ async function run(cmd: string): Promise<{ code: number; stdout: Uint8Array; std
   return { code, stdout, stderr };
 }
 
-/** Read tech-spec title + body files written by an earlier action step. */
+/** Read tech-spec title + body from the shared module. */
 async function techContext(): Promise<{ title: string; body: string }> {
   return {
-    title: await Deno.readTextFile(`${RUNNER_TEMP}/tech-title.txt`),
-    body: await Deno.readTextFile(`${RUNNER_TEMP}/tech-body.txt`),
+    title: await shared.get("tech", "title") ?? "",
+    body: await shared.get("tech", "body") ?? "",
   };
 }
 
