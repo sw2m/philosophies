@@ -1,29 +1,30 @@
 name: "Regression gate"
-description: "Author regression tests + verify they pass. Existing behavior must hold."
+description: "Author regression tests + verify they pass."
 inputs:
   anthropic-api-key: { required: true }
   github-token: { required: true }
   issue-number: { required: true }
   branch: { required: true }
   pr-number: { required: true }
+
   max-retries: { required: false, default: "3" }
   agent-timeout-seconds: { required: false, default: "900" }
 outputs:
-  bailed: { value: "${{ steps.run.outputs.bailed }}", description: "true if retries exhausted" }
-  bail: { value: "${{ steps.run.outputs.bail }}", description: "Diagnostic detail on bail (multiline)" }
+  bailed: { value: "${{ steps.run.outputs.bailed }}" }
+  bail: { value: "${{ steps.run.outputs.bail }}" }
 runs:
   using: composite
   steps:
+    - uses: sw2m/octoscript/action@main
     - id: run
-      uses: ./.github/actions/script/github-deno
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         GH_TOKEN: ${{ inputs.github-token }}
         ISSUE_NUMBER: ${{ inputs.issue-number }}
         BRANCH: ${{ inputs.branch }}
         PR_NUMBER: ${{ inputs.pr-number }}
+
         MAX_RETRIES: ${{ inputs.max-retries }}
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
-      with:
-        workspace: ${{ github.action_path }}/../../..
-        script: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).regression();
+      run: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).regression();
+      shell: octoscript {0}

@@ -1,5 +1,5 @@
-name: "Green gate (Phase 4-5)"
-description: "Implement + Green gate with retry. New tests must pass; regression must pass."
+name: "Green gate"
+description: "Implement + Green gate with retry."
 inputs:
   anthropic-api-key: { required: true }
   github-token: { required: true }
@@ -10,13 +10,13 @@ inputs:
   max-retries: { required: false, default: "3" }
   agent-timeout-seconds: { required: false, default: "900" }
 outputs:
-  bailed: { value: "${{ steps.run.outputs.bailed }}", description: "true if retries exhausted" }
-  bail: { value: "${{ steps.run.outputs.bail }}", description: "Diagnostic detail on bail (multiline)" }
+  bailed: { value: "${{ steps.run.outputs.bailed }}" }
+  bail: { value: "${{ steps.run.outputs.bail }}" }
 runs:
   using: composite
   steps:
+    - uses: sw2m/octoscript/action@main
     - id: run
-      uses: ./.github/actions/script/github-deno
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         GH_TOKEN: ${{ inputs.github-token }}
@@ -26,6 +26,5 @@ runs:
         NO_RUNNER: ${{ inputs.no-runner }}
         MAX_RETRIES: ${{ inputs.max-retries }}
         AGENT_TIMEOUT_SECONDS: ${{ inputs.agent-timeout-seconds }}
-      with:
-        workspace: ${{ github.action_path }}/../../..
-        script: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).green();
+      run: (await import("./scripts/vsdd/promote/to-pr/gates.ts")).green();
+      shell: octoscript {0}
