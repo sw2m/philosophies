@@ -121,7 +121,8 @@ runs:
           new URL("./.github/scripts/vsdd/promote/to-pr/success.mustache", `file://${Deno.cwd()}/`),
           { pr, runner: hasRunner },
         );
+        const { Comment } = await import("./.github/scripts/github/comment.ts");
         const { owner, repo } = context.repo;
-        await github.rest.issues.createComment({ owner, repo, issue_number: pr, body });
-        await github.rest.issues.createComment({ owner, repo, issue_number: issue, body });
+        await new Comment({ api: github, owner, repo, issue_number: pr }).create({ body });
+        await new Comment({ api: github, owner, repo, issue_number: issue }).create({ body });
       shell: octoscript {0}
