@@ -70,16 +70,16 @@ runs:
     - name: Bail on Red-gate exhaustion
       if: ${{ steps.runner.outputs.no-runner == 'false' && steps.red-gate.outputs.bailed == 'true' }}
       env:
-        BAIL_DETAIL: ${{ steps.red-gate.outputs.bail }}
-        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
+        INPUT_BAIL: ${{ steps.red-gate.outputs.bail }}
+        INPUT_PR: ${{ steps.scaffold.outputs.pr-number }}
       run: |
         const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
         await bail.run({
           api: github, core, gate: "red",
           issue: Number(inputs.get("issue-number")),
-          pr: Number(Deno.env.get("PR_NUMBER")),
+          pr: Number(inputs.get("pr")),
           owner: inputs.get("owner-login") ?? "",
-          detail: Deno.env.get("BAIL_DETAIL") ?? "",
+          detail: inputs.get("bail") ?? "",
           repo: context.repo,
         });
       shell: octoscript {0}
@@ -96,16 +96,16 @@ runs:
     - name: Bail on Green-gate exhaustion
       if: ${{ steps.green-gate.outputs.bailed == 'true' }}
       env:
-        BAIL_DETAIL: ${{ steps.green-gate.outputs.bail }}
-        PR_NUMBER: ${{ steps.scaffold.outputs.pr-number }}
+        INPUT_BAIL: ${{ steps.green-gate.outputs.bail }}
+        INPUT_PR: ${{ steps.scaffold.outputs.pr-number }}
       run: |
         const bail = await import("./.github/scripts/vsdd/promote/to-pr/bail.ts");
         await bail.run({
           api: github, core, gate: "green",
           issue: Number(inputs.get("issue-number")),
-          pr: Number(Deno.env.get("PR_NUMBER")),
+          pr: Number(inputs.get("pr")),
           owner: inputs.get("owner-login") ?? "",
-          detail: Deno.env.get("BAIL_DETAIL") ?? "",
+          detail: inputs.get("bail") ?? "",
           repo: context.repo,
         });
       shell: octoscript {0}
