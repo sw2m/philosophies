@@ -38,7 +38,7 @@ runs:
         const claude = new Claude({
           primary: inputs.get("model"),
           fallback: inputs.get("fallback-model"),
-          tools: inputs.get("allowed-tools")`,
+          tools: inputs.get("allowed-tools"),
           mode: inputs.get("permission-mode"),
         });
         const r = await claude.run(new Blob([body]).stream());
